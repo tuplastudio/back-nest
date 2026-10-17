@@ -19,7 +19,16 @@ import prettier from 'eslint-config-prettier';
  */
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', 'src/generated/**', 'coverage/**', 'docs/openapi.json'],
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'src/generated/**',
+      'coverage/**',
+      'docs/openapi.json',
+      // Root config files are not part of any tsconfig project, so the typed
+      // parser cannot load them.
+      '*.config.mjs',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
