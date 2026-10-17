@@ -61,9 +61,28 @@ COPY --chown=app:app prisma.config.ts ./
 # they must ship with the image.
 USER app
 
-EXPOSE 3000
-
 # `tini` reaps zombies and forwards SIGTERM, which is what lets the Nest
 # shutdown hooks drain in-flight requests before the container exits.
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/main.js"]
+
+# --- Migrate stage ----------------------------------------------------------
+# Runs the control-plane migrations as the Cloud Run Job `vondi-migrate`.
+# `prisma` and `tsx` are devDependencies and are pruned from the runtime image,
+# so this stage installs the full tree. Build with `--target migrate`.
+FROM node:22-alpine AS migrate
+
+WORKDIR /app
+
+RUN apk add --no-cache openssl
+
+COPY package.json package-lock.json* ./
+RUN npm ci --no-audit --no-fund
+
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+COPY scripts/migrate.ts ./scripts/migrate.ts
+
+ENV NODE_ENV=production
+
+CMD ["npx", "tsx", "scripts/migrate.ts"]
