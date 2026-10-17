@@ -1,0 +1,16 @@
+{
+  "name": "payments-test-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "stack": "node --env-file=../.env --env-file-if-exists=.env.local stack/start.cjs",
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "stack:real": "NETPAY_REAL=1 node --env-file=../.env --env-file-if-exists=.env.local stack/start.cjs",
+    "stack:fake": "NETPAY_REAL=0 node --env-file=../.env --env-file-if-exists=.env.local stack/start.cjs"
+  },
+  "dependencies": {
+    "astro": "^7.3.8"
+  }
+}

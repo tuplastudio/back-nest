@@ -1,0 +1,525 @@
+// ---------------------------------------------------------------------------
+// CONTROL PLANE DATAMODEL
+// ---------------------------------------------------------------------------
+// The control plane holds every row that is *not* tenant business data:
+// platform administrators, the tenant registry, per-tenant API key metadata
+// and the audit trail. It always lives in the `public` schema of a dedicated
+// PostgreSQL database and is the only database the control-plane client can
+// reach.
+//
+// Two rules govern every model in this file:
+//
+// 1. NO PLAINTEXT PII. Personally identifiable values (e-mail addresses,
+//    phone numbers, IP addresses) are stored exclusively as
+//    AES-256-GCM ciphertext plus a keyed HMAC blind index used for equality
+//    lookups. See `src/database/pii/`.
+//
+// 2. NO CASCADING DELETES ON AUDIT DATA. Compliance requires that history
+//    survives tenant deletion, so audit rows are pruned by explicit
+//    retention jobs, never by ON DELETE CASCADE.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/control-plane"
+  runtime             = "nodejs"
+  moduleFormat        = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Role of a platform administrator. `OWNER` is the break-glass account.
+enum PlatformRole {
+  OWNER
+  ADMIN
+  AUDITOR
+}
+
+/// Lifecycle state shared by administrators and tenant members.
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+/// Lifecycle of a tenant and of its dedicated PostgreSQL schema.
+enum TenantStatus {
+  /// Schema creation or migration is in flight; the tenant is not usable yet.
+  PROVISIONING
+  /// Fully provisioned and serving traffic.
+  ACTIVE
+  /// Temporarily blocked. Data is preserved, requests are rejected.
+  SUSPENDED
+  /// Grace period before the schema is dropped. No new writes allowed.
+  DEPRECATED
+  /// Soft deleted. Retained for audit purposes only.
+  DELETED
+}
+
+/// State of an API key.
+enum ApiKeyStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+/// Who performed an audited action.
+enum AuditActorType {
+  /// A human signed into the admin console.
+  PLATFORM_ADMIN
+  /// A member of a tenant signed in through the tenant API.
+  TENANT_USER
+  /// A machine caller authenticated with an API key.
+  API_KEY
+  /// Background jobs, schedulers and migrations.
+  SYSTEM
+}
+
+/// Result of an audited action.
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+/// A human who can administer the platform and every tenant.
+model PlatformAdmin {
+  /// UUIDv4 primary key.
+  id String @id @default(uuid()) @db.Uuid
+
+  /// AES-256-GCM ciphertext of the normalised (lower-cased, trimmed) e-mail.
+  emailCiphertext String @db.Text
+
+  /// Keyed HMAC-SHA256 blind index of the e-mail. Enables `WHERE`/unique
+  /// lookups without storing a searchable plaintext value.
+  emailLookup String @unique @db.VarChar(64)
+
+  /// Pre-computed masked representation (e.g. `j***e@example.com`) safe to
+  /// render in listings and logs without decrypting anything.
+  emailMasked String @db.VarChar(320)
+
+  /// Argon2id hash of the password. Never logged, never returned by the API.
+  passwordHash String @db.VarChar(255)
+
+  /// Human readable name shown in the admin console.
+  displayName String @db.VarChar(120)
+
+  role PlatformRole @default(ADMIN)
+
+  status AccountStatus @default(ACTIVE)
+
+  /// Consecutive failed sign-in attempts, reset on success.
+  failedLoginAttempts Int @default(0)
+
+  /// Timestamp until which sign-in is refused (brute-force lockout).
+  lockedUntil DateTime?
+
+  lastLoginAt DateTime?
+
+  passwordChangedAt DateTime @default(now())
+
+  /// Forces a password rotation on the next successful sign-in.
+  mustChangePassword Boolean @default(false)
+
+  /// Keyed HMAC of the last client IP, for abuse investigation without
+  /// storing the address itself.
+  lastKnownIpHash String? @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Rotating refresh tokens (opaque, hashed at rest).
+  refreshTokens AdminRefreshToken[]
+
+  /// RBAC roles held by this administrator. An administrator may hold several;
+  /// its effective permissions are the union of their grants.
+  roles PlatformAdminRole[]
+
+  /// Tenants this administrator created.
+  tenantsCreated Tenant[] @relation("TenantCreatedBy")
+
+  @@index([status])
+  @@map("platform_admins")
+}
+
+/// Opaque refresh token for a platform administrator.
+///
+/// Only the SHA-256 digest is stored, so a database leak cannot be replayed.
+/// Tokens are rotated on every use; a reused token revokes the whole family
+/// (refresh-token-reuse detection).
+model AdminRefreshToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  adminId String @db.Uuid
+  admin   PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  /// Rotation family identifier. Reuse of any member revokes the family.
+  familyId String @db.Uuid
+
+  /// SHA-256 hex digest of the opaque token.
+  tokenHash String @unique @db.VarChar(64)
+
+  expiresAt DateTime
+
+  revokedAt DateTime?
+
+  /// Set when this token is exchanged for a new one.
+  replacedByTokenHash String? @db.VarChar(64)
+
+  /// Keyed HMAC of the originating IP (no raw address stored).
+  ipHash String? @db.VarChar(64)
+
+  /// SHA-256 of the user agent, for session listing in the console.
+  userAgentHash String? @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("admin_refresh_tokens")
+}
+
+/// Registry entry for one tenant, mapping a business identifier to the
+/// PostgreSQL schema that stores its data.
+model Tenant {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// URL-safe business identifier, e.g. `acme`. Used for subdomains
+  /// (`acme.api.example.com`) and the `X-Tenant-Id` header.
+  slug String @unique @db.VarChar(63)
+
+  /// Display name, e.g. `ACME Corporation`.
+  name String @db.VarChar(120)
+
+  /// Physical PostgreSQL schema that holds this tenant's business data.
+  /// Derived from `slug` through `TenantSchemaNaming` and validated against a
+  /// strict identifier allow-list before it ever reaches SQL.
+  schemaName String @unique @db.VarChar(63)
+
+  status TenantStatus @default(PROVISIONING)
+
+  /// Commercial plan key, consumed by the billing module of the host product.
+  plan String @default("standard") @db.VarChar(32)
+
+  timezone String @default("UTC") @db.VarChar(64)
+
+  locale String @default("en-US") @db.VarChar(16)
+
+  /// Tenant specific, non-sensitive configuration.
+  settings Json @default("{}")
+
+  /// Version of the tenant migration set currently applied to `schemaName`.
+  /// Used by the provisioner to apply pending migrations idempotently.
+  schemaVersion Int @default(0)
+
+  provisionedAt DateTime?
+
+  suspendedAt DateTime?
+
+  /// Soft deletion timestamp. The schema is dropped by a separate,
+  /// explicitly confirmed retention job.
+  deletedAt DateTime?
+
+  /// Free-form, non-PII contact label (e.g. `#acme-support`).
+  supportContact String? @db.VarChar(120)
+
+  createdById String? @db.Uuid
+  createdBy   PlatformAdmin? @relation("TenantCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// API keys issued for this tenant. Metadata lives in the control plane so
+  /// that a suspended tenant's keys can be revoked without touching its schema.
+  apiKeys ApiKey[]
+
+  /// Audit trail entries scoped to this tenant.
+  auditLogs AuditLog[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("tenants")
+}
+
+/// A machine credential scoped to exactly one tenant.
+///
+/// The clear-text secret is returned exactly once at creation/rotation time.
+/// Only an Argon2id hash is persisted; the plaintext prefix enables O(1)
+/// lookup without weakening the hash.
+model ApiKey {
+  id String @id @default(uuid()) @db.Uuid
+
+  tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Operator supplied label, e.g. `ci-pipeline`.
+  name String @db.VarChar(120)
+
+  /// Public, non-secret portion of the key (e.g. `mtb_live_a1b2c3d4`).
+  /// Unique per tenant and used to locate the candidate row.
+  prefix String @db.VarChar(32)
+
+  /// Argon2id hash of the secret portion.
+  secretHash String @db.VarChar(255)
+
+  /// Granted capability set, e.g. `["projects:read", "projects:write"]`.
+  /// Enforced by `ApiKeyScopesGuard`.
+  scopes String[] @default([])
+
+  status ApiKeyStatus @default(ACTIVE)
+
+  expiresAt DateTime?
+
+  revokedAt DateTime?
+
+  lastUsedAt DateTime?
+
+  /// Keyed HMAC of the last observed client IP.
+  lastUsedIpHash String? @db.VarChar(64)
+
+  /// Monotonically increasing counter, useful for anomaly detection.
+  usageCount BigInt @default(0)
+
+  /// Links a rotated key to its predecessor for auditability.
+  rotatedFromId String? @db.Uuid
+  rotatedFrom   ApiKey? @relation("ApiKeyRotation", fields: [rotatedFromId], references: [id], onDelete: SetNull)
+
+  /// Keys created from this key.
+  rotatedKeys ApiKey[] @relation("ApiKeyRotation")
+
+  /// Who minted the key: an administrator id or a tenant user id.
+  createdByType AuditActorType @default(PLATFORM_ADMIN)
+  createdById   String?        @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, prefix])
+  @@index([tenantId, status])
+  @@index([expiresAt])
+  @@map("api_keys")
+}
+
+/// Append-only audit trail covering both control-plane and tenant actions.
+///
+/// The table is intentionally append-only: no foreign key cascades and no
+/// ON DELETE CASCADE, so history survives tenant deletion.
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Null for purely platform-level events.
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  actorType AuditActorType
+
+  /// Identifier of the actor (admin id, tenant user id, api key id).
+  actorId String? @db.VarChar(64)
+
+  /// Non-PII, human readable actor label captured at event time, so the entry
+  /// stays meaningful after the actor is deleted.
+  actorLabel String? @db.VarChar(120)
+
+  /// Dotted action name, e.g. `tenant.provision`, `apikey.rotate`.
+  action String @db.VarChar(64)
+
+  resourceType String @db.VarChar(64)
+
+  resourceId String? @db.VarChar(64)
+
+  outcome AuditOutcome @default(SUCCESS)
+
+  /// Structured, PII-free context (never store request bodies verbatim).
+  metadata Json?
+
+  /// Keyed HMAC of the client IP.
+  ipHash String? @db.VarChar(64)
+
+  /// SHA-256 of the user agent.
+  userAgentHash String? @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([actorType, actorId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// RBAC CATALOG
+//
+// Role-based access control is normalised into three entities:
+//
+//   Permission  — one atomic authority, named `resource:action`
+//                 (e.g. `api-keys:issue`).
+//   Role        — a named bundle of permissions. Roles are a *platform*
+//                 definition: they live here, once, so every tenant governs
+//                 members with the same vocabulary instead of inventing its
+//                 own. `isSystem` marks the built-in roles that may not be
+//                 deleted.
+//   RolePermission — the role -> permission join.
+//
+// Assignment is deliberately NOT here, because a principal lives in one of two
+// planes: a platform administrator is a `PlatformAdmin` row here, a tenant
+// member is a `User` row inside that tenant's own schema. Both planes point at
+// this same catalog:
+//
+//   PlatformAdminRole  — which roles a platform administrator holds.
+//   UserRole (tenant schema) — which roles a tenant member holds.
+//
+// A principal may hold any number of roles; its effective permissions are the
+// union of the permissions of every role assigned to it. That union is computed
+// per request rather than baked into the access token, so revoking a role takes
+// effect on the next request instead of at the next sign-in.
+// ---------------------------------------------------------------------------
+
+/// A single atomic authority that a role may grant.
+///
+/// The module grouping is carried by `moduleId`, not inferred from the name:
+/// modules are organisational, the name is an identifier. A role reaches
+/// permissions only through {@link RolePermission} — never through a module.
+model Permission {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Globally unique permission name, e.g. `api-keys:issue`.
+  name String @unique @db.VarChar(120)
+
+  /// Human readable description, surfaced in an admin console.
+  description String? @db.VarChar(320)
+
+  /// Module this permission is grouped under. Purely organisational: grouping
+  /// permissions so a console can render the catalogue as a tree. Granting
+  /// authority never depends on it.
+  moduleId String? @db.Uuid
+  module Module? @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  /// Roles that grant this permission.
+  roles RolePermission[]
+
+  @@index([moduleId])
+  @@map("permissions")
+}
+
+/// A functional grouping of permissions, e.g. `api-keys` or `tenants`.
+///
+/// Modules exist only to keep the permission catalogue navigable and to let an
+/// admin console present authority in coherent areas. They are not a grant: a
+/// role holds permissions directly, and a module never confers anything.
+model Module {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Unique module key, normally the resource segment of its permissions.
+  name String @unique @db.VarChar(80)
+
+  description String? @db.VarChar(320)
+
+  /// Display order in a console; lower sorts first.
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  /// Permissions grouped under this module.
+  permissions Permission[]
+
+  @@map("modules")
+}
+
+/// A named bundle of permissions.
+///
+/// System roles back the built-in authority levels and are protected from
+/// deletion; custom roles may be created per deployment.
+model Role {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Unique role name, e.g. `tenant-admin`.
+  name String @unique @db.VarChar(80)
+
+  description String? @db.VarChar(320)
+
+  /// Built-in roles ship with the catalog and cannot be deleted.
+  isSystem Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Permissions this role grants.
+  permissions RolePermission[]
+
+  /// Platform administrators holding this role.
+  platformAdmins PlatformAdminRole[]
+
+  @@map("roles")
+}
+
+/// Join table granting a permission to a role.
+model RolePermission {
+  roleId String @db.Uuid
+  permissionId String @db.Uuid
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+/// Inbound webhook routing table.
+///
+/// The inbound notification carries no tenant identity: it is unsigned, so the
+/// `X-Tenant-Id` header cannot be trusted to name a tenant, and the per-tenant
+/// configuration rows live inside each tenant's own schema where they cannot be
+/// searched. This table is the one index that resolves an opaque webhook token to
+/// a tenant in a single lookup.
+///
+/// It deliberately holds **no credential**: only a hash of the opaque token and
+/// a pointer to the schema that holds the encrypted key.
+model PaymentWebhookRegistry {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Tenant the token belongs to.
+  tenantId String @db.Uuid
+
+  /// Schema holding the tenant's encrypted configuration.
+  schemaName String @db.VarChar(63)
+
+  /// Hash of the opaque token embedded in the webhook URL.
+  tokenHash String @unique @db.VarChar(64)
+
+  environment PaymentWebhookEnvironment @default(SANDBOX)
+
+  createdAt DateTime @default(now())
+
+  revokedAt DateTime?
+
+  @@index([tenantId])
+  @@index([schemaName])
+  @@map("payment_webhook_registry")
+}
+
+/// Environment a tenant's Netpay account runs against.
+enum PaymentWebhookEnvironment {
+  SANDBOX
+  LIVE
+}
+
+/// Roles held by a platform administrator. A principal may hold many.
+model PlatformAdminRole {
+  adminId String @db.Uuid
+  roleId String @db.Uuid
+
+  admin PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  /// When the role was granted, for audit and revocation tooling.
+  grantedAt DateTime @default(now())
+
+  @@id([adminId, roleId])
+  @@index([roleId])
+  @@map("platform_admin_roles")
+}

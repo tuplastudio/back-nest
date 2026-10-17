@@ -1,0 +1,117 @@
+name: Manual Migration (GitHub Action)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      migration_type:
+        description: 'Migration type'
+        required: true
+        type: choice
+        options:
+          - deploy
+          - resolve
+          - status
+      migration_name:
+        description: 'Migration name (for resolve action)'
+        required: false
+        type: string
+      action:
+        description: 'Action (for resolve)'
+        required: false
+        type: choice
+        options:
+          - applied
+          - rolled-back
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  migrate:
+    name: Database Migration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Set environment variables
+        run: |
+          if [ "${{ github.event.inputs.environment }}" = "production" ]; then
+            echo "CONTROL_PLANE_DATABASE_URL=${{ secrets.PRODUCTION_CONTROL_PLANE_DATABASE_URL }}" >> $GITHUB_ENV
+            echo "CONTROL_PLANE_DATABASE_URL_UNPOOLED=${{ secrets.PRODUCTION_CONTROL_PLANE_DATABASE_URL_UNPOOLED }}" >> $GITHUB_ENV
+            echo "TENANT_PLANE_DATABASE_URL=${{ secrets.PRODUCTION_TENANT_PLANE_DATABASE_URL }}" >> $GITHUB_ENV
+            echo "TENANT_PLANE_DATABASE_URL_UNPOOLED=${{ secrets.PRODUCTION_TENANT_PLANE_DATABASE_URL_UNPOOLED }}" >> $GITHUB_ENV
+          else
+            echo "CONTROL_PLANE_DATABASE_URL=${{ secrets.STAGING_CONTROL_PLANE_DATABASE_URL }}" >> $GITHUB_ENV
+            echo "CONTROL_PLANE_DATABASE_URL_UNPOOLED=${{ secrets.STAGING_CONTROL_PLANE_DATABASE_URL_UNPOOLED }}" >> $GITHUB_ENV
+            echo "TENANT_PLANE_DATABASE_URL=${{ secrets.STAGING_TENANT_PLANE_DATABASE_URL }}" >> $GITHUB_ENV
+            echo "TENANT_PLANE_DATABASE_URL_UNPOOLED=${{ secrets.STAGING_TENANT_PLANE_DATABASE_URL_UNPOOLED }}" >> $GITHUB_ENV
+          fi
+
+      - name: Check database connection
+        run: |
+          npm install -g pg
+          node -e "
+          const { Client } = require('pg');
+          const client = new Client({ connectionString: process.env.CONTROL_PLANE_DATABASE_URL_UNPOOLED });
+          client.connect();
+          client.query('SELECT 1').then(() => {
+            console.log('Database connection successful');
+            client.end();
+          }).catch(err => {
+            console.error('Database connection failed:', err);
+            process.exit(1);
+          });
+          "
+
+      - name: Migration status
+        if: github.event.inputs.migration_type == 'status'
+        run: |
+          echo "=== Control Plane Migration Status ==="
+          npx prisma migrate status --schema prisma/schema.prisma
+
+      - name: Deploy migrations
+        if: github.event.inputs.migration_type == 'deploy'
+        run: |
+          echo "Deploying control plane migrations to ${{ github.event.inputs.environment }}..."
+          npx prisma migrate deploy --schema prisma/schema.prisma
+
+      - name: Resolve migration
+        if: github.event.inputs.migration_type == 'resolve'
+        run: |
+          echo "Resolving migration: ${{ github.event.inputs.migration_name }}"
+          npx prisma migrate resolve \
+            --${{ github.event.inputs.action }} \
+            "${{ github.event.inputs.migration_name }}" \
+            --schema prisma/schema.prisma
+
+      - name: Create migration summary
+        if: always()
+        run: |
+          echo "### Migration Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Migration Type:** ${{ github.event.inputs.migration_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Completed at $(date -u)" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,73 @@
+#!/usr/bin/env sh
+# back-nest pre-commit
+#
+# Order is deliberate: cheap formatting first, secret scanning last, so a
+# formatting slip never costs a full gitleaks pass.
+#
+# Nothing here mutates the working tree. If a check fails, fix it and re-stage;
+# do not commit with --no-verify.
+
+set -eu
+
+fail() {
+  printf '\n\033[31m✖ pre-commit: %s\033[0m\n' "$1" >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# 1. Prettier — staged formatting-relevant files only
+# ---------------------------------------------------------------------------
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR \
+  -- '*.ts' '*.mjs' '*.js' '*.json' '*.md' '*.yml' '*.yaml' '*.prisma' 2>/dev/null || true)
+
+if [ -n "$STAGED" ]; then
+  printf '▸ prettier: %s file(s)\n' "$(printf '%s\n' "$STAGED" | wc -l | tr -d ' ')"
+
+  # `--ignore-unknown` is required: without it prettier ERRORS on staged files it
+  # cannot infer a parser for (.env.example, .dockerignore), which fails the hook
+  # for a reason that has nothing to do with formatting.
+  # shellcheck disable=SC2086
+  if ! npx --no-install prettier --check --ignore-unknown $STAGED; then
+    printf '\n  Formatting differs. Run:  npm run format\n' >&2
+    fail 'prettier check failed'
+  fi
+else
+  printf '▸ prettier: nothing staged to check\n'
+fi
+
+# ---------------------------------------------------------------------------
+# 2. gitleaks — secret scan of the staged diff only
+# ---------------------------------------------------------------------------
+if ! command -v gitleaks >/dev/null 2>&1; then
+  printf '▸ gitleaks: NOT INSTALLED — skipping secret scan\n'
+  printf '  Install it with:  brew install gitleaks\n'
+else
+  printf '▸ gitleaks: scanning staged content\n'
+
+  # `gitleaks git --staged` is NOT usable here: before the first commit there is
+  # no HEAD, so it reports "0 commits scanned" and silently passes every time.
+  # Instead materialise the staged blobs from the index and scan that tree, which
+  # is exactly the content the commit would record and does not depend on HEAD.
+  STAGE_DIR="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$STAGE_DIR'" EXIT INT TERM
+
+  STAGED_PATHS="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)"
+  if [ -n "$STAGED_PATHS" ]; then
+    printf '%s\n' "$STAGED_PATHS" | git checkout-index --stdin --prefix="$STAGE_DIR/" 2>/dev/null || true
+  fi
+
+  REPORT="$(mktemp)"
+  # Capture gitleaks' exit status directly: piping into sed would discard it,
+  # because a pipeline reports the status of its LAST command.
+  if gitleaks dir "$STAGE_DIR" --redact --no-banner --verbose >"$REPORT" 2>&1; then
+    sed 's/^/  /' "$REPORT"
+    rm -f "$REPORT"
+  else
+    sed 's/^/  /' "$REPORT"
+    rm -f "$REPORT"
+    fail 'gitleaks found a secret in the staged content — commit blocked'
+  fi
+fi
+
+printf '\033[32m✔ pre-commit passed\033[0m\n'

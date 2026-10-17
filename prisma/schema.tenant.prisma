@@ -1,0 +1,546 @@
+// ---------------------------------------------------------------------------
+// TENANT DATA PLANE DATAMODEL (template)
+// ---------------------------------------------------------------------------
+// IMPORTANT — READ BEFORE EDITING
+//
+// Every model below is intentionally declared **without** `@@schema(...)` and
+// the datasource declares **no** `schemas` list. Prisma therefore emits
+// unqualified SQL (`"User"`, not `"public"."User"`), and PostgreSQL resolves
+// those names through the connection's `search_path`.
+//
+// That is what makes schema-level multitenancy possible with a single
+// generated client: `TenantPrismaService` opens one pool per tenant whose
+// `search_path` is `"tenant_acme", public`, so the very same Prisma model
+// physically lives in a different schema per tenant. See
+// `src/database/tenant-prisma.service.ts`.
+//
+// Consequences you must respect:
+//
+//   * NEVER add `@@schema("...")` here. That would pin the tables to one
+//     schema and defeat the isolation guarantee.
+//   * This schema file is NOT managed by `prisma migrate`. Instead the SQL is
+//     derived from it with `npm run prisma:tenant:diff` and stored as a
+//     versioned migration under `prisma/migrations/tenant/`, which the
+//     provisioner applies inside each tenant schema.
+//
+// PII RULES: e-mail and phone values follow the same policy as the control
+// plane — AES-256-GCM ciphertext plus an HMAC blind index for lookups, and a
+// pre-computed masked value for safe rendering.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/tenant-plane"
+  runtime             = "nodejs"
+  moduleFormat        = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Role of a member inside one tenant. Roles never cross tenant boundaries.
+enum MemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+  /// Read-only access; useful for audit integrations.
+  VIEWER
+}
+
+/// Lifecycle state of a tenant member.
+enum MemberStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+/// State of an example business resource, shown to demonstrate tenant-scoped
+/// queries, pagination, soft deletes and optimistic concurrency.
+enum ProjectStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/// A member of a tenant. Lives in the tenant's own schema and can never be
+/// queried together with a member of another tenant.
+model User {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// AES-256-GCM ciphertext of the normalised e-mail address.
+  emailCiphertext String @db.Text
+
+  /// Keyed HMAC-SHA256 blind index; unique per tenant and used for sign-in
+  /// lookups. Uniqueness is scoped to the tenant schema by construction.
+  emailLookup String @unique @db.VarChar(64)
+
+  /// Pre-computed masked e-mail, safe for listings and logs.
+  emailMasked String @db.VarChar(320)
+
+  /// AES-256-GCM ciphertext of an optional phone number (international E.164).
+  phoneCiphertext String? @db.Text
+
+  displayName String @db.VarChar(120)
+
+  /// Argon2id password hash. Optional because accounts can be provisioned for
+  /// SSO-only members.
+  passwordHash String? @db.VarChar(255)
+
+  role MemberRole @default(MEMBER)
+
+  status MemberStatus @default(INVITED)
+
+  emailVerifiedAt DateTime?
+
+  lastLoginAt DateTime?
+
+  failedLoginAttempts Int @default(0)
+
+  lockedUntil DateTime?
+
+  passwordChangedAt DateTime? @default(now())
+
+  mustChangePassword Boolean @default(false)
+
+  /// Keyed HMAC of the last sign-in IP.
+  lastKnownIpHash String? @db.VarChar(64)
+
+  createdById String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Tenant users hold their own API keys; key metadata lives in the control
+  /// plane, the secret is only ever verified against this record.
+  refreshTokens UserRefreshToken[]
+
+  /// Example tenant-scoped resource owned by this member.
+  projects Project[]
+
+  /// RBAC roles held by this member. A member may hold several; its effective
+  /// permissions are the union of their grants.
+  ///
+  /// `roleId` deliberately carries no foreign key: the role catalog lives in the
+  /// control plane (`public.roles`), while this row lives inside the tenant's own
+  /// schema. A cross-database foreign key is impossible, so the id is resolved
+  /// against the control plane by `AuthorizationService`. Referential integrity
+  /// is therefore an application concern for this one column, which is why role
+  /// removal from the catalog must be refused while assignments exist.
+  roles UserRole[]
+
+  /// Soft delete: business records are retained but hidden from queries.
+  deletedAt DateTime?
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+/// Roles held by one tenant member.
+///
+/// Lives in the tenant schema so the assignment is as isolated as the member it
+/// describes; the `roleId` points into the control-plane role catalog.
+model UserRole {
+  userId String @db.Uuid
+  roleId String @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Member who granted the role, for audit and revocation tooling.
+  assignedById String? @db.Uuid
+
+  grantedAt DateTime @default(now())
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+/// Rotating refresh tokens for tenant members. Mirrors the control-plane token
+/// model: hashed at rest, family-based reuse detection.
+model UserRefreshToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @db.Uuid
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  familyId String @db.Uuid
+
+  tokenHash String @unique @db.VarChar(64)
+
+  expiresAt DateTime
+
+  revokedAt DateTime?
+
+  replacedByTokenHash String? @db.VarChar(64)
+
+  ipHash String? @db.VarChar(64)
+
+  userAgentHash String? @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("user_refresh_tokens")
+}
+
+/// Example tenant-owned business entity.
+///
+/// Demonstrates the recommended conventions for tenant data:
+///  * a tenant-scoped index on the most common access pattern,
+///  * soft deletion instead of hard deletion,
+///  * a `version` column for optimistic concurrency control,
+///  * JSON metadata kept PII-free.
+model Project {
+  id String @id @default(uuid()) @db.Uuid
+
+  name String @db.VarChar(160)
+
+  slug String @db.VarChar(160)
+
+  description String? @db.VarChar(1000)
+
+  status ProjectStatus @default(DRAFT)
+
+  /// PII-free structured attributes.
+  metadata Json @default("{}")
+
+  ownerId String @db.Uuid
+  owner   User @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  /// Incremented on every write; clients send it back to detect conflicts.
+  version Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deletedAt DateTime?
+
+  @@unique([slug])
+  @@index([ownerId, status])
+  @@index([status, createdAt])
+  @@map("projects")
+}
+// ---------------------------------------------------------------------------
+// PAYMENTS
+//
+// One Netpay account per tenant (schema-per-tenant), so a tenant's keys, its
+// orders and its settlement live in its own schema alongside its data. Nothing
+// here references a shared row: the catalogue of what the platform operator is
+// allowed to do is in the control plane, but the credentials and the money
+// never are.
+// ---------------------------------------------------------------------------
+
+/// Which Netpay environment an order is created against. Never auto-detected.
+enum PaymentEnvironment {
+  SANDBOX
+  LIVE
+}
+
+/// Lifecycle of a payment order.
+///
+/// Only `PAID`, `FAILED`, `REFUNDED` and `AMOUNT_MISMATCH` are reached from a
+/// verified call to Netpay; `PENDING_*` means "we have not confirmed anything
+/// yet" and must never be read as paid.
+enum PaymentStatus {
+  PENDING
+  PENDING_VERIFICATION
+  PAID
+  FAILED
+  REFUNDED
+  AMOUNT_MISMATCH
+}
+
+/// A tenant's Netpay configuration. One row per tenant.
+///
+/// `secretKeyCiphertext` is encrypted with the payments key, which is
+/// deliberately NOT the PII key: a payments credential and personal data have
+/// different blast radii and different rotation schedules.
+model PaymentProviderConfig {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Denormalised for audit; the row already lives inside the tenant's schema.
+  tenantId String @db.Uuid
+
+  environment PaymentEnvironment @default(SANDBOX)
+
+  /// `pk_netpay_…`. Public by design: it ships to the browser to tokenise.
+  publicKey String @db.VarChar(200)
+
+  /// `sk_netpay_…`, AES-256-GCM encrypted. Server-only, never returned by the API.
+  secretKeyCiphertext String @db.Text
+
+  /// Stable prefix used to build `order_reference`, so a merchant reference is
+  /// recognisable in the Netpay dashboard.
+  orderReferencePrefix String @db.VarChar(24)
+
+  /// Hash of the opaque token embedded in the inbound webhook URL. The token
+  /// itself is shown once and never stored, so a database disclosure does not
+  /// yield a usable webhook credential.
+  webhookTokenHash String @db.VarChar(64)
+
+  /// When the URL was registered against Netpay via `PUT /v3/webhooks/`.
+  /// Registration is a manual Netpay Support step, so this is operator truth
+  /// rather than something the application can prove.
+  webhookRegisteredAt DateTime?
+
+  enabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders PaymentOrder[]
+
+  @@index([tenantId])
+  @@map("payment_provider_config")
+}
+
+/// One charge attempt against Netpay.
+model PaymentOrder {
+  id String @id @default(uuid()) @db.Uuid
+
+  tenantId String @db.Uuid
+
+  /// What Netpay echoes back. Unique here so a duplicate cannot be inserted.
+  orderReference String @unique @db.VarChar(120)
+
+  /// Stable business code for the order, chosen by the tenant.
+  merchantReferenceCode String @db.VarChar(120)
+
+  /// Key for idempotency: an event for a transaction already applied is a no-op.
+  netpayTransactionId String? @db.VarChar(120)
+
+  /// The source of truth for what was charged. The amount that arrives on a
+  /// webhook is never used to mark an order paid; it is compared against this.
+  amount Decimal @db.Decimal(12, 2)
+
+  currency String @default("MXN") @db.VarChar(3)
+
+  status PaymentStatus @default(PENDING)
+
+  checkoutMode String @default("hosted") @db.VarChar(16)
+
+  /// Netpay's session URL for Checkout Hosted. Not persisted: it is a bearer-ish
+  /// credential for the session and is returned to the caller once.
+  checkoutUrl String? @db.Text
+
+  /// Netpay customer profile, when the tenant stores cards.
+  netpayCustomerId String? @db.VarChar(120)
+
+  /// Server-issued amount token. The buyer is handed this instead of the amount,
+  /// so the figure they can see and alter never reaches the provider: Netpay
+  /// settles the value that was tokenised here. This is the control that makes
+  /// the order amount tamper-proof end to end.
+  amountToken String? @db.VarChar(120)
+
+  /// Amount Netpay reported at the last successful verification, kept so a
+  /// mismatch is auditable rather than just refused.
+  verifiedAmount Decimal? @db.Decimal(12, 2)
+
+  /// Per-resource counter that lets a subscriber detect a gap in ordering.
+  sequence Int @default(0)
+
+  lastVerifiedAt DateTime?
+  failureReason String? @db.VarChar(240)
+
+  /// Checkout Hosted session. The `sessionLink.paid` notification names the
+  /// payment only by this id, so it is how a hosted payment finds its order.
+  checkoutSessionId String? @unique @db.VarChar(255)
+
+  /// How the buyer paid: `CARD` or `OXXO` (cash reference). Null until known.
+  paymentMethod String? @db.VarChar(16)
+
+  /// Cash payment reference (OXXO Pay). Created by this system for an `oxxo`
+  /// order, or reported by Netpay when the buyer picks cash on the hosted page.
+  paymentReference String? @db.VarChar(64)
+
+  /// When the cash reference stops being payable.
+  paymentReferenceExpiresAt DateTime?
+
+  /// Sum already returned to the buyer. A refund may be partial; the order turns
+  /// `REFUNDED` only when this reaches `amount`.
+  refundedAmount Decimal @default(0) @db.Decimal(12, 2)
+
+  /// Operation (`refund`, `charge`) currently calling the provider for this
+  /// order. Set by a conditional update before the call, so two concurrent
+  /// requests cannot both reach the provider.
+  operationClaim String? @db.VarChar(16)
+
+  /// When the claim was taken. A claim past the claim window is abandoned.
+  operationClaimedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  config PaymentProviderConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
+  configId String? @db.Uuid
+
+  events PaymentWebhookEvent[]
+  customers PaymentCustomer[]
+  deliveries WebhookDelivery[]
+
+  @@index([tenantId, status])
+  @@index([netpayTransactionId])
+  @@index([paymentReference])
+  @@map("payment_orders")
+}
+
+/// Raw record of every inbound notification, kept even when it is a duplicate or
+/// cannot be attributed. This is the evidence for a dispute.
+model PaymentWebhookEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Deduplication key for redelivery.
+  eventId String @unique @db.VarChar(120)
+
+  eventType String @db.VarChar(64)
+
+  netpayTransactionId String? @db.VarChar(120)
+
+  orderId String? @db.Uuid
+  order PaymentOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  receivedAt DateTime @default(now())
+  processedAt DateTime?
+
+  /// Outcome of verification. Never holds a cardholder field.
+  outcome String? @db.VarChar(64)
+
+  /// Non-personal fields only, for audit.
+  payloadSanitized Json @default("{}")
+
+  @@index([netpayTransactionId])
+  @@index([orderId])
+  @@map("payment_webhook_events")
+}
+
+/// A Netpay customer profile, when the tenant stores cards.
+///
+/// Only identifiers are kept. No PAN, no CVV, ever: Netpay tokenises in the
+/// browser and hands back a token.
+model PaymentCustomer {
+  id String @id @default(uuid()) @db.Uuid
+
+  tenantId String @db.Uuid
+
+  /// Reference to the member this profile belongs to, when applicable.
+  userId String? @db.Uuid
+
+  netpayCustomerId String @unique @db.VarChar(120)
+
+  defaultTokenId String? @db.VarChar(120)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders PaymentOrder[]
+
+  @@index([tenantId])
+  @@map("payment_customers")
+}
+
+// ---------------------------------------------------------------------------
+// OUTBOUND WEBHOOKS
+//
+// Notifying other platforms that something finished. The URL is tenant-supplied,
+// which makes every delivery an attempted outbound request and turns SSRF into
+// the dominant risk of this feature.
+// ---------------------------------------------------------------------------
+
+enum WebhookEndpointStatus {
+  ACTIVE
+  DISABLED
+  AUTO_DISABLED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+  DEAD
+}
+
+/// A tenant-supplied destination to notify.
+model WebhookEndpoint {
+  id String @id @default(uuid()) @db.Uuid
+
+  tenantId String @db.Uuid
+
+  url String @db.Text
+
+  description String? @db.VarChar(160)
+
+  /// HMAC key for signing. Encrypted, never hashed: unlike the inbound token we
+  /// must be able to read it back in order to sign. Shown once on creation.
+  secretCiphertext String @db.Text
+
+  /// Previous key, still accepted during a rotation overlap window.
+  previousSecretCiphertext String? @db.Text
+
+  /// Event types this endpoint subscribes to.
+  events String[] @default([])
+
+  status WebhookEndpointStatus @default(ACTIVE)
+
+  consecutiveFailures Int @default(0)
+
+  disabledAt DateTime?
+  disabledReason String? @db.VarChar(240)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries WebhookDelivery[]
+
+  @@index([tenantId, status])
+  @@map("webhook_endpoints")
+}
+
+/// One attempt of one event to one endpoint. `eventId` is stable across retries.
+model WebhookDelivery {
+  id String @id @default(uuid()) @db.Uuid
+
+  endpointId String @db.Uuid
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  /// Order this event describes, when it could be attributed to one. Null for an
+  /// event that referenced nothing we know, which is kept for the audit trail.
+  orderId String? @db.Uuid
+  order PaymentOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  eventId String @db.VarChar(120)
+  eventType String @db.VarChar(64)
+
+  /// Monotonic per event, so a subscriber can detect a gap.
+  sequence Int @default(0)
+
+  attempt Int @default(1)
+
+  status WebhookDeliveryStatus @default(PENDING)
+
+  responseStatus Int?
+  durationMs Int?
+
+  /// Failure cause. Never holds the subscriber's response body.
+  error String? @db.VarChar(240)
+
+  nextAttemptAt DateTime?
+  deliveredAt DateTime?
+
+  /// Claim held by the instance currently delivering this row. Lets several
+  /// replicas poll the same queue without picking up the same row, and expires
+  /// so a crashed instance cannot strand a delivery.
+  lockedAt DateTime?
+  lockedBy String? @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+
+  @@index([endpointId, status])
+  @@index([status, nextAttemptAt])
+  @@index([eventId])
+  @@index([status, lockedAt])
+  @@map("webhook_deliveries")
+}

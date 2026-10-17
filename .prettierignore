@@ -1,0 +1,43 @@
+# Rutas que prettier no debe tocar.
+#
+# Sin esto, `prettier --write .` recorre artefactos generados y falla (o peor,
+# reescribe) cosas que no son fuente.
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Generated Prisma client
+src/generated/
+/generated/
+
+# Generated API document (regenerate with: npm run docs:openapi)
+docs/openapi.json
+
+# Coverage
+coverage/
+
+# Lockfiles are machine-generated; reformatting them only churns the diff.
+package-lock.json
+
+# Git hooks are shell, not prettier-supported source.
+.husky/
+
+# Audit and tooling scratch
+agents/
+security-audit-skill/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+!.env.test.example
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db

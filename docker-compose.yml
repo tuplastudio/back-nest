@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: mtb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD}
+      POSTGRES_DB: mtb
+      # Consumed by docker/postgres/init/01-roles.sql. These are development
+      # defaults only; supply real ones for anything shared.
+      MTB_CONTROL_PASSWORD: ${MTB_CONTROL_PASSWORD:?set MTB_CONTROL_PASSWORD}
+      MTB_APP_PASSWORD: ${MTB_APP_PASSWORD:?set MTB_APP_PASSWORD}
+      # Deterministic collation so index ordering does not drift between hosts.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      # Loopback only. Publishing this on 0.0.0.0 hands the control plane, and
+      # therefore every tenant's metadata, to the local network. Override with
+      # POSTGRES_BIND_ADDRESS if you genuinely need it reachable.
+      - '${POSTGRES_BIND_ADDRESS:-127.0.0.1}:5432:5432'
+    volumes:
+      - mtb-postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d mtb']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mtb-postgres-data:

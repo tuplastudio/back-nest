@@ -1,0 +1,166 @@
+# =============================================================================
+# back-nest — ignore rules
+#
+# Two rules govern this file:
+#   1. Never ignore source, migrations or committed documentation.
+#   2. Never let a secret, a build artefact or machine-local state be staged.
+#
+# Anything NOT listed here is considered source and will be tracked.
+# After editing, verify with:  git check-ignore -v <path>
+# =============================================================================
+
+# --- Dependencies -------------------------------------------------------------
+node_modules/
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# --- Build output --------------------------------------------------------------
+dist/
+build/
+out/
+*.tsbuildinfo
+.tsbuildinfo
+
+# --- Test / coverage -----------------------------------------------------------
+coverage/
+.nyc_output/
+*.lcov
+.eslintcache
+.prettiercache
+
+# --- Prisma -------------------------------------------------------------------
+# Generated Prisma client. Regenerate with `npm run prisma:generate`; a fresh
+# clone cannot typecheck or build without it, so CI must run that step first.
+src/generated/
+/generated/
+
+# Local databases and Prisma scratch state.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+prisma/*.db
+
+# Migrations under prisma/migrations and prisma/tenant-migrations ARE source and
+# are deliberately not ignored.
+
+# --- Secrets and local configuration ------------------------------------------
+# Real credentials live in .env / .env.* and must never be committed.
+.env
+.env.*
+.envrc
+.direnv/
+
+# Only the templates are trackable. These two negations MUST come after the
+# patterns above or git will not re-include them.
+!.env.example
+!.env.test.example
+
+# Certificates and keys, wherever they land.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.cer
+*.der
+id_rsa
+id_ed25519
+*.asc
+.gpg
+.gnupg/
+
+# Cloud provider and CI credential files.
+.aws/
+.aws-sam/
+.gcloud/
+.azure/
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+.netrc
+.npmrc.local
+.docker/config.json
+
+# --- Logs and runtime ----------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.pid
+*.seed
+*.pid.lock
+
+# --- Caches -------------------------------------------------------------------
+.cache/
+.parcel-cache/
+.turbo/
+.nx/
+.temp/
+.swc/
+.vite/
+
+# --- Editors and OS -----------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+*.swp
+*.swo
+*~
+.project
+.settings/
+.tmproj
+*.sublime-workspace
+*.sublime-project
+
+# --- Generated documentation --------------------------------------------------
+# Regenerate with `node --import tsx src/docs/generate-openapi.ts`.
+docs/openapi.json
+
+# --- Docker -------------------------------------------------------------------
+# Only the compose file and the init SQL are source. Anything a build leaves
+# behind is not.
+.dockerignore
+!/.dockerignore
+docker-compose.override.yml
+docker-compose.local.yml
+
+# --- Tooling scratch ----------------------------------------------------------
+# Security-audit scratch and agent output. Never commit transcripts, captured
+# payloads or promoted artefacts.
+agents/
+.husky/_/
+.husky/tmp/
+.gitleaks.json.tmp
+gitleaks-report.json
+gitleaks-report.sarif
+security-audit-skill/
+
+# --- Misc ---------------------------------------------------------------------
+*.bak
+*.orig
+*.rej
+*.tmp
+.DS_Store
+Thumbs.db
