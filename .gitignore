@@ -163,4 +163,4 @@ security-audit-skill/
 *.rej
 *.tmp
 .DS_Store
-Thumbs.db
+Thumbs.dbgithub-actions-key.json
