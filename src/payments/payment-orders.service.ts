@@ -670,7 +670,19 @@ export class PaymentOrdersService {
     const sessionId = input.deviceFingerPrint;
     // Claimed before the provider is called: without it, two concurrent requests
     // both pass the checks above and the buyer is charged twice.
-    await this.claimOrder(existing.id, 'charge', { status: { notIn: [STATUS_PAID, 'REFUNDED'] } });
+    //
+    // `netpayTransactionId: null` closes the window the claim alone leaves open.
+    // The claim is released as soon as the charge returns and the transaction
+    // id is written, but the status is settled only afterwards, so in between
+    // the order is unclaimed and still looks chargeable. Requiring that no
+    // transaction is bound makes that state unchargeable, which is what a
+    // second charge actually needs to be refused. It is also what keeps a 3-D
+    // Secure order from being charged twice while its challenge is still open:
+    // the provider already created a transaction for it.
+    await this.claimOrder(existing.id, 'charge', {
+      status: { notIn: [STATUS_PAID, 'REFUNDED'] },
+      netpayTransactionId: null,
+    });
     try {
       // Netpay only charges a token that belongs to a customer, and answers
       // "Invalid Token" to one that does not, so the card is attached to a

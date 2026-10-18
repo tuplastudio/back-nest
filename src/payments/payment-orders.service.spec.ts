@@ -87,6 +87,9 @@ function serviceOver(
 ): {
   service: PaymentOrdersService;
   writes: Record<string, unknown>[];
+  claims: Record<string, unknown>[];
+  /** Makes the next claim lose, the way the database reports a lost race. */
+  loseClaimRace: () => void;
   emitted: string[];
   tokenizeAmount: jest.Mock<
     (env: string, key: string, amount: number) => Promise<{ tokenAmount: string; amount: number }>
@@ -106,12 +109,21 @@ function serviceOver(
   >;
 } {
   const writes: Record<string, unknown>[] = [];
+  const claims: Record<string, unknown>[] = [];
   const emitted: string[] = [];
+  /** Flipped by a test to simulate losing the claim race, as the database would. */
+  let claimWins = true;
   const client = {
     paymentOrder: {
       findFirst: jest.fn(() => Promise.resolve(rows[0] ?? null)),
       findMany: jest.fn(() => Promise.resolve(rows)),
-      updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
+      updateMany: jest.fn((args: { where?: Record<string, unknown> }) => {
+        // Every claim goes through one conditional UPDATE, so the predicate is
+        // where the race is decided: a request that read the row before a
+        // concurrent charge committed must lose here.
+        claims.push(args.where ?? {});
+        return Promise.resolve({ count: claimWins ? 1 : 0 });
+      }),
       findFirstOrThrow: jest.fn(() =>
         Promise.resolve({ status: rows[0]?.['status'] ?? 'PENDING', sequence: 0 }),
       ),
@@ -205,6 +217,10 @@ function serviceOver(
   return {
     service: new PaymentOrdersService(tenantPrisma, requestContext, config, netpay, events),
     writes,
+    claims,
+    loseClaimRace: () => {
+      claimWins = false;
+    },
     emitted,
     tokenizeAmount,
     createCharge,
@@ -642,6 +658,29 @@ describe('PaymentOrdersService charging a token', () => {
     expect(result.declineReason).toBe('Rejected by Decision Manager');
     expect(result.transactionTokenId).toBe('txn-declined');
     expect(writes.some((w) => w['failureReason'] === 'Rejected by Decision Manager')).toBe(true);
+  });
+
+  it('makes the claim refuse a charge whose order may already have been charged', async () => {
+    // The race: a request reads a chargeable order, and by the time it claims, a
+    // concurrent charge has finished and released its claim. Nothing about the
+    // row it holds says "do not charge", so the conditional UPDATE is the only
+    // thing that can refuse it, and a claim alone cannot: it sees a free claim
+    // and a status that still qualifies. Requiring that no transaction is bound
+    // is what makes an already-charged order visible to the late request.
+    //
+    // The end-to-end race lives in payments.e2e-spec.ts ("charges an order at
+    // most once under concurrent charges"); what is pinned here is the mechanism
+    // and that losing the claim stops the charge.
+    const { service, claims } = serviceOver([pending()], {});
+    await service.chargeToken('order-1', { cardToken: token, billing: billing(), ...DEVICE });
+    expect(claims[0]).toMatchObject({ netpayTransactionId: null });
+
+    const raced = serviceOver([pending()], {});
+    raced.loseClaimRace();
+    await expect(
+      raced.service.chargeToken('order-1', { cardToken: token, billing: billing(), ...DEVICE }),
+    ).rejects.toThrow(/no longer qualifies/);
+    expect(raced.createCharge).not.toHaveBeenCalled();
   });
 
   it('refuses 18 installments on a card that is not Visa or Mastercard', async () => {
