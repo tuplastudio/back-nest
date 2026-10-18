@@ -36,7 +36,7 @@ export class ControlPlanePrismaService implements OnModuleInit, OnModuleDestroy 
       connectionTimeoutMillis: config.databaseConnectionTimeoutMs,
       // Applied per connection so a runaway query can never hold a slot.
       statement_timeout: config.databaseStatementTimeoutMs,
-      application_name: 'vondi-api/control-plane',
+      application_name: 'netpay-api/control-plane',
     });
 
     this.prismaClient = new PrismaClient({

@@ -67,7 +67,7 @@ ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/main.js"]
 
 # --- Migrate stage ----------------------------------------------------------
-# Runs the control-plane migrations as the Cloud Run Job `vondi-migrate`.
+# Runs the control-plane migrations as the Cloud Run Job `netpay-migrate`.
 # `prisma` and `tsx` are devDependencies and are pruned from the runtime image,
 # so this stage installs the full tree. Build with `--target migrate`.
 FROM node:22-alpine AS migrate

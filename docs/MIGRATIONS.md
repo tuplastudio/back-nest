@@ -523,7 +523,7 @@ After migration:
 
 ```bash
 # Check Cloud Run logs
-gcloud logs tail /run.googleapis.com/vondi-api --region=us-central1
+gcloud logs tail /run.googleapis.com/netpay-api --region=us-central1
 
 # Look for database errors
 gcloud logging read "resource.type=cloud_run_revision AND protoPayload.@type:type.googleapis.com/google.cloud.audit.AuditLog"
@@ -575,8 +575,8 @@ If migration succeeded but application fails:
 
 ```bash
 # Deploy previous Docker image
-gcloud run services update vondi-api \
-  --image=us-central1-docker.pkg.dev/project-id/repo/vondi-api:previous-tag \
+gcloud run services update netpay-api \
+  --image=us-central1-docker.pkg.dev/project-id/repo/netpay-api:previous-tag \
   --region=us-central1
 ```
 
