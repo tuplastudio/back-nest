@@ -1,6 +1,6 @@
 # Guía de despliegue a Google Cloud Platform + Neon
 
-**Servicio:** `vondi-api` (API REST NestJS 12 + Prisma 7, multitenant por schema + RLS)
+**Servicio:** `netpay-api` (API REST NestJS 12 + Prisma 7, multitenant por schema + RLS)
 **Runtime:** Google Cloud Run
 **Base de datos:** Neon (PostgreSQL serverless, AWS)
 **Documento:** procedimiento reproducible, paso a paso
@@ -149,18 +149,18 @@ Proyecto GCP: vondi-0q                       (un proyecto por entorno)
 │   └── Subred vondi-subnet                  (10.10.0.0/24)
 │       ├── Cloud Router vondi-router
 │       └── Cloud NAT vondi-nat              (IP RESERVADA: vondi-egress)
-├── Artifact Registry vondi-api              (docker / us-east5)
+├── Artifact Registry netpay-api              (docker / us-east5)
 ├── Secret Manager                           (secretos de la §9)
 ├── Cloud Run
-│   ├── Service vondi-api                    (producción; ingress: LB)
-│   ├── Service vondi-api-canary             (candidata; requiere IAM)
-│   └── Job     vondi-migrate                (migraciones)
+│   ├── Service netpay-api                    (producción; ingress: LB)
+│   ├── Service netpay-api-canary             (candidata; requiere IAM)
+│   └── Job     netpay-migrate                (migraciones)
 ├── Cloud Load Balancing vondi-lb            (global, IP estática, Cloud Armor)
 ├── Cloud Monitoring / Cloud Logging
 └── Service Accounts
-    ├── vondi-runtime    servicios Cloud Run
-    ├── vondi-deployer   GitHub Actions (WIF)
-    └── vondi-migrator   Job de migraciones
+    ├── netpay-runtime    servicios Cloud Run
+    ├── netpay-deployer   GitHub Actions (WIF)
+    └── netpay-migrator   Job de migraciones
 
 Neon: proyecto "vondi"        (región aws-us-east-2, plan Scale)
 ├── main     producción  (protegida, 1 CU, sin autosuspend)
@@ -181,13 +181,13 @@ Network: IP Allow = [EGRESS_IP/32]  (+ ramas no protegidas sin restricción)
 export PROJECT_ID="vondi-0q"
 export PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
 export REGION="us-east5"                  # Columbus, Ohio — ver §5.1
-export SERVICE="vondi-api"
-export CANARY_SERVICE="vondi-api-canary"
-export MIGRATE_JOB="vondi-migrate"
-export AR_REPO="vondi-api"
-export GH_REPO="tupla-studio/vondi-api"   # DEBE coincidir con el repositorio real
+export SERVICE="netpay-api"
+export CANARY_SERVICE="netpay-api-canary"
+export MIGRATE_JOB="netpay-migrate"
+export AR_REPO="netpay-api"
+export GH_REPO="tupla-studio/netpay-api"   # DEBE coincidir con el repositorio real
 export DB_NAME="neondb"
-export IMAGE_BASE="$REGION-docker.pkg.dev/$PROJECT_ID/$AR_REPO/vondi-api"
+export IMAGE_BASE="$REGION-docker.pkg.dev/$PROJECT_ID/$AR_REPO/netpay-api"
 ```
 
 ### 5.1 Región
@@ -230,13 +230,13 @@ gcloud services enable \
 No usar la cuenta de Compute por defecto.
 
 ```bash
-for SA in vondi-runtime vondi-deployer vondi-migrator; do
+for SA in netpay-runtime netpay-deployer netpay-migrator; do
   gcloud iam service-accounts create "$SA" --display-name="$SA"
 done
 
-RUNTIME_SA="vondi-runtime@$PROJECT_ID.iam.gserviceaccount.com"
-DEPLOYER_SA="vondi-deployer@$PROJECT_ID.iam.gserviceaccount.com"
-MIGRATOR_SA="vondi-migrator@$PROJECT_ID.iam.gserviceaccount.com"
+RUNTIME_SA="netpay-runtime@$PROJECT_ID.iam.gserviceaccount.com"
+DEPLOYER_SA="netpay-deployer@$PROJECT_ID.iam.gserviceaccount.com"
+MIGRATOR_SA="netpay-migrator@$PROJECT_ID.iam.gserviceaccount.com"
 
 # Logs y métricas desde los servicios y el Job
 for SA in "$RUNTIME_SA" "$MIGRATOR_SA"; do
@@ -260,7 +260,7 @@ done
 ```bash
 gcloud artifacts repositories create "$AR_REPO" \
   --repository-format=docker --location="$REGION" \
-  --description="Imágenes de vondi-api"
+  --description="Imágenes de netpay-api"
 
 gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" --location="$REGION" \
   --member="serviceAccount:$DEPLOYER_SA" --role="roles/artifactregistry.writer"
@@ -299,11 +299,11 @@ Variables en GitHub (_Settings → Environments → `production`_):
 | `GCP_PROJECT_ID`    | `vondi-0q`                                                                                 |
 | `GCP_REGION`        | `us-east5`                                                                                 |
 | `GCP_WIF_PROVIDER`  | `projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github/providers/github` |
-| `GCP_DEPLOYER_SA`   | `vondi-deployer@vondi-0q.iam.gserviceaccount.com`                                          |
-| `CLOUD_RUN_SERVICE` | `vondi-api`                                                                                |
-| `CLOUD_RUN_CANARY`  | `vondi-api-canary`                                                                         |
-| `MIGRATE_JOB`       | `vondi-migrate`                                                                            |
-| `AR_REPOSITORY`     | `vondi-api`                                                                                |
+| `GCP_DEPLOYER_SA`   | `netpay-deployer@vondi-0q.iam.gserviceaccount.com`                                          |
+| `CLOUD_RUN_SERVICE` | `netpay-api`                                                                                |
+| `CLOUD_RUN_CANARY`  | `netpay-api-canary`                                                                         |
+| `MIGRATE_JOB`       | `netpay-migrate`                                                                            |
+| `AR_REPOSITORY`     | `netpay-api`                                                                                |
 
 No guardar claves JSON en GitHub Secrets.
 
@@ -355,8 +355,8 @@ echo "IP de salida: $EGRESS_IP"
 ```
 
 > **Ejecutado por [scripts/provision-network.sh](../scripts/provision-network.sh)**, que
-> es idempotente y además concede `roles/compute.networkUser` a `vondi-runtime` y
-> `vondi-migrator` sobre la subred (sin eso, un servicio en la VPC no puede
+> es idempotente y además concede `roles/compute.networkUser` a `netpay-runtime` y
+> `netpay-migrator` sobre la subred (sin eso, un servicio en la VPC no puede
 > tomar la subred). No lo ejecutes sin leer su cabecera: la red solo sirve cuando
 > la IP reservada está autorizada después en Neon, y ese paso es fuera de GCP.
 
@@ -610,7 +610,7 @@ done
 grant db-control-url-unpooled "$MIGRATOR_SA"
 ```
 
-`vondi-runtime` **no** accede a las URLs directas. El deployer no lee valores; si `gcloud run deploy --set-secrets` pide permiso de metadatos, concederle `roles/secretmanager.viewer` sobre esos secretos.
+`netpay-runtime` **no** accede a las URLs directas. El deployer no lee valores; si `gcloud run deploy --set-secrets` pide permiso de metadatos, concederle `roles/secretmanager.viewer` sobre esos secretos.
 
 > Referencias `:latest` en secretos rotables. Para los **no rotables**, fijar la versión numérica (`pii-encryption:1`), de modo que una versión nueva accidental nunca llegue a producción sin un despliegue.
 
@@ -765,7 +765,7 @@ Esperado en los logs: `Listening on http://0.0.0.0:8080 (production)` y `API bas
 En el canario y en producción la URL `run.app` es privada, así que hacen falta las dos credenciales a la vez, en cabeceras distintas:
 
 ```bash
-URL=https://vondi-api-259853160457.us-east5.run.app
+URL=https://netpay-api-259853160457.us-east5.run.app
 ID=$(gcloud auth print-identity-token)
 # Basic -> Authorization (lo consume el guard de la app)
 # ID token -> X-Serverless-Authorization (lo consume la IAM de Cloud Run, con precedencia)
@@ -796,8 +796,8 @@ desplegado de lo que este documento diseña:
 | `--no-cpu-throttling`                   | activo                    | inactivo                          |
 | `--ingress`                             | cerrado + LB              | `all` (no hay LB desplegado)     |
 | `DOCS_ENABLED`                          | `false`                   | `true`                            |
-| Canario                                 | `vondi-api-canary`        | existe, privado, webhooks off     |
-| SA del Job de migraciones               | `vondi-migrator`          | asignada                          |
+| Canario                                 | `netpay-api-canary`        | existe, privado, webhooks off     |
+| SA del Job de migraciones               | `netpay-migrator`          | asignada                          |
 | IAM del deployer (canario + token)      | `run.invoker` + `TokenCreator` | concedido                     |
 
 Qué se verificó al poner el egress, y por qué en ese orden:
@@ -965,7 +965,7 @@ GCP_PROJECT_ID=vondi-0q-staging ./scripts/provision-secrets.sh
 
 # 4. Servicio y Job, con la configuración completa (§11.1, §11.2).
 GCP_PROJECT_ID=vondi-0q-staging REGION=us-east5 \
-  SERVICE=vondi-api-staging MIGRATE_JOB=vondi-migrate-staging \
+  SERVICE=netpay-api-staging MIGRATE_JOB=netpay-migrate-staging \
   IMAGE_DIGEST=sha256:… MIGRATE_DIGEST=sha256:… ./scripts/provision-cloudrun.sh
 ```
 
@@ -1028,7 +1028,7 @@ Cuatro diferencias con producción, y el motivo de cada una:
    `always()` —para que `skip_migrations` pueda saltarse el Job de migraciones—,
    pero la condición es explícita sobre `needs.build` y `needs.migrate`.
 5. **El escaneo de la imagen es solo de producción.** `trivy-action` necesita
-   permisos de Cloud Storage para su caché, que `vondi-deployer` de staging no
+   permisos de Cloud Storage para su caché, que `netpay-deployer` de staging no
    tiene. Las dos imágenes salen del mismo commit, así que el gate de producción
    cubre el mismo contenido; para escanear antes del merge hay que igualar los
    permisos.
@@ -1045,7 +1045,7 @@ primer sitio donde se ve que una migración es válida.
 La URL `run.app` no admite Cloud Armor ni dominio propio con certificado gestionado; para una API pública se usa un balanceador global.
 
 ```
-Internet ─► Global HTTPS LB (IP estática) ─► Cloud Armor ─► Serverless NEG ─► Cloud Run (vondi-api)
+Internet ─► Global HTTPS LB (IP estática) ─► Cloud Armor ─► Serverless NEG ─► Cloud Run (netpay-api)
 ```
 
 ### 13.1 Política de Cloud Armor
@@ -1053,7 +1053,7 @@ Internet ─► Global HTTPS LB (IP estática) ─► Cloud Armor ─► Serverl
 Se crea **antes** del backend. Las reglas se evalúan por prioridad ascendente:
 
 ```bash
-gcloud compute security-policies create vondi-armor --description="WAF vondi-api"
+gcloud compute security-policies create vondi-armor --description="WAF netpay-api"
 
 # 1000: WAF — inyección SQL
 gcloud compute security-policies rules create 1000 --security-policy=vondi-armor \
@@ -1141,7 +1141,7 @@ Las métricas del pooler (conexiones cliente/servidor, esperas) están en _Neon 
 | Instancias al máximo        | `instance_count` = 4 durante 10 min                                                        | P2   |
 | **IP de salida modificada** | audit log `compute.addresses.*` o `compute.routers.patch` sobre `vondi-egress`/`vondi-nat` | P1   |
 | Reinicios de contenedor     | `container/startup_latencies` o reinicios crecientes                                       | P1   |
-| Migración fallida           | ejecución del Job `vondi-migrate` en estado Failed                                         | P1   |
+| Migración fallida           | ejecución del Job `netpay-migrate` en estado Failed                                         | P1   |
 | Espera en el pooler (Neon)  | clientes en _waiting_ > 0 sostenido                                                        | P1   |
 | Conexiones cerca del tope   | conexiones de servidor > 80 % de `max_connections`                                         | P2   |
 | Presupuesto                 | umbrales de §17                                                                            | P3   |
@@ -1151,7 +1151,7 @@ Si la IP de salida cambia, Neon rechaza la conexión y los logs muestran un erro
 Uptime check externo contra el dominio público:
 
 ```bash
-gcloud monitoring uptime create vondi-api-ready \
+gcloud monitoring uptime create netpay-api-ready \
   --resource-type=uptime-url \
   --resource-labels=host=api.vondi.tupla.studio,project_id="$PROJECT_ID" \
   --path=/health/ready --protocol=https --period=1 --timeout=10
@@ -1259,8 +1259,8 @@ de llegar a producción.
 | Base de datos   | —                        | `vondi`                                       | `vondi`                                          |
 | Endpoint Neon   | —                        | `ep-soft-pond-ax98gbha` (+`-pooler`)           | `ep-rapid-block-axjfmfnn` (+`-pooler`)           |
 | Compute Neon    | 0.25 CU, suspende 5 min | 0.5 CU                                        | 1 CU, sin autosuspend                            |
-| Servicio        | local                   | `vondi-api-staging`                           | `vondi-api` + `vondi-api-canary`                 |
-| Job de migraciones | —                    | `vondi-migrate-staging`                       | `vondi-migrate`                                  |
+| Servicio        | local                   | `netpay-api-staging`                           | `netpay-api` + `netpay-api-canary`                 |
+| Job de migraciones | —                    | `netpay-migrate-staging`                       | `netpay-migrate`                                  |
 | IP de egress    | —                        | `136.79.186.85`                               | `34.162.112.204`                                 |
 | Compute Neon    | 0.25 CU, suspende 5 min | 0.25–1 CU, autosuspend 5 min                 | 1 CU, sin autosuspend                            |
 | `min-instances` | 0                       | 0                                             | 1                                                |
@@ -1270,15 +1270,44 @@ de llegar a producción.
 
 ¹ El balanceador de §13 sigue pendiente en **producción**: sin él la URL `run.app` es la vía de entrada y `ingress=all` es lo único que hay.
 
-² Staging **no** acepta acceso anónimo. La URL `run.app` es pública, así que con `--allow-unauthenticated` la API quedaría alcanzable desde internet sin Cloud Armor que la filtre, y con un endpoint de alta de tenants eso es una base de datos abierta a quien encuentre el hostname. El control es IAM: `roles/run.invoker` sobre `vondi-api-staging` para la identidad del deployer (que es la del humo) y para quien mantiene el entorno. El humo lleva ID token en `X-Serverless-Authorization` porque Cloud Run da precedencia a esa cabecera: por `authorization` la petición pasaría IAM y el guard de la aplicación —que solo lee `authorization`— vería 401.
+² Staging **no** acepta acceso anónimo. La URL `run.app` es pública, así que con `--allow-unauthenticated` la API quedaría alcanzable desde internet sin Cloud Armor que la filtre, y con un endpoint de alta de tenants eso es una base de datos abierta a quien encuentre el hostname. El control es IAM: `roles/run.invoker` sobre `netpay-api-staging` para la identidad del deployer (que es la del humo) y para quien mantiene el entorno. El humo lleva ID token en `X-Serverless-Authorization` porque Cloud Run da precedencia a esa cabecera: por `authorization` la petición pasaría IAM y el guard de la aplicación —que solo lee `authorization`— vería 401.
 
 Para probar staging a mano, sin abrir nada:
 
 ```bash
-gcloud run services proxy vondi-api-staging --region=us-east5 --project=vondi-0q-staging
+gcloud run services proxy netpay-api-staging --region=us-east5 --project=vondi-0q-staging
 # y en otra terminal
 curl -s http://127.0.0.1:8080/health/ready
 ```
+
+### 17.0 Nombres: qué se renombró y qué no
+
+El producto se llama netpay. Los nombres se renombraron en todo lo que era
+renombrable, y lo que no lo era se dejó con su nombre viejo **a propósito**, con
+motivo. Saber esto evita el siguiente error: alguien que busque `vondi` y vea
+que "el renombrado está a medias".
+
+| Renombrado                                   | Motivo de que existiera ahora                           |
+| -------------------------------------------- | -------------------------------------------------------- |
+| `netpay-api`, `netpay-api-canary`, `netpay-api-staging` | El nombre del servicio es el hostname: renombrarlo es crear otro servicio. |
+| `netpay-migrate`, `netpay-migrate-staging`   | Job de migraciones.                                        |
+| `netpay-runtime`, `netpay-deployer`, `netpay-migrator` | Cuentas de servicio.                                      |
+| `netpay-api` (Artifact Registry, ambos proyectos) | Registro de imágenes.                                 |
+
+El `PREFIX` de `scripts/provision-environment.sh`, `provision-cloudrun.sh`,
+`provision-secrets.sh` y `provision-network.sh` es lo que decide esos nombres:
+`SERVICE_PREFIX=netpay ./scripts/provision-environment.sh`. Renombrar el producto
+otra vez es cambiar esa variable, no editar cadenas en cuatro ficheros.
+
+**Lo que sigue con `vondi` y por qué:**
+
+| Nombre                                     | Por qué no se renombra                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `vondi-0q`, `vondi-0q-staging`             | El ID de un proyecto GCP es inmutable. Solo se puede cambiar el nombre a mostrar.     |
+| `vondi-net`, `vondi-subnet`, `vondi-router`, `vondi-nat`, `vondi-egress` | No se renombran: hay que recrearlos, y **recrear el NAT cambia la IP de salida**, que es la que se autoriza en Neon. |
+| `JWT_ISSUER=vondi-api`, `JWT_AUDIENCE=vondi-api-v1` | Cambiarlos **invalida todos los tokens emitidos** (toda sesión abierta). Es una migración, no un renombrado. |
+| `api.vondi.tupla.studio`, `app.vondi.tupla.studio` | DNS y certificados. |
+| base de datos `vondi` en Neon              | `ALTER DATABASE ... RENAME` es posible, pero rompe las cuatro URLs de conexión de golpe. |
 
 ### 17.1 La rama `staging` de Neon nació como copia
 
@@ -1472,7 +1501,7 @@ El canario comparte la BD de producción. El smoke es de solo lectura y los webh
 - [x] `vondi-egress` es una dirección **reservada** (`34.162.112.204`); NAT en `MANUAL_ONLY`
 - [x] Servicio, canario y Job con `--vpc-egress=all-traffic`, verificado contra la base ([§11.6](#116-estado-verificado-en-vondi-0q))
 - [x] `--enable-private-ip-google-access` activo
-- [ ] `roles/compute.networkUser` sobre `vondi-subnet` solo para `vondi-runtime` y `vondi-migrator`
+- [ ] `roles/compute.networkUser` sobre `vondi-subnet` solo para `netpay-runtime` y `netpay-migrator`
 - [ ] Permisos de escritura sobre `vondi-egress`/`vondi-nat` restringidos; alerta configurada
 - [ ] DNS (`api…` y comodín de tenants si aplica) y certificado en `ACTIVE`
 
@@ -1534,8 +1563,8 @@ DATABASE_CONNECTION_TIMEOUT_MS=15000
 DATABASE_STATEMENT_TIMEOUT_MS=15000
 JWT_ACCESS_TTL=15m
 JWT_REFRESH_TTL=30d
-JWT_ISSUER=vondi-api
-JWT_AUDIENCE=vondi-api-v1
+JWT_ISSUER=netpay-api
+JWT_AUDIENCE=netpay-api-v1
 ARGON2_MEMORY_COST=19456
 ARGON2_TIME_COST=2
 ARGON2_PARALLELISM=1
@@ -1574,10 +1603,10 @@ NETPAY_ENCRYPTION_KEY=netpay-encryption:1
 
 ```bash
 # Cloud Run
-gcloud run services describe vondi-api --region=us-east5
-gcloud run revisions list --service=vondi-api --region=us-east5
-gcloud run services logs tail vondi-api --region=us-east5
-gcloud run jobs executions list --job=vondi-migrate --region=us-east5
+gcloud run services describe netpay-api --region=us-east5
+gcloud run revisions list --service=netpay-api --region=us-east5
+gcloud run services logs tail netpay-api --region=us-east5
+gcloud run jobs executions list --job=netpay-migrate --region=us-east5
 
 # IP de salida que Neon tiene permitida
 gcloud compute addresses describe vondi-egress --region=us-east5 --format='value(address,status)'

@@ -20,7 +20,7 @@
 #
 # Uso:
 #   GCP_PROJECT_ID=vondi-0q-staging REGION=us-east5 \
-#   SERVICE=vondi-api-staging MIGRATE_JOB=vondi-migrate-staging \
+#   SERVICE=netpay-api-staging MIGRATE_JOB=netpay-migrate-staging \
 #   IMAGE_DIGEST=sha256:… MIGRATE_DIGEST=sha256:… \
 #   ./scripts/provision-cloudrun.sh
 # ---------------------------------------------------------------------------
@@ -28,13 +28,16 @@
 set -euo pipefail
 
 PROJECT_ID="${GCP_PROJECT_ID:-}"
+# Prefijo de los nombres: cuentas de servicio, registro e imágenes. Ver
+# provision-environment.sh.
+PREFIX="${SERVICE_PREFIX:-netpay}"
 REGION="${REGION:-us-east5}"
-SERVICE="${SERVICE:-}"
-MIGRATE_JOB="${MIGRATE_JOB:-vondi-migrate}"
+SERVICE="${SERVICE:-${PREFIX}-api}"
+MIGRATE_JOB="${MIGRATE_JOB:-${PREFIX}-migrate}"
 IMAGE_DIGEST="${IMAGE_DIGEST:-}"
 MIGRATE_DIGEST="${MIGRATE_DIGEST:-}"
-AR_REPOSITORY="${AR_REPOSITORY:-vondi-api}"
-IMAGE_BASE="${IMAGE_BASE:-$REGION-docker.pkg.dev/$PROJECT_ID/$AR_REPOSITORY/vondi-api}"
+AR_REPOSITORY="${AR_REPOSITORY:-${PREFIX}-api}"
+IMAGE_BASE="${IMAGE_BASE:-$REGION-docker.pkg.dev/$PROJECT_ID/$AR_REPOSITORY/$PREFIX-api}"
 
 # Diferencias por entorno. Los valores por defecto son los de preproducción;
 # producción está en §11.2 y se pasa explícitamente al ejecutar el script.
@@ -49,7 +52,7 @@ ALLOW_UNAUTH="${ALLOW_UNAUTH:---no-allow-unauthenticated}"
 # Cuenta que puede invocar el servicio (además de leerlo). El humo de CI usa
 # esta identidad: sin ella, Cloud Run responde 403 antes de que la aplicación
 # vea la petición.
-INVOKER_SA="${INVOKER_SA:-vondi-deployer@${PROJECT_ID}.iam.gserviceaccount.com}"
+INVOKER_SA="${INVOKER_SA:-${PREFIX}-deployer@${PROJECT_ID}.iam.gserviceaccount.com}"
 MIN_INSTANCES="${MIN_INSTANCES:-0}"
 MAX_INSTANCES="${MAX_INSTANCES:-2}"
 CONCURRENCY="${CONCURRENCY:-15}"
@@ -66,8 +69,8 @@ TRUST_PROXY_HOPS="${TRUST_PROXY_HOPS:-1}"
 # terceros, ni de prueba.
 OUTBOUND_WEBHOOK_ENABLED="${OUTBOUND_WEBHOOK_ENABLED:-false}"
 
-RUNTIME_SA="vondi-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
-MIGRATOR_SA="vondi-migrator@${PROJECT_ID}.iam.gserviceaccount.com"
+RUNTIME_SA="${RUNTIME_SA:-${PREFIX}-runtime@${PROJECT_ID}.iam.gserviceaccount.com}"
+MIGRATOR_SA="${MIGRATOR_SA:-${PREFIX}-migrator@${PROJECT_ID}.iam.gserviceaccount.com}"
 NETWORK="${NETWORK:-vondi-net}"
 SUBNET="${SUBNET:-vondi-subnet}"
 

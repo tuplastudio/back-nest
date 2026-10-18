@@ -36,8 +36,12 @@
 set -euo pipefail
 
 PROJECT_ID="${GCP_PROJECT_ID:-}"
+# Prefijo de todos los nombres del entorno: cuentas de servicio, registro y
+# servicios. Renombrar el producto es cambiar esta variable y volver a ejecutar,
+# no editar veinte cadenas en cuatro ficheros.
+PREFIX="${SERVICE_PREFIX:-netpay}"
 REGION="${REGION:-us-east5}"
-AR_REPO="${AR_REPOSITORY:-vondi-api}"
+AR_REPO="${AR_REPOSITORY:-${PREFIX}-api}"
 GH_REPO="${GH_REPO:-}"
 # Si se indica, el permiso de la WIF queda atado al environment de GitHub, no a
 # la rama. Ver más abajo; para producción el criterio es `refs/heads/main`.
@@ -61,9 +65,9 @@ fi
 # "${SA}@${PROJECT_ID}..." produce un nombre inválido que la IAM API rechaza con
 # un INVALID_ARGUMENT que no dice nada de un doble sufijo.
 SA_DOMAIN="${PROJECT_ID}.iam.gserviceaccount.com"
-RUNTIME_SA="vondi-runtime@${SA_DOMAIN}"
-DEPLOYER_SA="vondi-deployer@${SA_DOMAIN}"
-MIGRATOR_SA="vondi-migrator@${SA_DOMAIN}"
+RUNTIME_SA="${PREFIX}-runtime@${SA_DOMAIN}"
+DEPLOYER_SA="${PREFIX}-deployer@${SA_DOMAIN}"
+MIGRATOR_SA="${PREFIX}-migrator@${SA_DOMAIN}"
 
 run() {
   if $DRY_RUN; then
@@ -122,7 +126,7 @@ run gcloud services enable \
 # Cuentas de servicio (§6.2)
 # -----------------------------------------------------------------------------
 echo "Cuentas de servicio"
-for SA in vondi-runtime vondi-deployer vondi-migrator; do
+for SA in "${PREFIX}-runtime" "${PREFIX}-deployer" "${PREFIX}-migrator"; do
   if exists iam service-accounts describe "$SA@${SA_DOMAIN}" --project "$PROJECT_ID"; then
     echo "  $SA existe"
   else
@@ -166,7 +170,7 @@ if exists artifacts repositories describe "$AR_REPO" \
 else
   run gcloud artifacts repositories create "$AR_REPO" \
     --project "$PROJECT_ID" --repository-format=docker --location="$REGION" \
-    --description="Imágenes de vondi-api"
+    --description="Imágenes de ${PREFIX}-api"
 fi
 
 run gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" \

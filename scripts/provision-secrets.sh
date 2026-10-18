@@ -35,14 +35,15 @@
 set -euo pipefail
 
 PROJECT_ID="${GCP_PROJECT_ID:-}"
+PREFIX="${SERVICE_PREFIX:-netpay}"
 # Copia `pii-*` y `netpay-encryption` de otro proyecto en lugar de generarlas.
 # Necesario cuando la base de este entorno hereda filas cifradas con las claves
 # del otro: sin esto, esas filas no se pueden descifrar. Son la excepción, no
 # el patrón, porque significa que staging guarda las claves de producción.
 KEYS_FROM_PROJECT="${KEYS_FROM_PROJECT:-}"
 
-RUNTIME_SA="vondi-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
-MIGRATOR_SA="vondi-migrator@${PROJECT_ID}.iam.gserviceaccount.com"
+RUNTIME_SA="${PREFIX}-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
+MIGRATOR_SA="${PREFIX}-migrator@${PROJECT_ID}.iam.gserviceaccount.com"
 
 DRY_RUN=false
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
@@ -148,7 +149,7 @@ grant() {
     --condition=None --quiet >/dev/null
 }
 
-# vondi-runtime NO accede a las URLs directas: la conexión sin pooler existe
+# El runtime NO accede a las URLs directas: la conexión sin pooler existe
 # para migraciones y administration, y dársela a la ruta de peticiones ampliaría
 # el radio de acción de una inyección.
 for S in jwt-access-secret jwt-refresh-secret pii-hmac-key pii-encryption-key \

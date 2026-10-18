@@ -11,7 +11,7 @@
 #   * No arrastra las variables de GCP. En el workflow de despliegue las
 #     `vars.*` del nivel de workflow se resuelven según el `environment:` de
 #     cada job, y un job sin environment las recibe **vacías y sin avisar**
-#     (IMAGE_BASE quedaba como `-docker.pkg.dev///vondi-api`). Aquí no hay
+#     (IMAGE_BASE quedaba como `-docker.pkg.dev///`). Aquí no hay
 #     ninguna: un job nuevo no puede heredar ese fallo silencioso.
 #
 # La cancelación sí se permite, y solo en PR: un commit nuevo invalida el

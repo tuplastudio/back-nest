@@ -137,7 +137,7 @@ function createPool(): Pool {
   return new Pool({
     connectionString: databaseUrl,
     max: 2,
-    application_name: 'vondi-api/seed',
+    application_name: 'netpay-api/seed',
   });
 }
 

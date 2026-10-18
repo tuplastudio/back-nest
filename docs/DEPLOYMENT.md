@@ -160,7 +160,7 @@ You can override default configuration:
 PROJECT_ID=my-project \
 NEON_PROJECT_ID=xxx \
 REGION=europe-west1 \
-SERVICE_NAME=vondi-api \
+SERVICE_NAME=netpay-api \
 MEMORY=1Gi \
 CPU=2 \
 MAX_INSTANCES=50 \
@@ -188,13 +188,13 @@ This will:
 ### 5.1 Check Service Status
 
 ```bash
-gcloud run services describe vondi-api --region=$REGION
+gcloud run services describe netpay-api --region=$REGION
 ```
 
 ### 5.2 Test Health Endpoint
 
 ```bash
-SERVICE_URL=$(gcloud run services describe vondi-api --region=$REGION --format='value(status.url)')
+SERVICE_URL=$(gcloud run services describe netpay-api --region=$REGION --format='value(status.url)')
 curl $SERVICE_URL/health
 ```
 
@@ -209,7 +209,7 @@ Expected response:
 ### 5.3 View Logs
 
 ```bash
-gcloud logs tail /run.googleapis.com/vondi-api --region=$REGION
+gcloud logs tail /run.googleapis.com/netpay-api --region=$REGION
 ```
 
 ## Manual Deployment (Alternative)
@@ -220,10 +220,10 @@ If you prefer manual deployment instead of the script:
 
 ```bash
 # Build image
-docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/vondi-api:latest .
+docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/netpay-api:latest .
 
 # Push to Artifact Registry
-docker push $REGION-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/vondi-api:latest
+docker push $REGION-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/netpay-api:latest
 ```
 
 ### 2. Create Secrets Manually
@@ -260,8 +260,8 @@ done
 ### 4. Deploy to Cloud Run
 
 ```bash
-gcloud run deploy vondi-api \
-  --image=$REGION-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/vondi-api:latest \
+gcloud run deploy netpay-api \
+  --image=$REGION-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/netpay-api:latest \
   --region=$REGION \
   --platform=managed \
   --allow-unauthenticated \
@@ -307,12 +307,12 @@ Create `cloudbuild.yaml` (already included) and set up triggers:
 ```bash
 # Create a build trigger
 gcloud builds triggers create github \
-  --name="vondi-api-deploy" \
+  --name="netpay-api-deploy" \
   --repo-owner=your-org \
-  --repo-name=vondi-api \
+  --repo-name=netpay-api \
   --branch-pattern="^main$" \
   --build-config="cloudbuild.yaml" \
-  --substitutions="_REGION=$REGION,_SERVICE_NAME=vondi-api"
+  --substitutions="_REGION=$REGION,_SERVICE_NAME=netpay-api"
 ```
 
 ### Using GitHub Actions
@@ -349,10 +349,10 @@ jobs:
 
 ```bash
 # Tail logs in real-time
-gcloud logs tail /run.googleapis.com/vondi-api --region=$REGION
+gcloud logs tail /run.googleapis.com/netpay-api --region=$REGION
 
 # View recent logs
-gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=vondi-api" \
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=netpay-api" \
   --limit=50 --format=json
 ```
 
@@ -360,7 +360,7 @@ gcloud logging read "resource.type=cloud_run_revision AND resource.labels.servic
 
 ```bash
 # View instance metrics
-gcloud run services describe vondi-api --region=$REGION --format=yaml
+gcloud run services describe netpay-api --region=$REGION --format=yaml
 ```
 
 ### Debug Common Issues
@@ -402,7 +402,7 @@ gcloud run services describe vondi-api --region=$REGION --format=yaml
 
 ```bash
 # Check instance logs
-gcloud logs tail /run.googleapis.com/vondi-api --region=$REGION
+gcloud logs tail /run.googleapis.com/netpay-api --region=$REGION
 
 # Verify database connectivity
 # Run a local test with your Neon connection string
@@ -424,7 +424,7 @@ DATABASE_URL="postgresql://..." npx prisma migrate deploy
 Update `CORS_ORIGINS` in your Cloud Run deployment:
 
 ```bash
-gcloud run services update vondi-api \
+gcloud run services update netpay-api \
   --region=$REGION \
   --set-env-vars=CORS_ORIGINS=https://your-frontend-domain.com
 ```
@@ -435,10 +435,10 @@ To deploy a previous version:
 
 ```bash
 # List revisions
-gcloud run revisions list --service=vondi-api --region=$REGION
+gcloud run revisions list --service=netpay-api --region=$REGION
 
 # Revert to a specific revision
-gcloud run services update-traffic vondi-api \
+gcloud run services update-traffic netpay-api \
   --region=$REGION \
   --to-revisions=REVISION_NAME=100
 ```

@@ -1,5 +1,5 @@
 {
-  "name": "vondi-api",
+  "name": "netpay-api",
   "version": "1.0.0",
   "description": "Production-grade NestJS + Prisma base with schema-level multitenancy, per-tenant API keys, PII encryption and hardened SQL handling.",
   "license": "UNLICENSED",

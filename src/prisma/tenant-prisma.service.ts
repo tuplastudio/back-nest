@@ -90,7 +90,7 @@ export class TenantPrismaService implements OnModuleInit, OnModuleDestroy {
       idleTimeoutMillis: config.databasePoolIdleTimeoutMs,
       connectionTimeoutMillis: config.databaseConnectionTimeoutMs,
       statement_timeout: config.databaseStatementTimeoutMs,
-      application_name: 'vondi-api/tenant-plane',
+      application_name: 'netpay-api/tenant-plane',
     });
 
     this.sharedPool.on('error', (error) => {

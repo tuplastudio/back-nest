@@ -1,4 +1,4 @@
-# Codecov para vondi-api.
+# Codecov para netpay-api.
 #
 # El informe lo produce Jest (`npm run test:cov` → `coverage/lcov.info`) en el job
 # `verify` de .github/workflows/deploy.yml y lo sube codecov/codecov-action con

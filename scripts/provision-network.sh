@@ -44,8 +44,9 @@ SUBNET_RANGE="${SUBNET_RANGE:-10.60.0.0/24}"
 ROUTER="${ROUTER:-vondi-router}"
 NAT="${NAT:-vondi-nat}"
 ADDRESS="${ADDRESS:-vondi-egress}"
-RUNTIME_SA="${RUNTIME_SA:-vondi-runtime@${PROJECT_ID}.iam.gserviceaccount.com}"
-MIGRATOR_SA="${MIGRATOR_SA:-vondi-migrator@${PROJECT_ID}.iam.gserviceaccount.com}"
+PREFIX="${SERVICE_PREFIX:-netpay}"
+RUNTIME_SA="${RUNTIME_SA:-${PREFIX}-runtime@${PROJECT_ID}.iam.gserviceaccount.com}"
+MIGRATOR_SA="${MIGRATOR_SA:-${PREFIX}-migrator@${PROJECT_ID}.iam.gserviceaccount.com}"
 
 DRY_RUN=false
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
@@ -133,18 +134,18 @@ El paso siguiente solo es seguro si Neon acepta esa IP. Cómo comprobarlo sin
 arriesgar el servicio: ejecutar el Job de migraciones ya conectado al NAT. Si
 termina bien, la base responde desde esa IP y se puede mover el servicio.
 
-  gcloud run jobs deploy vondi-migrate --region=us-east5 
-    --image=\$(gcloud run jobs describe vondi-migrate --region=us-east5 
+  gcloud run jobs deploy ${PREFIX}-migrate --region=us-east5 
+    --image=\$(gcloud run jobs describe ${PREFIX}-migrate --region=us-east5 
       --format='value(spec.template.spec.template.spec.containers[0].image)') 
     --network=$NETWORK --subnet=$SUBNET --vpc-egress=all-traffic 
-    --service-account=vondi-migrator@$PROJECT_ID.iam.gserviceaccount.com 
+    --service-account=netpay-migrator@$PROJECT_ID.iam.gserviceaccount.com 
     --tasks=1 --parallelism=1 --max-retries=0 --quiet
-  gcloud run jobs execute vondi-migrate --region=us-east5 --wait
+  gcloud run jobs execute ${PREFIX}-migrate --region=us-east5 --wait
 
 Si el Job falla por conexión, Neon tiene una allowlist que no incluye la IP:
 autorizar $NAT_IP/32 en Neon y volver a ejecutar. Con el Job en verde, el
 servicio puede moverse a la VPC:
 
-  gcloud run services update vondi-api --region=$REGION 
+  gcloud run services update ${PREFIX}-api --region=$REGION 
     --network=$NETWORK --subnet=$SUBNET --vpc-egress=all-traffic --quiet
 EOF
