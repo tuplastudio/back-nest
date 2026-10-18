@@ -81,6 +81,8 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
     outputs:
       digest: ${{ steps.push_app.outputs.digest }}
     steps:
