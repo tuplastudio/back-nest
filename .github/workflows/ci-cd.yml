@@ -188,12 +188,24 @@ jobs:
           echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
 
       # The service is private (no --allow-unauthenticated), so the check sends an
-      # identity token. `/health` redirects to the docs; `/health/ready` checks
-      # both database planes.
+      # identity token. `gcloud auth print-identity-token --audiences` rejects WIF
+      # (external_account) credentials, so the token comes from the auth action.
+      - name: Get identity token for the service
+        id: id_token
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service_url.outputs.url }}
+          id_token_include_email: true
+
+      # `/health` redirects to the docs; `/health/ready` checks both database
+      # planes.
       - name: Health check
         run: |
           URL="${{ steps.service_url.outputs.url }}"
-          TOKEN=$(gcloud auth print-identity-token --audiences="$URL")
+          TOKEN="${{ steps.id_token.outputs.id_token }}"
           for i in 1 2 3 4 5; do
             if curl -fsS -H "Authorization: Bearer $TOKEN" "$URL/health/ready"; then exit 0; fi
             sleep 10
