@@ -111,12 +111,12 @@ function checkUnsafeChanges(sql: string): string[] {
 function validateMigrationName(filename: string): string[] {
   const errors: string[] = [];
 
-  // Expected format: YYYYMMDDHHMMSS_migration_name.sql
-  const pattern = /^\d{14}_[a-z0-9_]+\.sql$/;
+  // Prisma stores each migration as a directory: YYYYMMDDHHMMSS_migration_name/migration.sql
+  const pattern = /^\d{14}_[a-z0-9_]+$/;
 
   if (!pattern.test(filename)) {
     errors.push(
-      `Invalid migration filename: ${filename}. Expected format: YYYYMMDDHHMMSS_migration_name.sql`
+      `Invalid migration directory name: ${filename}. Expected format: YYYYMMDDHHMMSS_migration_name`,
     );
   }
 
@@ -133,7 +133,7 @@ function validateSQLSyntax(schemaPath: string): string[] {
     // Try to format the schema to validate syntax
     execSync(`npx prisma format --schema=${schemaPath}`, { stdio: 'pipe' });
   } catch (err) {
-    errors.push(`Schema syntax validation failed: ${err}`);
+    errors.push(`Schema syntax validation failed: ${String(err)}`);
   }
 
   return errors;
@@ -154,10 +154,10 @@ function checkMigrationConflicts(): string[] {
     if (status.includes('have been applied')) {
       // This is normal, just info
     }
-  } catch (err) {
+  } catch {
     // If command fails, it might mean no database connection
     // We'll just warn about this
-    warnings('Could not check migration status (no database connection?)');
+    warning('Could not check migration status (no database connection?)');
   }
 
   return errors;

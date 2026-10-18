@@ -56,8 +56,16 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # `secrets:staged` scans the index, which is empty on a CI checkout; scan
+      # the committable set instead.
       - name: Security scan
-        run: npm run secrets:staged
+        run: npm run secrets
 
   # =============================================================================
   # Build: imagen en Artifact Registry (solo en push a main)
