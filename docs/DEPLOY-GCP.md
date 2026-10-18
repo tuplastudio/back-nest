@@ -155,7 +155,7 @@ Proyecto GCP: vondi-0q                       (un proyecto por entorno)
 │   ├── Service netpay-api                    (producción; ingress: LB)
 │   ├── Service netpay-api-canary             (candidata; requiere IAM)
 │   └── Job     netpay-migrate                (migraciones)
-├── Cloud Load Balancing vondi-lb            (global, IP estática, Cloud Armor)
+├── Cloud Load Balancing netpay-lb            (global, IP estática, Cloud Armor)
 ├── Cloud Monitoring / Cloud Logging
 └── Service Accounts
     ├── netpay-runtime    servicios Cloud Run
@@ -316,7 +316,7 @@ gcloud storage buckets create "gs://$PROJECT_ID-audit-logs" --location="$REGION"
   --uniform-bucket-level-access --retention-period=400d
 gcloud storage buckets update "gs://$PROJECT_ID-audit-logs" --versioning
 
-gcloud logging sinks create vondi-audit-sink \
+gcloud logging sinks create netpay-audit-sink \
   "storage.googleapis.com/$PROJECT_ID-audit-logs" \
   --log-filter='protoPayload.serviceName="secretmanager.googleapis.com"'
 # Conceder al writerIdentity que imprime el comando anterior roles/storage.objectCreator
@@ -1053,15 +1053,15 @@ Internet ─► Global HTTPS LB (IP estática) ─► Cloud Armor ─► Serverl
 Se crea **antes** del backend. Las reglas se evalúan por prioridad ascendente:
 
 ```bash
-gcloud compute security-policies create vondi-armor --description="WAF netpay-api"
+gcloud compute security-policies create netpay-armor --description="WAF netpay-api"
 
 # 1000: WAF — inyección SQL
-gcloud compute security-policies rules create 1000 --security-policy=vondi-armor \
+gcloud compute security-policies rules create 1000 --security-policy=netpay-armor \
   --expression="evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})" \
   --action=deny-403
 
 # 2000: rate limiting por IP (la aplicación limita por instancia, ver §15.3)
-gcloud compute security-policies rules create 2000 --security-policy=vondi-armor \
+gcloud compute security-policies rules create 2000 --security-policy=netpay-armor \
   --src-ip-ranges="*" \
   --action=throttle \
   --rate-limit-threshold-count=600 --rate-limit-threshold-interval-sec=60 \
@@ -1077,37 +1077,37 @@ Las reglas de WAF preconfiguradas pueden dar falsos positivos con JSON de negoci
 ### 13.2 Balanceador
 
 ```bash
-gcloud compute addresses create vondi-lb-ip --global --ip-version=IPV4
+gcloud compute addresses create netpay-lb-ip --global --ip-version=IPV4
 
-gcloud compute network-endpoint-groups create vondi-neg \
+gcloud compute network-endpoint-groups create netpay-neg \
   --region="$REGION" --network-endpoint-type=serverless \
   --cloud-run-service="$SERVICE"
 
-gcloud compute backend-services create vondi-be \
+gcloud compute backend-services create netpay-be \
   --global --load-balancing-scheme=EXTERNAL_MANAGED
 
-gcloud compute backend-services add-backend vondi-be --global \
-  --network-endpoint-group=vondi-neg --network-endpoint-group-region="$REGION"
+gcloud compute backend-services add-backend netpay-be --global \
+  --network-endpoint-group=netpay-neg --network-endpoint-group-region="$REGION"
 
-gcloud compute backend-services update vondi-be --global \
-  --security-policy=vondi-armor
+gcloud compute backend-services update netpay-be --global \
+  --security-policy=netpay-armor
 
-gcloud compute url-maps create vondi-lb --default-service=vondi-be
+gcloud compute url-maps create netpay-lb --default-service=netpay-be
 
-gcloud compute ssl-certificates create vondi-cert \
+gcloud compute ssl-certificates create netpay-cert \
   --domains="api.vondi.tupla.studio" --global
 
-gcloud compute target-https-proxies create vondi-proxy \
-  --ssl-certificates=vondi-cert --url-map=vondi-lb
+gcloud compute target-https-proxies create netpay-proxy \
+  --ssl-certificates=netpay-cert --url-map=netpay-lb
 
 gcloud compute forwarding-rules create vondi-fr \
   --global --load-balancing-scheme=EXTERNAL_MANAGED --network-tier=PREMIUM \
-  --target-https-proxy=vondi-proxy --address=vondi-lb-ip --ports=443
+  --target-https-proxy=netpay-proxy --address=netpay-lb-ip --ports=443
 ```
 
 ### 13.3 DNS
 
-Crear un registro `A` para `api.vondi.tupla.studio` hacia `vondi-lb-ip` **antes** de esperar el certificado gestionado (queda en `PROVISIONING` hasta que el DNS resuelve; puede tardar hasta decenas de minutos).
+Crear un registro `A` para `api.vondi.tupla.studio` hacia `netpay-lb-ip` **antes** de esperar el certificado gestionado (queda en `PROVISIONING` hasta que el DNS resuelve; puede tardar hasta decenas de minutos).
 
 Los tenants usan subdominios derivados de `API_BASE_DOMAIN` (`acme.api.vondi.tupla.studio`). Un certificado por dominio exacto **no** los cubre: se necesita un registro DNS comodín (`*.api.vondi.tupla.studio`) y un certificado que lo incluya (certificado autogestionado, o certificado gestionado con autorización DNS en Certificate Manager). Definirlo antes del lanzamiento si la resolución de tenant es por subdominio.
 
