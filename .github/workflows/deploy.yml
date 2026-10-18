@@ -40,11 +40,10 @@ on:
 # llamada cancelara o esperara a la primera —que es la llamada padre—, y el
 # pipeline se quedaría esperando a sí mismo.
 
-# `id-token: write` es OBLIGATORIO aquí y no opcional: un workflow llamado no
-# puede pedir más permisos de los que le concede quien lo llama, así que sin esto
-# el reusable se muere antes de empezar. El symptom es `startup_failure` en este
-# workflow y no un error en el job que lo pide, porque el que valida es el
-# orquestador.
+# `id-token: write` es obligatorio aquí y no opcional: un workflow llamado no
+# puede pedir más permisos de los que le concede quien lo llama. Sin esta línea,
+# el reusable se muere antes de empezar con `startup_failure` en ESTE workflow,
+# no con un error en el job que lo pide, porque el que valida es el orquestador.
 permissions:
   contents: read
   id-token: write
@@ -59,3 +58,17 @@ jobs:
     uses: ./.github/workflows/deploy-environment.yml
     with:
       environment: staging
+
+  # Solo `main`, y solo después de que staging esté en verde. Antes, un "cualquier
+  # push" con la rama `staging` en juego significaba empujar al registro de
+  # producción desde un push a staging.
+  deploy_production:
+    name: Desplegar a producción
+    needs: deploy_staging
+    if: ${{ github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: production
+      # `inputs.skip_migrations` es null en un push; sin el `|| false` se
+      # pasaría un null a un input booleano en lugar de usar su default.
+      skip_migrations: ${{ inputs.skip_migrations || false }}
