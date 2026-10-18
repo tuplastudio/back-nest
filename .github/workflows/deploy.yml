@@ -44,6 +44,10 @@ env:
   CANARY: ${{ vars.CLOUD_RUN_CANARY }}
   MIGRATE_JOB: ${{ vars.MIGRATE_JOB }}
   IMAGE_BASE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.AR_REPOSITORY }}/vondi-api
+  # Red de salida: sin esto la IP de egress es efímera y no hay una que
+  # registrar en Neon. Creada por scripts/provision-network.sh (docs §7).
+  NETWORK: vondi-net
+  SUBNET: vondi-subnet
   # Nombre de revisión determinista: permite promover y revertir por nombre en
   # vez de depender de "la última revisión" (§12.3).
   REVISION: r${{ github.sha }}-${{ github.run_attempt }}
@@ -119,6 +123,21 @@ jobs:
 
       - name: Tests unitarios con cobertura
         run: npm run test:cov
+
+      # La cobertura la escribe el paso anterior en coverage/lcov.info.
+      # `fail_ci_if_error: false` a propósito: la cobertura informa, no bloquea un
+      # release cuyos tests ya pasaron, y en un PR desde un fork el secret no
+      # existe, así que un upload fallido no puede romper el pipeline.
+      - name: Subir cobertura a Codecov
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          # Solo el lcov de Jest: sin búsqueda, el CLI no sube ni el HTML de
+          # coverage/lcov-report ni restos de otros formatos.
+          disable_search: true
+          fail_ci_if_error: false
+          verbose: true
 
       # `services: postgres` no ejecuta docker/postgres/init, así que los roles
       # de menor privilegio se crean aquí (§12.2). El plano de control migra
@@ -263,6 +282,9 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
+          # Findings aceptados a propósito, cada uno con su motivo. El gate
+          # sigue bloqueando ante cualquier otro HIGH/CRITICAL.
+          trivyignores: .trivyignore
         env:
           TRIVY_USERNAME: oauth2accesstoken
           TRIVY_PASSWORD: ${{ steps.auth.outputs.access_token }}
@@ -302,6 +324,7 @@ jobs:
             --region="$REGION" \
             --image="$IMAGE" \
             --service-account="vondi-migrator@$PROJECT_ID.iam.gserviceaccount.com" \
+            --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic \
             --tasks=1 --parallelism=1 --max-retries=0 --task-timeout=900s \
             --quiet
           # `--wait` devuelve error si la ejecución falla: detiene el pipeline
@@ -344,10 +367,16 @@ jobs:
                 --format='value(status.traffic[0].revisionName)')
           echo "revision=$REV" >> "$GITHUB_OUTPUT"
 
-      # Solo cambian imagen y nombre de revisión: red, probes, secretos y
-      # variables viven en la configuración del servicio (§11.2). Un flag
+      # Solo cambian imagen y nombre de revisión: el resto de la configuración
+      # (probes, secretos, variables) vive en el servicio (§11.2). Un flag
       # ausente aquí no se resetea, porque `gcloud run deploy` parte de la
-      # configuración actual y aplica encima lo indicado.
+      # configuración actual y aplica encima lo indicado; verificado en el
+      # canario, cuyo egress por NAT sobrevive a un deploy solo-imagen.
+      #
+      # El egress se repite de todas formas en vez de confiar en eso: es lo que
+      # hace que la IP de salida sea la del NAT y no una efímera de Google, y si
+      # alguien recrea el servicio sin la VPC, aquí se ve en el log en vez de
+      # descubrirlo cuando Neon deje de aceptar la conexión.
       - name: Desplegar
         id: deploy
         env:
@@ -355,9 +384,11 @@ jobs:
         run: |
           set -euo pipefail
           gcloud run deploy "$CANARY" --region="$REGION" --image="$IMAGE" \
+            --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic \
             --revision-suffix="$REVISION" --quiet
 
           gcloud run deploy "$SERVICE" --region="$REGION" --image="$IMAGE" \
+            --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic \
             --revision-suffix="$REVISION" --no-traffic --quiet
 
           echo "revision=${SERVICE}-${REVISION}" >> "$GITHUB_OUTPUT"

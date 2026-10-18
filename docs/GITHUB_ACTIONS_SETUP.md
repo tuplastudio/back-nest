@@ -79,6 +79,7 @@ gcloud iam service-accounts keys create github-actions-key.json \
 |-------------|-------------|---------|
 | `GCP_CREDENTIALS` | Service account JSON key (entire file content) | `{"type": "service_account", ...}` |
 | `GCP_PROJECT_ID` | Google Cloud project ID | `my-project-123` |
+| `CODECOV_TOKEN` | Upload token de Codecov (repo `tuplastudio/back-nest`) para subir la cobertura de `npm run test:cov` | `••••••••` |
 
 #### Staging Secrets
 

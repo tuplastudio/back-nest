@@ -475,6 +475,10 @@ export class PaymentOrdersService {
         paymentMethod:
           existing.paymentReference !== null || existing.checkoutMode === 'oxxo' ? 'OXXO' : 'CARD',
         failureReason: null,
+        // Settled: whatever operation was holding the claim is over, and this is
+        // the statement that says so.
+        operationClaim: null,
+        operationClaimedAt: null,
       });
       return {
         orderId,
@@ -495,6 +499,10 @@ export class PaymentOrdersService {
         netpayTransactionId: transactionId,
         lastVerifiedAt: now,
         failureReason: 'The provider reported the charge as unsuccessful.',
+        // Terminal as well, so the claim goes with it. The branch below
+        // (PENDING_VERIFICATION) concludes nothing and deliberately keeps it.
+        operationClaim: null,
+        operationClaimedAt: null,
       });
       return {
         orderId,
@@ -670,7 +678,19 @@ export class PaymentOrdersService {
     const sessionId = input.deviceFingerPrint;
     // Claimed before the provider is called: without it, two concurrent requests
     // both pass the checks above and the buyer is charged twice.
-    await this.claimOrder(existing.id, 'charge', { status: { notIn: [STATUS_PAID, 'REFUNDED'] } });
+    //
+    // `netpayTransactionId: null` closes the window the claim alone leaves open.
+    // The claim is released as soon as the charge returns and the transaction
+    // id is written, but the status is settled only afterwards, so in between
+    // the order is unclaimed and still looks chargeable. Requiring that no
+    // transaction is bound makes that state unchargeable, which is what a
+    // second charge actually needs to be refused. It is also what keeps a 3-D
+    // Secure order from being charged twice while its challenge is still open:
+    // the provider already created a transaction for it.
+    await this.claimOrder(existing.id, 'charge', {
+      status: { notIn: [STATUS_PAID, 'REFUNDED'] },
+      netpayTransactionId: null,
+    });
     try {
       // Netpay only charges a token that belongs to a customer, and answers
       // "Invalid Token" to one that does not, so the card is attached to a
@@ -1018,16 +1038,18 @@ export class PaymentOrdersService {
       throw new ConflictException('The transaction is not waiting for 3-D Secure confirmation.');
     }
     await this.claimOrder(existing.id, 'confirm', { status: { notIn: [STATUS_PAID, 'REFUNDED'] } });
-    try {
-      await this.netpay.confirmCharge(
-        config.environment,
-        config.secretKey,
-        existing.netpayTransactionId,
-        processorTransactionId,
-      );
-    } finally {
-      await this.releaseClaim(existing.id);
-    }
+    await this.netpay.confirmCharge(
+      config.environment,
+      config.secretKey,
+      existing.netpayTransactionId,
+      processorTransactionId,
+    );
+    // The claim is released by the settlement below, not here. Releasing it as
+    // soon as the provider answered would leave, until the order is settled, a
+    // state where it is confirmable and free: a second confirmation would claim
+    // it and repeat the request to the bank, which is the one thing Netpay warns
+    // about. If the settlement fails, the claim expires on its own and the
+    // notification still concludes the order.
     const result = await this.verifyOrderInSchema(
       this.tenantPrisma.requireCurrentSchema(),
       existing.id,

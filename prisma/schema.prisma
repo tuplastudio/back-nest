@@ -20,10 +20,10 @@
 // ---------------------------------------------------------------------------
 
 generator client {
-  provider            = "prisma-client"
-  output              = "../src/generated/control-plane"
-  runtime             = "nodejs"
-  moduleFormat        = "cjs"
+  provider     = "prisma-client"
+  output       = "../src/generated/control-plane"
+  runtime      = "nodejs"
+  moduleFormat = "cjs"
 }
 
 datasource db {
@@ -151,7 +151,7 @@ model PlatformAdmin {
 model AdminRefreshToken {
   id String @id @default(uuid()) @db.Uuid
 
-  adminId String @db.Uuid
+  adminId String        @db.Uuid
   admin   PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
 
   /// Rotation family identifier. Reuse of any member revokes the family.
@@ -225,7 +225,7 @@ model Tenant {
   /// Free-form, non-PII contact label (e.g. `#acme-support`).
   supportContact String? @db.VarChar(120)
 
-  createdById String? @db.Uuid
+  createdById String?        @db.Uuid
   createdBy   PlatformAdmin? @relation("TenantCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
@@ -394,7 +394,7 @@ model Permission {
   /// permissions so a console can render the catalogue as a tree. Granting
   /// authority never depends on it.
   moduleId String? @db.Uuid
-  module Module? @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+  module   Module? @relation(fields: [moduleId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
@@ -458,10 +458,10 @@ model Role {
 
 /// Join table granting a permission to a role.
 model RolePermission {
-  roleId String @db.Uuid
+  roleId       String @db.Uuid
   permissionId String @db.Uuid
 
-  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
@@ -511,10 +511,10 @@ enum PaymentWebhookEnvironment {
 /// Roles held by a platform administrator. A principal may hold many.
 model PlatformAdminRole {
   adminId String @db.Uuid
-  roleId String @db.Uuid
+  roleId  String @db.Uuid
 
   admin PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
-  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  role  Role          @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   /// When the role was granted, for audit and revocation tooling.
   grantedAt DateTime @default(now())

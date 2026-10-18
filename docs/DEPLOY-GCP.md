@@ -780,40 +780,52 @@ Guardar `DOCS_BASIC_AUTH_PASSWORD` como env var en claro es aceptable en el cana
 
 ---
 
-### 11.6 Estado verificado en `vondi-0q` (2026-10-17)
+### 11.6 Estado verificado en `vondi-0q`
 
-Comprobado con `gcloud run services describe`, no deducido del repositorio. La
-tabla separa lo desplegado de lo que este documento diseña:
+Comprobado con `gcloud`, no deducido del repositorio. La tabla separa lo
+desplegado de lo que este documento diseña:
 
-| Aspecto                                    | Diseño              | Real                          |
-| ------------------------------------------ | ------------------- | ----------------------------- |
-| Red                                        | `vondi-net` + NAT   | **no existe** (solo `default`) |
-| Egress                                      | `all-traffic` por NAT | **egress público** de Google  |
-| Probes                                      | startup + liveness  | **ninguna**                   |
-| `--timeout`                                | `60s`               | `300s`                        |
-| `--min-instances`                          | `1`                 | `0`                           |
-| `--no-cpu-throttling`                      | activo              | inactivo                      |
-| `--ingress`                                | cerrado + LB        | `all`                         |
-| `DOCS_ENABLED`                             | `false`             | `true`                        |
-| Canario                                    | `vondi-api-canary`  | existe (creado 2026-10-17)    |
-| SA del Job de migraciones                  | `vondi-migrator`    | **sin asignar**               |
-| IAM del deployer para el canario            | `run.invoker` + `serviceAccountTokenCreator` | ambos concedidos 2026-10-17 |
+| Aspecto                                 | Diseño                    | Real                              |
+| --------------------------------------- | ------------------------- | --------------------------------- |
+| Red                                     | `vondi-net` + NAT         | existe (creada 2026-10-17)       |
+| Egress del servicio y del Job           | `all-traffic` por NAT     | aplicado y verificado            |
+| IP de salida                            | reservada                 | `34.162.112.204`                  |
+| Probes                                  | startup + liveness        | solo en el canario                |
+| `--timeout`                             | `60s`                     | `300s`                            |
+| `--min-instances`                       | `1`                       | `0`                               |
+| `--no-cpu-throttling`                   | activo                    | inactivo                          |
+| `--ingress`                             | cerrado + LB              | `all` (no hay LB desplegado)     |
+| `DOCS_ENABLED`                          | `false`                   | `true`                            |
+| Canario                                 | `vondi-api-canary`        | existe, privado, webhooks off     |
+| SA del Job de migraciones               | `vondi-migrator`          | asignada                          |
+| IAM del deployer (canario + token)      | `run.invoker` + `TokenCreator` | concedido                     |
 
-Consecuencias:
+Qué se verificó al poner el egress, y por qué en ese orden:
 
-- **El egress por NAT no es un extra**: mientras no exista la VPC, Neon tiene que
-  aceptar el rango de IP público de Google, y cualquier cambio de allowlist en Neon
-  rompe el servicio en silencio.
-- `pipeline deploy.yml` funciona sin la VPC (no pasa `--vpc-egress`), o sea que
-  desplegar **no** empeora nada de lo anterior. Añadir la VPC es un paso aparte,
-  con su coste (NAT + dirección reservada), y después hay que pasarle los flags
-  `--network/--subnet/--vpc-egress` al servicio y al Job.
-- El Job de migraciones sin SA propia usa la cuenta de servicio por defecto del
-  proyecto, que tiene más permisos de los que necesita. `deploy.yml` ya le pasa
-  `--service-account` explícito, así que se corrige en el próximo deploy.
-- El canario ya existe (privado, `run.invoker` para el deployer) y el deployer
-  tiene `serviceAccountTokenCreator` sobre sí mismo, que es lo que exige emitir
-  el ID token del smoke. Falta lo de la red.
+1. Se creó la red con [scripts/provision-network.sh](../scripts/provision-network.sh).
+2. **Primero el Job de migraciones, no el servicio.** El Job corre
+   `prisma migrate deploy` contra la base: si Neon no acepta la IP del NAT, el
+   Job falla por conexión y no se toca nada que esté sirviendo tráfico. Ejecutado
+   en verde, la base responde desde esa IP. Resultado: **Neon no tiene una
+   allowlist que lo bloquee** en este proyecto (por eso no hizo falta tocar Neon).
+3. Después el servicio. `/health/ready` responde con ambos planos de base `up`.
+
+Lo que sigue pendiente, y por qué no se hizo aquí:
+
+- `--ingress=internal-and-cloud-loadbalancing` **no** se aplicó: sin el balanceador
+  global desplegado, la URL `run.app` quedaría inalcanzable y sería una caída de
+  producción. Es un proyecto con su propia CDN y reglas de firewall.
+- `min-instances=1` y `--no-cpu-throttling` cuestan dinero de forma continua
+  (CPU siempre asignada con `min-instances>0`), así que son decisión de negocio.
+- Probes en producción: el canario ya las tiene; copiarlas es inocuo y conviene,
+  pero `/health/live` no comprueba la base, así que un probe de arranque no
+  protege de un fallo de Neon. Para eso está `/health/ready` en monitorización.
+
+Nota sobre `gcloud`: el egress directo **no** aparece en `spec.template.spec.vpcAccess`
+sino en anotaciones (`run.googleapis.com/network-interfaces` y
+`run.googleapis.com/vpc-access-egress`). Un `describe --format='value(...vpcAccess)'`
+sale vacío y hace pensar que el flag no se aplicó. Con jobs, además, hay que
+mirar `spec.template.metadata.annotations` (un export en YAML lo deja claro).
 
 ---
 
@@ -849,7 +861,7 @@ verify ─► build ─► migrate ─► deploy (canario + revisión sin tráfi
 
 | Job          | Qué hace                                                                                                   | Falla si…                        |
 | ------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `verify`     | gitleaks (set commiteable + histórico), format, lint, typecheck, migrations:validate, `test:cov`, roles de la BD, `prisma:seed`, `test:e2e` | algo del gate falla              |
+| `verify`     | gitleaks (set commiteable + histórico), format, lint, typecheck, migrations:validate, `test:cov` + subida a Codecov, roles de la BD, `prisma:seed`, `test:e2e` | algo del gate falla              |
 | `build`      | runtime y migrate por digest, con SBOM y provenance, y Trivy `HIGH,CRITICAL` con `exit-code: 1`            | la imagen tiene una vulnerabilidad |
 | `migrate`    | `gcloud run jobs execute --wait` con `--tasks=1 --parallelism=1 --max-retries=0`                            | la migración falla               |
 | `deploy`     | canario y revisión de producción con `--no-traffic`, nombre `r<sha>-<intento>`                              | el servicio no acepta la imagen  |
@@ -1313,9 +1325,10 @@ El canario comparte la BD de producción. El smoke es de solo lectura y los webh
 
 ### Red
 
-- [ ] `vondi-egress` es una dirección **reservada**; NAT en `MANUAL_ONLY`
-- [ ] Servicio, canario y Job con `--vpc-egress=all-traffic`
-- [ ] `--enable-private-ip-google-access` activo
+- [x] `vondi-egress` es una dirección **reservada** (`34.162.112.204`); NAT en `MANUAL_ONLY`
+- [x] Servicio, canario y Job con `--vpc-egress=all-traffic`, verificado contra la base ([§11.6](#116-estado-verificado-en-vondi-0q))
+- [x] `--enable-private-ip-google-access` activo
+- [ ] `roles/compute.networkUser` sobre `vondi-subnet` solo para `vondi-runtime` y `vondi-migrator`
 - [ ] Permisos de escritura sobre `vondi-egress`/`vondi-nat` restringidos; alerta configurada
 - [ ] DNS (`api…` y comodín de tenants si aplica) y certificado en `ACTIVE`
 
