@@ -38,7 +38,9 @@
 
 # docs/SECURITY.md threat model and the controls that back it
 
-docs/DEPLOYMENT.md deployment guide for Google Cloud Run + Neon.tech
+# docs/DEPLOY-GCP.md topología real, IAM, canario y pipeline de despliegue
+
+# docs/DEPLOYMENT.md guía histórica de Cloud Build (sustituida por DEPLOY-GCP.md)
 
 docs/MIGRATIONS.md database migration strategy and best practices
 
