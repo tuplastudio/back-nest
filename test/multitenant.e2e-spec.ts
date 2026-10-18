@@ -59,6 +59,8 @@ let server: ChildProcess;
 let adminPool: Pool;
 let tenantPool: Pool;
 let tenantDataPool: Pool;
+/** Last output chunks from the spawned app, for a legible bootstrap failure. */
+const serverOutput: string[] = [];
 let crypto: PiiCryptoService;
 let mask: PiiMaskService;
 let naming: TenantSchemaNamingService;
@@ -315,17 +317,31 @@ describe('Multitenant API (e2e)', () => {
           process.env['JWT_REFRESH_SECRET'] ?? 'e2e-refresh-secret-at-least-32-characters-long',
         PII_HMAC_KEY: process.env['PII_HMAC_KEY'] ?? 'e2e-blind-index-key',
         PII_ENCRYPTION_KEY: process.env['PII_ENCRYPTION_KEY'] ?? randomBytes(32).toString('base64'),
+        // The only variable the schema requires without a default, and this
+        // suite never talks to Netpay. It still has to be here: without it the
+        // app refuses to boot, and a machine with a local `.env` hides that
+        // from a developer while CI, which has none, fails.
+        NETPAY_ENCRYPTION_KEY: process.env['NETPAY_ENCRYPTION_KEY'] ?? randomBytes(32).toString('base64'),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    server.stdout?.resume();
-    server.stderr?.resume();
+    // The app's own output is kept because a bootstrap failure is otherwise
+    // invisible: the process dies, the suite only sees an exit code, and
+    // whatever env.validation.ts or the database complained about is lost.
+    const tail = (chunk: Buffer): void => {
+      serverOutput.push(chunk.toString());
+      if (serverOutput.length > 40) {
+        serverOutput.shift();
+      }
+    };
+    server.stdout?.on('data', tail);
+    server.stderr?.on('data', tail);
 
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       if (server.exitCode !== null) {
-        throw new Error(`Server exited early with code ${server.exitCode}.`);
+        throw new Error(`Server exited early with code ${server.exitCode}.\n${serverOutput.join('').trim()}`);
       }
       try {
         // Health probes are mounted outside the versioned prefix.

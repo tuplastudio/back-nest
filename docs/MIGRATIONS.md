@@ -151,71 +151,63 @@ git diff --cached --name-only | grep -q "prisma/migrations" && npm run migration
 
 ### GitHub Actions Workflows
 
-#### 1. CI/CD Pipeline (.github/workflows/ci-cd.yml)
+#### 1. Pipeline canónico (.github/workflows/deploy.yml)
 
-Runs on every push to `main` or `develop`:
+Existe **un solo** workflow que aplica migraciones y otro que despliega: el mismo
+`deploy.yml`. No hay un workflow de migraciones aparte, y no debe añadirse: dos
+ runners ejecutando `prisma migrate deploy` contra la misma base es una carrera, y
+ una ruta que migra por el endpoint pooled de Neon (PgBouncer) falla o, peor,
+aplica la mitad de la migración.
 
-```yaml
-- Test & Quality Checks
-  ├─ Type check
-  ├─ Lint
-  ├─ Unit tests
-  ├─ Migration validation
-  └─ Security scan
+```
+verify ─► build ─► migrate ─► deploy (canario + revisión sin tráfico) ─► smoke ─► promote
+                                                                          │         │
+                                                       falla: nada llega  ┘         └ falla: rollback
+```
 
-- Build Docker Image
-  └─ Push to Artifact Registry
+```
+- verify
+  ├─ Secrets: set commiteable + histórico completo (gitleaks)
+  ├─ format:check, lint, typecheck, migrations:validate
+  ├─ test:cov
+  ├─ Roles de la base (mtb_control, mtb_app) sobre postgres:17-alpine
+  ├─ prisma:seed (catálogo RBAC: sin él toda ruta protegida responde 403)
+  └─ test:e2e  (non-blocking hasta que se arreglen los dos tests rojos)
 
-- Deploy
-  ├─ main → Production
-  └─ develop → Staging
+- build
+  ├─ runtime + migrate por digest, con SBOM y provenance
+  └─ trivy HIGH/CRITICAL con exit-code 1
+
+- migrate
+  └─ Cloud Run Job: --tasks=1 --parallelism=1 --max-retries=0 (falla visible)
+
+- deploy
+  ├─ canario (privado, webhooks desactivados)
+  └─ revisión de producción con --no-traffic
+
+- smoke
+  ├─ /health/live y /health/ready contra el canario
+  └─ ruta protegida responde 401/403 (auth montado, BD alcanzable)
+
+- promote
+  ├─ update-traffic 100% a la revisión nueva
+  └─ si la revisión no queda Ready=True, se devuelve el tráfico a la anterior
 ```
 
 **Key Features**:
-- Validates migrations before deployment
-- Fails deployment if validation fails
-- Deploys to staging automatically on `develop`
-- Deploys to production automatically on `main`
+- Las migraciones corren **antes** del deploy, en un Job con una sola ejecución
+- Un deploy nunca entrega tráfico sin pasar por el canario y el smoke
+- El rollback de código no revierte migraciones: las migraciones deben ser
+  compatibles hacia atrás (docs/DEPLOY-GCP.md §12.4)
+- `concurrency` sin cancelación: cortar entre migrar y promover deja esquema y
+  código descuadrados
+- El deploy usa el **digest**, no el tag, porque un tag es mutable
 
-#### 2. Auto Migration Workflow (.github/workflows/migrate-auto.yml)
-
-Triggers when migration files change:
-
-```yaml
-- Detect Changes
-  └─ Checks if prisma/migrations was modified
-
-- Validate
-  └─ Run migration validation script
-
-- Migrate Staging
-  └─ Auto-apply to staging
-
-- Migrate Production
-  └─ Manual approval required
-```
-
-**Key Features**:
-- Only runs when migrations are added/modified
-- Staging migration is automatic
-- Production migration requires GitHub environment approval
-- Notifies on success/failure
-
-#### 3. Manual Migration Workflow (.github/workflows/migrate-manual.yml)
-
-Manual trigger for specific operations:
-
-```yaml
-Actions:
-- deploy: Apply pending migrations
-- resolve: Mark migration as applied/rolled-back
-- status: Show migration status
-```
-
-**Use Cases**:
-- Fix failed migrations
-- Re-run migration after error
-- Check migration status without applying
+Operaciones manuales (re-resolver una migración fallida, ver el estado) ya **no**
+tienen workflow propio: se hacen con `prisma migrate status` /
+`prisma migrate resolve` sobre la conexión sin pooler, o relanzando el pipeline
+con `workflow_dispatch` e `skip_migrations` si lo que hace falta es desplegar sin
+migrar.
 
 ### Required GitHub Secrets
 

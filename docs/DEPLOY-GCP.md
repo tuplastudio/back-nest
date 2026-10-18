@@ -354,6 +354,12 @@ export EGRESS_IP="$(gcloud compute addresses describe vondi-egress \
 echo "IP de salida: $EGRESS_IP"
 ```
 
+> **Ejecutado por [scripts/provision-network.sh](../scripts/provision-network.sh)**, que
+> es idempotente y además concede `roles/compute.networkUser` a `vondi-runtime` y
+> `vondi-migrator` sobre la subred (sin eso, un servicio en la VPC no puede
+> tomar la subred). No lo ejecutes sin leer su cabecera: la red solo sirve cuando
+> la IP reservada está autorizada después en Neon, y ese paso es fuera de GCP.
+
 Notas:
 
 - `--enable-private-ip-google-access` es necesario: con `all-traffic` el acceso a APIs de Google también pasa por la VPC.
@@ -531,6 +537,15 @@ Esperado: unos pocos ms por consulta con el compute activo. Si supera ~20 ms, re
 | `netpay-encryption`        | `NETPAY_ENCRYPTION_KEY`               | `openssl rand -base64 32`             | **No**¹ |
 | `pii-encryption`           | `PII_ENCRYPTION_KEY`                  | `openssl rand -base64 32`             | **No**  |
 | `pii-hmac`                 | `PII_HMAC_KEY`                        | `openssl rand -base64 48`             | **No**  |
+> **Los nombres de este documento son una propuesta, no los que existen.** En el
+> proyecto `vondi-0q` los secretos se llaman `control-plane-db-url`,
+> `tenant-plane-db-url`, `control-plane-db-url-unpooled`,
+> `tenant-plane-db-url-unpooled`, `jwt-access-secret`, `jwt-refresh-secret`,
+> `pii-hmac-key`, `pii-encryption-key`, `netpay-encryption-key` y
+> `docs-basic-auth-password`. Los comandos de §11.1 y §11.2 ya usan esos nombres
+> reales; el resto del documento conserva los antiguos por brevedad. **Usa los
+> reales**: un `--set-secrets` con un nombre inexistente hace fallar el deploy.
+
 | `db-control-url`           | `CONTROL_PLANE_DATABASE_URL` (pooled) | §9.2                                  | Sí      |
 | `db-app-url`               | `TENANT_PLANE_DATABASE_URL` (pooled)  | §9.2                                  | Sí      |
 | `db-control-url-unpooled`  | `CONTROL_PLANE_DATABASE_URL_UNPOOLED` | §9.2 (solo Job de migraciones)        | Sí      |
@@ -665,7 +680,7 @@ gcloud run jobs deploy "$MIGRATE_JOB" \
   --network=vondi-net --subnet=vondi-subnet --vpc-egress=all-traffic \
   --cpu=1 --memory=512Mi --task-timeout=900 \
   --max-retries=0 --tasks=1 --parallelism=1 \
-  --set-secrets="CONTROL_PLANE_DATABASE_URL_UNPOOLED=db-control-url-unpooled:latest"
+  --set-secrets="CONTROL_PLANE_DATABASE_URL_UNPOOLED=control-plane-db-url-unpooled:latest"
 
 gcloud run jobs execute "$MIGRATE_JOB" --region="$REGION" --wait
 ```
@@ -689,7 +704,7 @@ COMMON=(
   --startup-probe="httpGet.path=/health/live,initialDelaySeconds=0,periodSeconds=2,timeoutSeconds=2,failureThreshold=30"
   --liveness-probe="httpGet.path=/health/live,periodSeconds=30,timeoutSeconds=3,failureThreshold=3"
   --set-env-vars="^@^NODE_ENV=production@API_PREFIX=api/v1@API_BASE_DOMAIN=api.vondi.tupla.studio@CORS_ORIGINS=https://app.vondi.tupla.studio@TRUST_PROXY_HOPS=2@DOCS_ENABLED=false@PII_LOG_REDACTION=true@LOG_LEVEL=log@DATABASE_POOL_MAX=10@DATABASE_CONNECTION_TIMEOUT_MS=15000@DATABASE_STATEMENT_TIMEOUT_MS=15000@PAYMENT_REDIRECT_URL=https://api.vondi.tupla.studio/api/v1/payments/return@PAYMENT_CANCEL_URL=https://app.vondi.tupla.studio/payments/cancelled"
-  --set-secrets="CONTROL_PLANE_DATABASE_URL=db-control-url:latest,TENANT_PLANE_DATABASE_URL=db-app-url:latest,JWT_ACCESS_SECRET=jwt-access:latest,JWT_REFRESH_SECRET=jwt-refresh:latest,PII_HMAC_KEY=pii-hmac:1,PII_ENCRYPTION_KEY=pii-encryption:1,NETPAY_ENCRYPTION_KEY=netpay-encryption:1"
+  --set-secrets="CONTROL_PLANE_DATABASE_URL=control-plane-db-url:latest,TENANT_PLANE_DATABASE_URL=tenant-plane-db-url:latest,JWT_ACCESS_SECRET=jwt-access-secret:latest,JWT_REFRESH_SECRET=jwt-refresh-secret:latest,PII_HMAC_KEY=pii-hmac-key:latest,PII_ENCRYPTION_KEY=pii-encryption-key:latest,NETPAY_ENCRYPTION_KEY=netpay-encryption-key:latest"
 )
 
 # Producción: detrás del balanceador, sin tráfico público directo
@@ -765,6 +780,43 @@ Guardar `DOCS_BASIC_AUTH_PASSWORD` como env var en claro es aceptable en el cana
 
 ---
 
+### 11.6 Estado verificado en `vondi-0q` (2026-10-17)
+
+Comprobado con `gcloud run services describe`, no deducido del repositorio. La
+tabla separa lo desplegado de lo que este documento diseña:
+
+| Aspecto                                    | Diseño              | Real                          |
+| ------------------------------------------ | ------------------- | ----------------------------- |
+| Red                                        | `vondi-net` + NAT   | **no existe** (solo `default`) |
+| Egress                                      | `all-traffic` por NAT | **egress público** de Google  |
+| Probes                                      | startup + liveness  | **ninguna**                   |
+| `--timeout`                                | `60s`               | `300s`                        |
+| `--min-instances`                          | `1`                 | `0`                           |
+| `--no-cpu-throttling`                      | activo              | inactivo                      |
+| `--ingress`                                | cerrado + LB        | `all`                         |
+| `DOCS_ENABLED`                             | `false`             | `true`                        |
+| Canario                                    | `vondi-api-canary`  | existe (creado 2026-10-17)    |
+| SA del Job de migraciones                  | `vondi-migrator`    | **sin asignar**               |
+| IAM del deployer para el canario            | `run.invoker` + `serviceAccountTokenCreator` | ambos concedidos 2026-10-17 |
+
+Consecuencias:
+
+- **El egress por NAT no es un extra**: mientras no exista la VPC, Neon tiene que
+  aceptar el rango de IP público de Google, y cualquier cambio de allowlist en Neon
+  rompe el servicio en silencio.
+- `pipeline deploy.yml` funciona sin la VPC (no pasa `--vpc-egress`), o sea que
+  desplegar **no** empeora nada de lo anterior. Añadir la VPC es un paso aparte,
+  con su coste (NAT + dirección reservada), y después hay que pasarle los flags
+  `--network/--subnet/--vpc-egress` al servicio y al Job.
+- El Job de migraciones sin SA propia usa la cuenta de servicio por defecto del
+  proyecto, que tiene más permisos de los que necesita. `deploy.yml` ya le pasa
+  `--service-account` explícito, así que se corrige en el próximo deploy.
+- El canario ya existe (privado, `run.invoker` para el deployer) y el deployer
+  tiene `serviceAccountTokenCreator` sobre sí mismo, que es lo que exige emitir
+  el ID token del smoke. Falta lo de la red.
+
+---
+
 ## 12. Fase 7 — GitHub Actions
 
 ### 12.1 Flujo
@@ -785,308 +837,67 @@ El Postgres de CI necesita los roles `mtb_control` y `mtb_app`. Un `services: po
 
 ### 12.3 `.github/workflows/deploy.yml`
 
-```yaml
-name: deploy-production
+Implementado en [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml),
+que es la fuente de verdad. Este resumen explica las decisiones; el YAML no se
+duplica aquí para que no derive.
 
-on:
-  push:
-    branches: [main]
-    paths-ignore: ['docs/**', '**/*.md']
-  workflow_dispatch:
-    inputs:
-      skip_migrations:
-        description: 'Desplegar sin migraciones (solo hotfix)'
-        type: boolean
-        default: false
-
-# Nunca cancelar un despliegue en curso: cancelar entre migrar y promover
-# deja esquema y código descuadrados.
-concurrency:
-  group: deploy-production
-  cancel-in-progress: false
-
-permissions:
-  contents: read
-
-env:
-  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-  REGION: ${{ vars.GCP_REGION }}
-  SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
-  CANARY: ${{ vars.CLOUD_RUN_CANARY }}
-  MIGRATE_JOB: ${{ vars.MIGRATE_JOB }}
-  IMAGE_BASE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.AR_REPOSITORY }}/vondi-api
-  REVISION: r${{ github.sha }}-${{ github.run_attempt }}
-
-jobs:
-  verify:
-    name: Verificación y tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: production
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: mtb
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres -d mtb"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - uses: actions/setup-node@v4
-        with: { node-version: '22.13.0', cache: npm }
-      - run: npm ci --no-audit --no-fund
-      # Crear mtb_control / mtb_app (ver §12.2) antes de los tests.
-      - run: npm run secrets:staged
-      - run: npm run secrets:history
-      - run: npm run format:check
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run test:cov
-
-  build:
-    name: Build, push y escaneo
-    needs: verify
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    outputs:
-      digest: ${{ steps.push-app.outputs.digest }}
-      migrate_digest: ${{ steps.push-migrate.outputs.digest }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER_SA }}
-          token_format: access_token
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ vars.GCP_REGION }}-docker.pkg.dev
-          username: oauth2accesstoken
-          password: ${{ steps.auth.outputs.access_token }}
-
-      - uses: docker/setup-buildx-action@v3
-
-      - id: push-app
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: runtime
-          push: true
-          tags: ${{ env.IMAGE_BASE }}:${{ github.sha }}
-          provenance: mode=max
-          sbom: true
-          cache-from: type=gha,scope=app
-          cache-to: type=gha,mode=max,scope=app
-
-      - id: push-migrate
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: migrate
-          push: true
-          tags: ${{ env.IMAGE_BASE }}-migrate:${{ github.sha }}
-          cache-from: type=gha,scope=migrate
-          cache-to: type=gha,mode=max,scope=migrate
-
-      - name: Escaneo de vulnerabilidades
-        uses: aquasecurity/trivy-action@0.28.0 # fijar versión; actualizar de forma controlada
-        with:
-          image-ref: ${{ env.IMAGE_BASE }}@${{ steps.push-app.outputs.digest }}
-          severity: HIGH,CRITICAL
-          exit-code: '1'
-          ignore-unfixed: true
-        env:
-          TRIVY_USERNAME: oauth2accesstoken
-          TRIVY_PASSWORD: ${{ steps.auth.outputs.access_token }}
-
-  migrate:
-    name: Migraciones
-    needs: build
-    if: ${{ !inputs.skip_migrations }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER_SA }}
-      - uses: google-github-actions/setup-gcloud@v2
-
-      # Antes de migrar, crear una rama de respaldo en Neon (RB-09) si el release
-      # contiene migraciones destructivas.
-
-      - name: Actualizar y ejecutar el Job (conexión directa a Neon)
-        run: |
-          gcloud run jobs deploy "$MIGRATE_JOB" --region="$REGION" \
-            --image="$IMAGE_BASE-migrate@${{ needs.build.outputs.migrate_digest }}" \
-            --quiet
-          gcloud run jobs execute "$MIGRATE_JOB" --region="$REGION" --wait
-          # --wait devuelve error si la ejecución falla, deteniendo el pipeline.
-
-  deploy:
-    name: Desplegar canario y revisión sin tráfico
-    needs: [build, migrate]
-    if: >-
-      always() && needs.build.result == 'success' &&
-      (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    outputs:
-      previous: ${{ steps.prev.outputs.revision }}
-    steps:
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER_SA }}
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - id: prev
-        name: Registrar la revisión que sirve tráfico hoy
-        run: |
-          REV=$(gcloud run services describe "$SERVICE" --region="$REGION" \
-                --format='value(status.traffic[0].revisionName)')
-          echo "revision=$REV" >> "$GITHUB_OUTPUT"
-
-      - name: Desplegar
-        env:
-          IMAGE: ${{ env.IMAGE_BASE }}@${{ needs.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          # Solo cambia la imagen y la etiqueta: el resto de la configuración
-          # (red, probes, secretos, variables) vive en el servicio (§11.2).
-          gcloud run deploy "$CANARY" --region="$REGION" --image="$IMAGE" \
-            --revision-suffix="$REVISION" --quiet
-
-          gcloud run deploy "$SERVICE" --region="$REGION" --image="$IMAGE" \
-            --revision-suffix="$REVISION" --no-traffic --quiet
-
-  smoke:
-    name: Pruebas de humo sobre el canario
-    needs: deploy
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER_SA }}
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Resolver URL y token de identidad del canario
-        id: target
-        run: |
-          URL=$(gcloud run services describe "$CANARY" --region="$REGION" --format='value(status.url)')
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-          # Requiere roles/run.invoker del deployer sobre el canario (ver nota).
-          TOKEN=$(gcloud auth print-identity-token \
-                    --impersonate-service-account="${{ vars.GCP_DEPLOYER_SA }}" \
-                    --audiences="$URL" --include-email)
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-
-      - name: Liveness y readiness
-        run: |
-          set -euo pipefail
-          URL='${{ steps.target.outputs.url }}'
-          AUTH="Authorization: Bearer ${{ steps.target.outputs.token }}"
-          CODE=000
-          for i in $(seq 1 45); do
-            CODE=$(curl -s -o /tmp/live.json -w '%{http_code}' -H "$AUTH" "$URL/health/live" || true)
-            [ "$CODE" = "200" ] && break
-            sleep 2
-          done
-          [ "$CODE" = "200" ] || { echo "FAIL live: $CODE"; exit 1; }
-
-          READY=$(curl -s -o /tmp/ready.json -w '%{http_code}' -H "$AUTH" "$URL/health/ready")
-          [ "$READY" = "200" ] || { echo "FAIL ready: $READY"; cat /tmp/ready.json; exit 1; }
-
-      - name: Una ruta protegida responde 401/403 (auth montada, BD usable)
-        run: |
-          set -euo pipefail
-          URL='${{ steps.target.outputs.url }}'
-          # Sustituir /api/v1/<ruta-protegida> por una ruta real que exija JWT.
-          # En un servicio privado hay DOS capas de autenticación y ambas leen
-          # Authorization: la IAM de Cloud Run y el guard de la app
-          # (src/auth/auth.guard.ts lee solo `authorization`). Cloud Run valida
-          # X-Serverless-Authorization CON PRECEDENCIA sobre Authorization, así
-          # que el token de identidad va SIEMPRE ahí y el header Authorization
-          # queda libre para el JWT de la app:
-          #
-          #   Authorization:               <JWT de la app>       (o vacío)
-          #   X-Serverless-Authorization:  <ID token de Google>   (pasa IAM)
-          #
-          # Enviar solo el ID token en X-Serverless-Authorization no alcanza para
-          # probar una ruta autenticada: la app no ve ningún JWT y responde 401.
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
-                 -H "X-Serverless-Authorization: Bearer ${{ steps.target.outputs.token }}" \
-                 "$URL/api/v1/<ruta-protegida>")
-          case "$CODE" in 401|403) echo "OK ($CODE)";; *) echo "FAIL: $CODE"; exit 1;; esac
-
-  promote:
-    name: Promoción de tráfico
-    needs: [deploy, smoke]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER_SA }}
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Promover
-        run: |
-          gcloud run services update-traffic "$SERVICE" --region="$REGION" \
-            --to-revisions="${SERVICE}-${REVISION}=100"
-
-      - name: Verificar la promoción (rollback si falla)
-        run: |
-          set -euo pipefail
-          URL=$(gcloud run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')
-          # El servicio no es público: probar vía la revisión con tag o desde el LB.
-          # Alternativa: comprobar que la revisión nueva reporta Ready=True.
-          READY=$(gcloud run revisions describe "${SERVICE}-${REVISION}" --region="$REGION" \
-                  --format='value(status.conditions[0].status)')
-          [ "$READY" = "True" ] || {
-            echo "Revisión no sana; revirtiendo a ${{ needs.deploy.outputs.previous }}"
-            gcloud run services update-traffic "$SERVICE" --region="$REGION" \
-              --to-revisions="${{ needs.deploy.outputs.previous }}=100"
-            exit 1
-          }
 ```
+verify ─► build ─► migrate ─► deploy (canario + revisión sin tráfico) ─► smoke ─► promote
+                                                                          │         │
+                                                       falla: nada llega  ┘         └ falla: rollback
+```
+
+| Job          | Qué hace                                                                                                   | Falla si…                        |
+| ------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `verify`     | gitleaks (set commiteable + histórico), format, lint, typecheck, migrations:validate, `test:cov`, roles de la BD, `prisma:seed`, `test:e2e` | algo del gate falla              |
+| `build`      | runtime y migrate por digest, con SBOM y provenance, y Trivy `HIGH,CRITICAL` con `exit-code: 1`            | la imagen tiene una vulnerabilidad |
+| `migrate`    | `gcloud run jobs execute --wait` con `--tasks=1 --parallelism=1 --max-retries=0`                            | la migración falla               |
+| `deploy`     | canario y revisión de producción con `--no-traffic`, nombre `r<sha>-<intento>`                              | el servicio no acepta la imagen  |
+| `smoke`      | `/health/live`, `/health/ready` y una ruta protegida (401/403) contra el canario                            | la revisión no sirve tráfico     |
+| `promote`    | `update-traffic` al 100% y verificación; si la revisión no queda `Ready=True`, vuelve el tráfico a la anterior | —                               |
+
+Cuatro puntos donde la implementación difiere del diseño original de este
+documento, todos por una razón concreta:
+
+1. **El token de identidad del smoke lo emite la action de auth, no
+   `gcloud auth print-identity-token`.** Ese comando rechaza credenciales WIF
+   (`external_account`); el smoke se quedaba sin token y el paso fallaba siempre.
+   Se usa `token_format: id_token` con `id_token_audience` = URL del canario.
+2. **`npm run secrets:staged` no sirve en CI.** Escanea el índice de git, que en
+   un checkout de Actions está vacío: escanearía cero ficheros. El gate usa
+   `npm run secrets` (set commiteable) y `npm run secrets:history`.
+3. **La ruta protegida del smoke es real**, no un marcador: `GET /api/v1/api-keys`
+   exige JWT (`API_PREFIX=api/v1`, ver `.env.example`).
+4. **Las migraciones se aplican antes del seed.** `prisma:seed` escribe en el
+   esquema, así que una base recién creada fallaría. Se usa
+   `npm run db:migrate:deploy`, que es el mismo entrypoint que ejecuta el Job de
+   producción (`scripts/migrate.ts`), y no un `prisma migrate deploy` suelto: el
+   CI ejercita la misma ruta que producción, incluido el guard que rechaza el
+   pooler.
+
+Detalles de `verify` que no son obvios:
+
+- El plano de control migra como el superusuario del Postgres de servicio y el
+  plano de datos conecta como `mtb_app`. Es lo mismo que `.env.test.example`: si
+  el plano de datos conectara como dueño de tabla, las políticas RLS no serían
+  exigibles porque un dueño las ignora.
+- `prisma.config.ts` lee `CONTROL_PLANE_DATABASE_URL_UNPOOLED` y **no** acepta
+  fallback a la URL normal, así que el paso de e2e tiene que exportar esa
+  variable o `prisma migrate deploy` falla.
+- `prisma/seed.ts` es quien crea el catálogo RBAC. Sin él, `seedAdmin` no
+  encuentra el rol `platform-owner` y toda ruta protegida responde 403.
+- Las claves (PII, JWT, docs, seed) se generan efímeras por ejecución y se
+  comparten entre seed y e2e: `env.validation.ts` rechaza los placeholders de
+  `.env.example`, y si el seed y el servidor que arranca `beforeAll` usaran claves
+  distintas, las filas PII que el seed cifra no se podrían descifrar.
+- `01-roles.sql` usa `\getenv`, que necesita **psql 11 o superior**. En los
+  runners de GitHub hay psql 16; en un macOS con el psql de `/usr/bin` (13 o
+  anterior, o 9.x) el script aborta.
 
 Notas del workflow:
 
-- `environment: production` aplica reglas de protección (aprobadores) si se configuran.
+- `environment: production` aplica reglas de protección (aprobadores) si se
+  configuran.
 - El deployer necesita `roles/run.invoker` sobre el canario para el smoke:
   ```bash
   gcloud run services add-iam-policy-binding "$CANARY" --region="$REGION" \
@@ -1094,9 +905,15 @@ Notas del workflow:
   gcloud iam service-accounts add-iam-policy-binding "$DEPLOYER_SA" \
     --member="serviceAccount:$DEPLOYER_SA" --role="roles/iam.serviceAccountTokenCreator"
   ```
-- Primero desplegar con `--no-traffic` y promover **por nombre de revisión**: el nombre determinista (`<servicio>-r<sha>-<intento>`) evita depender de "la última revisión".
+- Primero desplegar con `--no-traffic` y promover **por nombre de revisión**: el
+  nombre determinista (`<servicio>-r<sha>-<intento>`) evita depender de "la última
+  revisión".
 - `skip_migrations` es solo para hotfix: deja el esquema por detrás del código.
-- Rama `main` protegida: PR obligatorio, una revisión, checks obligatorios, sin force-push.
+- Rama `main` protegida: PR obligatorio, una revisión, checks obligatorios, sin
+  force-push.
+- Variables de GitHub (Environment `production`): `GCP_PROJECT_ID`, `GCP_REGION`,
+  `CLOUD_RUN_SERVICE`, `CLOUD_RUN_CANARY`, `MIGRATE_JOB`, `AR_REPOSITORY`,
+  `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`.
 
 ### 12.4 Compatibilidad de migraciones
 

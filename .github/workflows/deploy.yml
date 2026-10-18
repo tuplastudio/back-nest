@@ -1,0 +1,489 @@
+# Deploy de producción. Ruta canónica y única: ningún otro workflow despliega.
+# Diseño y motivos: docs/DEPLOY-GCP.md §12 (ADR-002 para el egress).
+#
+# verify ─► build ─► migrate ─► deploy (canario + revisión sin tráfico) ─► smoke ─► promote
+#                                                                           │         │
+#                                                        falla: nada llega  ┘         └ falla: rollback
+#
+# Los pasos que fallan nunca dejan tráfico en la revisión nueva: la promoción
+# es un `update-traffic` explícito y su verificación revierte a la revisión
+# anterior. El rollback de código no revierte migraciones: por eso las
+# migraciones se ejecutan antes del deploy y deben ser compatibles hacia atrás
+# (§12.4).
+
+name: deploy-production
+
+on:
+  push:
+    branches: [main]
+    # La documentación no cambia el runtime; no debe gastar un release.
+    paths-ignore: ['docs/**', '**/*.md']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_migrations:
+        description: 'Desplegar sin migraciones (solo hotfix; deja el esquema atrás)'
+        type: boolean
+        default: false
+
+# Nunca cancelar un despliegue en curso: cortar entre migrar y promover deja
+# esquema y código descuadrados.
+concurrency:
+  group: deploy-production-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.13.0'
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: ${{ vars.GCP_REGION }}
+  SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+  CANARY: ${{ vars.CLOUD_RUN_CANARY }}
+  MIGRATE_JOB: ${{ vars.MIGRATE_JOB }}
+  IMAGE_BASE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.AR_REPOSITORY }}/vondi-api
+  # Nombre de revisión determinista: permite promover y revertir por nombre en
+  # vez de depender de "la última revisión" (§12.3).
+  REVISION: r${{ github.sha }}-${{ github.run_attempt }}
+
+jobs:
+  # =============================================================================
+  # verify: tipos, lint, formato, secretos, tests y e2e contra Postgres
+  # =============================================================================
+  verify:
+    name: Verificación, tests y e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mtb_test
+          # Misma configuración que en docker-compose.yml: la colación
+          # determinista evita que el orden de índices derive entre máquinas.
+          POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mtb_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # El escaneo de historia (secrets:history) necesita el historial.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # `secrets:staged` escanea el índice, que en un checkout de CI está
+      # vacío: escanea el set commiteable (`secrets`) y el histórico completo
+      # (`secrets:history`).
+      - name: Secrets (set commiteable)
+        run: npm run secrets
+
+      - name: Secrets (histórico)
+        run: npm run secrets:history
+
+      - name: Formato
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Validar migraciones
+        run: npm run migrations:validate
+
+      - name: Tests unitarios con cobertura
+        run: npm run test:cov
+
+      # `services: postgres` no ejecuta docker/postgres/init, así que los roles
+      # de menor privilegio se crean aquí (§12.2). El plano de control migra
+      # como superusuario de este Postgres desechable y el plano de datos
+      # conecta como mtb_app, para que las políticas RLS sean exigibles
+      # (un dueño de tabla las ignora; ver docker/postgres/init/01-roles.sql).
+      - name: Crear roles de la base (mtb_control, mtb_app)
+        env:
+          PGPASSWORD: postgres
+          MTB_CONTROL_PASSWORD: ${{ github.run_id }}-control
+          MTB_APP_PASSWORD: ${{ github.run_id }}-app
+        run: |
+          command -v psql >/dev/null || sudo apt-get update && sudo apt-get install -y postgresql-client
+          psql -h localhost -U postgres -d mtb_test -v ON_ERROR_STOP=1 \
+            -f docker/postgres/init/01-roles.sql
+          echo "::add-mask::$MTB_APP_PASSWORD"
+
+      # El plano de control se migra con la variante sin pooler porque
+      # prisma.config.ts lee CONTROL_PLANE_DATABASE_URL_UNPOOLED y no acepta
+      # fallback: migrar por PgBouncer es justamente el fallo que ese
+      # desdoblamiento previene.
+      #
+      # Claves efímeras por ejecución: env.validation.ts rechaza los
+      # placeholders de .env.example, y la suite necesita que el seed, el
+      # servidor que arranca en beforeAll y el proceso de test compartan las
+      # mismas, porque las filas PII que el seed cifra las descifra el servidor.
+      - name: Credenciales efímeras para e2e
+        run: |
+          {
+            echo "PII_HMAC_KEY=$(openssl rand -base64 24)"
+            echo "PII_ENCRYPTION_KEY=$(openssl rand -base64 32)"
+            echo "JWT_ACCESS_SECRET=$(openssl rand -base64 32)"
+            echo "JWT_REFRESH_SECRET=$(openssl rand -base64 32)"
+            echo "DOCS_BASIC_AUTH_PASSWORD=$(openssl rand -base64 16)"
+            echo "SEED_OWNER_PASSWORD=$(openssl rand -base64 16)"
+            echo "SEED_MEMBER_PASSWORD=$(openssl rand -base64 16)"
+            echo "SEED_OWNER_EMAIL=ci-owner@example.test"
+            echo "SEED_MEMBER_EMAIL=ci-member@acme.test"
+            echo "SEED_TENANT_SLUG=acme"
+          } >> "$GITHUB_ENV"
+          echo "::add-mask::$(openssl rand -hex 8)"
+
+      # El catálogo RBAC (`roles`) lo siembra prisma/seed.ts, no la suite: sin
+      # él, `seedAdmin` no encuentra el rol platform-owner y toda ruta protegida
+      # responde 403. Y el seed necesita el esquema, así que las migraciones se
+      # aplican antes, con el mismo entrypoint que usa el Job de producción
+      # (scripts/migrate.ts), no con un `prisma migrate deploy` suelto.
+      - name: Aplicar migraciones del plano de control
+        env:
+          NODE_ENV: test
+          CONTROL_PLANE_DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+        run: npm run db:migrate:deploy
+
+      - name: Sembrar catálogo RBAC e identidades
+        env:
+          NODE_ENV: test
+          CONTROL_PLANE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+          CONTROL_PLANE_DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+        run: npm run prisma:seed
+
+      - name: E2E
+        env:
+          NODE_ENV: test
+          CONTROL_PLANE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+          CONTROL_PLANE_DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+          TENANT_PLANE_DATABASE_URL: postgresql://mtb_app:${{ github.run_id }}-app@localhost:5432/mtb_test?schema=public
+        run: npm run test:e2e
+
+  # =============================================================================
+  # build: imágenes por digest, SBOM/provenance y escaneo de vulnerabilidades
+  # =============================================================================
+  build:
+    name: Build, push y escaneo
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.push-app.outputs.digest }}
+      migrate_digest: ${{ steps.push-migrate.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Credenciales de WIF (sin clave JSON). `access_token` explícito porque el
+      # registro de Artifact Registry necesita un token de acceso, no un ID token.
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          token_format: access_token
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ${{ vars.GCP_REGION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
+      - name: Build and push runtime image
+        id: push-app
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
+        with:
+          context: .
+          target: runtime
+          push: true
+          tags: ${{ env.IMAGE_BASE }}:${{ github.sha }}
+          # El deploy consume el digest, no el tag: un tag es mutable.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+          platforms: linux/amd64
+
+      - name: Build and push migrate image
+        id: push-migrate
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
+        with:
+          context: .
+          target: migrate
+          push: true
+          tags: ${{ env.IMAGE_BASE }}-migrate:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=migrate
+          cache-to: type=gha,mode=max,scope=migrate
+          platforms: linux/amd64
+
+      - name: Escanear la imagen por digest
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          image-ref: ${{ env.IMAGE_BASE }}@${{ steps.push-app.outputs.digest }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+        env:
+          TRIVY_USERNAME: oauth2accesstoken
+          TRIVY_PASSWORD: ${{ steps.auth.outputs.access_token }}
+
+  # =============================================================================
+  # migrate: Cloud Run Job, una ejecución, sin reintentos
+  # =============================================================================
+  migrate:
+    name: Migraciones
+    needs: build
+    if: ${{ github.event_name != 'pull_request' && !inputs.skip_migrations }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
+
+      # Si el release trae migraciones destructivas, crear antes una rama de
+      # respaldo en Neon (RB-09 / §16.2): el rollback de código no revierte
+      # migraciones y la salida es restaurar la base.
+      - name: Actualizar y ejecutar el Job
+        env:
+          IMAGE: ${{ env.IMAGE_BASE }}-migrate@${{ needs.build.outputs.migrate_digest }}
+        run: |
+          set -euo pipefail
+          gcloud run jobs deploy "$MIGRATE_JOB" \
+            --region="$REGION" \
+            --image="$IMAGE" \
+            --service-account="vondi-migrator@$PROJECT_ID.iam.gserviceaccount.com" \
+            --tasks=1 --parallelism=1 --max-retries=0 --task-timeout=900s \
+            --quiet
+          # `--wait` devuelve error si la ejecución falla: detiene el pipeline
+          # antes de desplegar código contra un esquema a medias.
+          gcloud run jobs execute "$MIGRATE_JOB" --region="$REGION" --wait
+
+  # =============================================================================
+  # deploy: canario y revisión sin tráfico
+  # =============================================================================
+  deploy:
+    name: Desplegar canario y revisión sin tráfico
+    needs: [build, migrate]
+    if: >-
+      always() && needs.build.result == 'success' &&
+      (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      previous: ${{ steps.prev.outputs.revision }}
+      revision: ${{ steps.deploy.outputs.revision }}
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
+
+      - name: Registrar la revisión que sirve tráfico hoy
+        id: prev
+        run: |
+          set -euo pipefail
+          REV=$(gcloud run services describe "$SERVICE" --region="$REGION" \
+                --format='value(status.traffic[0].revisionName)')
+          echo "revision=$REV" >> "$GITHUB_OUTPUT"
+
+      # Solo cambian imagen y nombre de revisión: red, probes, secretos y
+      # variables viven en la configuración del servicio (§11.2). Un flag
+      # ausente aquí no se resetea, porque `gcloud run deploy` parte de la
+      # configuración actual y aplica encima lo indicado.
+      - name: Desplegar
+        id: deploy
+        env:
+          IMAGE: ${{ env.IMAGE_BASE }}@${{ needs.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$CANARY" --region="$REGION" --image="$IMAGE" \
+            --revision-suffix="$REVISION" --quiet
+
+          gcloud run deploy "$SERVICE" --region="$REGION" --image="$IMAGE" \
+            --revision-suffix="$REVISION" --no-traffic --quiet
+
+          echo "revision=${SERVICE}-${REVISION}" >> "$GITHUB_OUTPUT"
+
+  # =============================================================================
+  # smoke: el canario es privado, así que responde con token de identidad
+  # =============================================================================
+  smoke:
+    name: Humo sobre el canario
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
+
+      - name: Resolver la URL del canario
+        id: target
+        run: |
+          set -euo pipefail
+          URL=$(gcloud run services describe "$CANARY" --region="$REGION" \
+                --format='value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      # `gcloud auth print-identity-token` rechaza credenciales WIF
+      # (external_account): el token lo emite la propia action de auth.
+      - name: Token de identidad para el canario
+        id: id_token
+        uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ steps.target.outputs.url }}
+
+      # La revisión nueva arranca en frío: /health/live hasta 90 s.
+      - name: Liveness y readiness
+        env:
+          URL: ${{ steps.target.outputs.url }}
+          TOKEN: ${{ steps.id_token.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          CODE=000
+          for _ in $(seq 1 45); do
+            CODE=$(curl -s -o /tmp/live.json -w '%{http_code}' \
+                   -H "Authorization: Bearer $TOKEN" "$URL/health/live" || true)
+            [ "$CODE" = "200" ] && break
+            sleep 2
+          done
+          [ "$CODE" = "200" ] || { echo "FAIL live: $CODE"; exit 1; }
+
+          READY=$(curl -s -o /tmp/ready.json -w '%{http_code}' \
+                    -H "Authorization: Bearer $TOKEN" "$URL/health/ready")
+          [ "$READY" = "200" ] || { echo "FAIL ready: $READY"; cat /tmp/ready.json; exit 1; }
+
+      # En un servicio privado hay dos capas y Cloud Run da precedencia a
+      # X-Serverless-Authorization: el ID token va ahí (pasa IAM) y el guard de
+      # la aplicación, que solo lee `authorization`, no ve ningún JWT y
+      # responde 401. Probar 401/403 prueba que el auth está montado y que la
+      # ruta alcanza la aplicación.
+      - name: Una ruta protegida responde 401/403
+        env:
+          URL: ${{ steps.target.outputs.url }}
+          TOKEN: ${{ steps.id_token.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+                 -H "X-Serverless-Authorization: Bearer $TOKEN" \
+                 "$URL/api/v1/api-keys")
+          case "$CODE" in
+            401|403) echo "OK ($CODE)" ;;
+            *) echo "FAIL: $CODE"; exit 1 ;;
+          esac
+
+  # =============================================================================
+  # promote: 100% a la revisión nueva; rollback si no queda sana
+  # =============================================================================
+  promote:
+    name: Promoción de tráfico
+    needs: [deploy, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
+
+      - name: Promover
+        run: |
+          set -euo pipefail
+          gcloud run services update-traffic "$SERVICE" --region="$REGION" \
+            --to-revisions="${{ needs.deploy.outputs.revision }}=100" --quiet
+
+      # Un rollback de código no revierte migraciones: por eso las migraciones
+      # son compatibles hacia atrás (§12.4).
+      - name: Verificar la promoción (rollback si falla)
+        env:
+          REVISION: ${{ needs.deploy.outputs.revision }}
+          PREVIOUS: ${{ needs.deploy.outputs.previous }}
+        run: |
+          set -euo pipefail
+          READY=$(gcloud run revisions describe "$REVISION" --region="$REGION" \
+                  --format='value(status.conditions[?@.type=="Ready"].status)')
+          if [ "$READY" != "True" ]; then
+            echo "Revisión $REVISION no sana (Ready=$READY); revirtiendo a $PREVIOUS"
+            gcloud run services update-traffic "$SERVICE" --region="$REGION" \
+              --to-revisions="$PREVIOUS=100" --quiet
+            exit 1
+          fi
+          echo "Promovida $REVISION"

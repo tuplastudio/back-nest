@@ -19,6 +19,11 @@ src/generated/
 # Generated API document (regenerate with: npm run docs:openapi)
 docs/openapi.json
 
+# La documentación es prosa, no fuente: reformatearla ensucia el diff de cada
+# entrega y no describe el runtime. Sin esto, `format:check` en CI falla por
+# documentos que nadie tocó en el commit que se despliega.
+*.md
+
 # Coverage
 coverage/
 

@@ -923,6 +923,15 @@ export class PaymentOrdersService {
         if (!(error instanceof NetpayRequestError)) {
           throw error;
         }
+        // A definitive refusal (4xx: Netpay says the operation is not permitted,
+        // the cut-off passed) is a safe fallback: the cancellation did not happen.
+        // A 5xx is not a refusal, it is an unknown outcome: the cancellation may
+        // have been carried out and reversing again on the other route would bill
+        // the customer twice. Same criterion as a transport failure, and it is
+        // what leaves the order refundable for a retry.
+        if (error.providerStatus >= 500) {
+          throw error;
+        }
         this.logger.warn(`Netpay refused to cancel ${transactionId}; trying the refund service.`);
       }
     }

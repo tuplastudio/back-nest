@@ -1,5 +1,13 @@
 # Deployment Guide: Google Cloud Run + Neon.tech
 
+> **Sustituido por [DEPLOY-GCP.md](DEPLOY-GCP.md)**, que es la guía vigente:
+> define la topología real (VPC + Cloud NAT + egress fijo, canario, Ingress
+> cerrado, IAM por servicio) y el pipeline `deploy.yml`. Este documento se
+> conserva como referencia histórica del arranque con Cloud Build; sus scripts
+> (`cloudbuild.yaml`, `scripts/deploy-cloud-run.sh`) y sus comandos de
+> despliegue **ya no existen** y su región por defecto (`us-central1`) no es la
+> de producción (`us-east5`). No lo sigas para desplegar.
+
 This guide explains how to deploy the Vondi API to Google Cloud Run using Neon.tech as the PostgreSQL database provider.
 
 ## Prerequisites
