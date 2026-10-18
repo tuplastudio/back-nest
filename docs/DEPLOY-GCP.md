@@ -861,7 +861,7 @@ verify ─► build ─► migrate ─► deploy (canario + revisión sin tráfi
 
 | Job          | Qué hace                                                                                                   | Falla si…                        |
 | ------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `verify`     | gitleaks (set commiteable + histórico), format, lint, typecheck, migrations:validate, `test:cov`, roles de la BD, `prisma:seed`, `test:e2e` | algo del gate falla              |
+| `verify`     | gitleaks (set commiteable + histórico), format, lint, typecheck, migrations:validate, `test:cov` + subida a Codecov, roles de la BD, `prisma:seed`, `test:e2e` | algo del gate falla              |
 | `build`      | runtime y migrate por digest, con SBOM y provenance, y Trivy `HIGH,CRITICAL` con `exit-code: 1`            | la imagen tiene una vulnerabilidad |
 | `migrate`    | `gcloud run jobs execute --wait` con `--tasks=1 --parallelism=1 --max-retries=0`                            | la migración falla               |
 | `deploy`     | canario y revisión de producción con `--no-traffic`, nombre `r<sha>-<intento>`                              | el servicio no acepta la imagen  |

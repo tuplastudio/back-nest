@@ -1,0 +1,38 @@
+# Codecov para vondi-api.
+#
+# El informe lo produce Jest (`npm run test:cov` → `coverage/lcov.info`) en el job
+# `verify` de .github/workflows/deploy.yml y lo sube codecov/codecov-action con
+# el secret CODECOV_TOKEN.
+
+coverage:
+  status:
+    project:
+      default:
+        # `auto`: Codecov fija el objetivo a partir de la cobertura base de la
+        # rama. Un número absoluto bloquearía el primer push de una rama nueva.
+        target: auto
+        # Tolerancia del estado del proyecto: la cobertura cae un poco entre
+        # commits sin que eso sea un hallazgo.
+        threshold: 1%
+    patch:
+      default:
+        # Solo el diff del PR: es lo que distingue "este PR cambió código sin
+        # test" de "este repositorio arrastra huecos históricos".
+        target: 80%
+        threshold: 5%
+
+comment:
+  layout: reach,diff,flags,files
+  behavior: default
+
+# Fuera del informe: artefactos (coverage/), código generado (dist/,
+# src/generated/), y código que Jest no instrumenta porque vive fuera de
+# `collectCoverageFrom` (test/, prisma/, scripts/, y el proyecto Astro de ui/).
+ignore:
+  - 'coverage/**'
+  - 'dist/**'
+  - 'src/generated/**'
+  - 'test/**'
+  - 'prisma/**'
+  - 'scripts/**'
+  - 'ui/**'

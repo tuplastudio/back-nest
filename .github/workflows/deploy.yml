@@ -124,6 +124,21 @@ jobs:
       - name: Tests unitarios con cobertura
         run: npm run test:cov
 
+      # La cobertura la escribe el paso anterior en coverage/lcov.info.
+      # `fail_ci_if_error: false` a propósito: la cobertura informa, no bloquea un
+      # release cuyos tests ya pasaron, y en un PR desde un fork el secret no
+      # existe, así que un upload fallido no puede romper el pipeline.
+      - name: Subir cobertura a Codecov
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          # Solo el lcov de Jest: sin búsqueda, el CLI no sube ni el HTML de
+          # coverage/lcov-report ni restos de otros formatos.
+          disable_search: true
+          fail_ci_if_error: false
+          verbose: true
+
       # `services: postgres` no ejecuta docker/postgres/init, así que los roles
       # de menor privilegio se crean aquí (§12.2). El plano de control migra
       # como superusuario de este Postgres desechable y el plano de datos
