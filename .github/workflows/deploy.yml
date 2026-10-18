@@ -10,16 +10,34 @@
 # anterior. El rollback de código no revierte migraciones: por eso las
 # migraciones se ejecutan antes del deploy y deben ser compatibles hacia atrás
 # (§12.4).
+#
+# `staging` es el entorno de prueba y `main` el de producción. El mismo workflow
+# cubre ambos porque el que decide a qué entorno se despliega no es el workflow
+# sino el environment del job (§17):
+#
+#   staging ─► verify ─► build_staging ─► staging_migrate ─► staging_deploy ─► staging_smoke
+#                                                                            │
+#   main    ─► verify ─► build ─────────► migrate ─────────► deploy ─────────┤─► smoke ─► promote
+#
+# Es decir: `main` pasa por staging antes de llegar a producción. Un release que
+# no arrancó contra la base de staging no llega a tocar la de producción. Los
+# PR también despliegan a staging, que es lo que permite probarlos contra una
+# base de verdad antes de mergear.
+#
+# Las variables (`vars.*`) del nivel del workflow se resuelven según el
+# environment de cada job: `GCP_PROJECT_ID` es `vondi-0q` en los jobs con
+# `environment: production` y `vondi-0q-staging` en los que llevan `staging`.
+# Por eso los dos grupos comparten casi todo el texto.
 
 name: deploy-production
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
     # La documentación no cambia el runtime; no debe gastar un release.
     paths-ignore: ['docs/**', '**/*.md']
   pull_request:
-    branches: [main]
+    branches: [main, staging]
   workflow_dispatch:
     inputs:
       skip_migrations:
@@ -28,9 +46,10 @@ on:
         default: false
 
 # Nunca cancelar un despliegue en curso: cortar entre migrar y promover deja
-# esquema y código descuadrados.
+# esquema y código descuadrados. El grupo incluye la rama para que un push a
+# staging no cancele el release de main que esté corriendo.
 concurrency:
-  group: deploy-production-${{ github.ref }}
+  group: deploy-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -207,12 +226,252 @@ jobs:
         run: npm run test:e2e
 
   # =============================================================================
+  # staging: el entorno donde se prueba antes de tocar producción (§17)
+  # =============================================================================
+  build_staging:
+    name: Build de staging
+    needs: verify
+    # Un PR de un fork no tiene los secrets del environment, así que la WIF le
+    # negaría la identidad: sin esto el job fallaría en vez de omitirse.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.push-app.outputs.digest }}
+      migrate_digest: ${{ steps.push-migrate.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          token_format: access_token
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ${{ vars.GCP_REGION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
+      # Mismos digest y misma cadena de construcción que producción: staging y
+      # prod ejecutan binarios idénticos, que es lo que hace que probar en
+      # staging signifique algo.
+      - name: Build and push runtime image
+        id: push-app
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
+        with:
+          context: .
+          target: runtime
+          push: true
+          tags: ${{ env.IMAGE_BASE }}:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+          platforms: linux/amd64
+
+      - name: Build and push migrate image
+        id: push-migrate
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
+        with:
+          context: .
+          target: migrate
+          push: true
+          tags: ${{ env.IMAGE_BASE }}-migrate:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=migrate
+          cache-to: type=gha,mode=max,scope=migrate
+          platforms: linux/amd64
+
+  staging_migrate:
+    name: Migraciones de staging
+    needs: build_staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
+
+      # Corre contra la rama `staging` de Neon, no contra producción: por eso
+      # este Job puede correr en cada push a staging y en cada PR. Es también el
+      # primer sitio donde se ve que una migración es inválida, antes de que
+      # llegue al Job de producción.
+      #
+      # `--max-retries=0 --tasks=1 --parallelism=1`: una migración se ejecuta
+      # una vez; si falla, es un fallo visible con intervención humana.
+      - name: Actualizar y ejecutar el Job
+        env:
+          IMAGE: ${{ env.IMAGE_BASE }}-migrate@${{ needs.build_staging.outputs.migrate_digest }}
+        run: |
+          set -euo pipefail
+          gcloud run jobs deploy "$MIGRATE_JOB" \
+            --region="$REGION" \
+            --image="$IMAGE" \
+            --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic \
+            --service-account="vondi-migrator@$PROJECT_ID.iam.gserviceaccount.com" \
+            --tasks=1 --parallelism=1 --max-retries=0 --task-timeout=900s \
+            --quiet
+          # `--wait` devuelve error si la ejecución falla: detiene el pipeline
+          # antes de desplegar código contra un esquema a medias.
+          gcloud run jobs execute "$MIGRATE_JOB" --region="$REGION" --wait
+
+  staging_deploy:
+    name: Desplegar staging
+    # `build_staging` además del orden: el digest de la imagen vive en su
+    # `outputs`, y el contexto `needs` solo expone los jobs de dependencia
+    # directa.
+    needs: [build_staging, staging_migrate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      previous: ${{ steps.deploy.outputs.previous }}
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
+
+      # La revisión que sirve tráfico se registra ANTES de desplegar: leerla
+      # después devuelve la nueva, y el rollback del humo se quedaría sin a qué
+      # volver.
+      #
+      # Staging no tiene canario. En producción hace falta porque su URL no es
+      # alcanzable desde CI y porque una revisión mala no puede tocar tráfico
+      # real; en staging la URL es pública, así que el humo va contra ella y el
+      # lazo inverso es el `update-traffic` de este mismo job cuando el humo
+      # falla. Es una puerta real: si el humo falla, el pipeline para aquí y
+      # producción no llega a ejecutarse.
+      - name: Registrar la revisión que sirve tráfico hoy
+        id: previous
+        run: |
+          set -euo pipefail
+          REV=$(gcloud run services describe "$SERVICE" --region="$REGION" \
+                --format='value(status.traffic[0].revisionName)')
+          echo "revision=$REV" >> "$GITHUB_OUTPUT"
+
+      # Solo la imagen: las variables, los secretos y los probes viven en el
+      # servicio (scripts/provision-cloudrun.sh), igual que en producción.
+      # Duplicarlos aquí sería una segunda fuente de verdad que deriva.
+      - name: Desplegar
+        id: deploy
+        env:
+          IMAGE: ${{ env.IMAGE_BASE }}@${{ needs.build_staging.outputs.digest }}
+          PREVIOUS: ${{ steps.previous.outputs.revision }}
+        run: |
+          set -euo pipefail
+          gcloud run services deploy "$SERVICE" --region="$REGION" --image="$IMAGE" \
+            --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic \
+            --service-account="vondi-runtime@$PROJECT_ID.iam.gserviceaccount.com" \
+            --revision-suffix="$REVISION" --quiet
+          echo "url=$(gcloud run services describe "$SERVICE" --region="$REGION" \
+            --format='value(status.url)')" >> "$GITHUB_OUTPUT"
+          echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
+
+  staging_smoke:
+    name: Humo sobre staging
+    needs: staging_deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
+
+      # Sin token de identidad, a diferencia del humo de producción: el servicio
+      # de staging tiene ingress abierto, que es el precio de no depender todavía
+      # del balanceador global (§13.2). El compromiso está documentado en
+      # scripts/provision-cloudrun.sh y es aceptable mientras la base de staging
+      # no tenga datos reales.
+      - name: Liveness y readiness
+        env:
+          URL: ${{ needs.staging_deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          CODE=000
+          for _ in $(seq 1 45); do
+            CODE=$(curl -s -o /tmp/live.json -w '%{http_code}' "$URL/health/live" || true)
+            [ "$CODE" = "200" ] && break
+            sleep 2
+          done
+          [ "$CODE" = "200" ] || { echo "FAIL live: $CODE"; exit 1; }
+
+          READY=$(curl -s -o /tmp/ready.json -w '%{http_code}' "$URL/health/ready")
+          [ "$READY" = "200" ] || { echo "FAIL ready: $READY"; cat /tmp/ready.json; exit 1; }
+
+      - name: Una ruta protegida responde 401/403
+        env:
+          URL: ${{ needs.staging_deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/api/v1/api-keys")
+          case "$CODE" in
+            401|403) echo "OK ($CODE)" ;;
+            *) echo "FAIL: $CODE"; exit 1 ;;
+          esac
+
+      # El rollback va antes de propagar el fallo: el job tiene que quedar en
+      # rojo para que `main` no siga, y el servicio tiene que volver a la
+      # revisión que sí respondía. Un despliegue fallido que deja staging roto
+      # es peor que un pipeline rojo.
+      - name: Volver a la revisión anterior
+        if: failure()
+        env:
+          PREVIOUS: ${{ needs.staging_deploy.outputs.previous }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PREVIOUS" ]; then
+            echo "No hay revisión anterior registrada; nada que revertir."
+            exit 1
+          fi
+          gcloud run services update-traffic "$SERVICE" --region="$REGION" \
+            --to-revisions="$PREVIOUS=100" --quiet
+          echo "staging revertido a $PREVIOUS"
+
+  # =============================================================================
   # build: imágenes por digest, SBOM/provenance y escaneo de vulnerabilidades
   # =============================================================================
   build:
     name: Build, push y escaneo
     needs: verify
-    if: github.event_name != 'pull_request'
+    # Solo `main`. Antes era "cualquier push"; con la rama `staging` en juego,
+    # ese criterio dejaría a un push a staging construir y empujar al registro de
+    # producción con la identidad de producción.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: production
@@ -294,7 +553,9 @@ jobs:
   # =============================================================================
   migrate:
     name: Migraciones
-    needs: build
+    # `staging_smoke` en `needs` es la puerta: sin su humo en verde, las
+    # migraciones de producción no corren.
+    needs: [build, staging_smoke]
     if: ${{ github.event_name != 'pull_request' && !inputs.skip_migrations }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -336,9 +597,15 @@ jobs:
   # =============================================================================
   deploy:
     name: Desplegar canario y revisión sin tráfico
-    needs: [build, migrate]
+    needs: [build, migrate, staging_smoke]
+    # `staging_smoke` aparece en la condición y no solo en `needs` porque un job
+    # cuyo `needs` fue omitido sigue ejecutándose con `always()`. Sin esta línea,
+    # un humo de staging en rojo se traduciría en `migrate: skipped` y el
+    # despliegue a producción seguiría adelante por la rama `skipped` de la
+    # condición.
     if: >-
       always() && needs.build.result == 'success' &&
+      needs.staging_smoke.result == 'success' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 15
