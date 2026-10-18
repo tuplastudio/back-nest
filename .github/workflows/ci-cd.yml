@@ -187,7 +187,15 @@ jobs:
           SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --format='value(status.url)')
           echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
 
+      # The service is private (no --allow-unauthenticated), so the check sends an
+      # identity token. `/health` redirects to the docs; `/health/ready` checks
+      # both database planes.
       - name: Health check
         run: |
-          sleep 10
-          curl -fsS "${{ steps.service_url.outputs.url }}/health"
+          URL="${{ steps.service_url.outputs.url }}"
+          TOKEN=$(gcloud auth print-identity-token --audiences="$URL")
+          for i in 1 2 3 4 5; do
+            if curl -fsS -H "Authorization: Bearer $TOKEN" "$URL/health/ready"; then exit 0; fi
+            sleep 10
+          done
+          exit 1
