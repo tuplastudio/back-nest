@@ -53,17 +53,3 @@ jobs:
     uses: ./.github/workflows/deploy-environment.yml
     with:
       environment: staging
-
-  # Solo `main`, y solo después de que staging esté en verde. Antes, un "cualquier
-  # push" con la rama `staging` en juego significaba empujar al registro de
-  # producción desde un push a staging.
-  deploy_production:
-    name: Desplegar a producción
-    needs: deploy_staging
-    if: ${{ github.ref == 'refs/heads/main' }}
-    uses: ./.github/workflows/deploy-environment.yml
-    with:
-      environment: production
-      # `inputs.skip_migrations` es null en un push; sin el `|| false` se
-      # pasaría un null a un input booleano en lugar de usar su default.
-      skip_migrations: ${{ inputs.skip_migrations || false }}
