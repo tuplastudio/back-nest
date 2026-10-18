@@ -1022,10 +1022,16 @@ Cuatro diferencias con producción, y el motivo de cada una:
 3. **`build` solo corre en `main`.** Antes su condición era "cualquier push", lo
    que con la rama `staging` en juego significaba empujar al registro de
    producción desde un push a staging.
-4. **`staging_smoke` es un `needs` de `migrate` y aparece en la condición de
-   `deploy`.** Un job con `always()` se ejecuta aunque un `needs` se haya omitido:
-   sin la segunda mitad de la condición, un humo en rojo se convertiría en
-   `migrate: skipped` y producción seguiría adelante.
+4. **La espera entre entornos es un `needs` entre llamadas, no un `if` dentro del
+   despliegue.** Un job omitido no bloquea al que lo espera, así que una puerta
+   tiene que ser explícita. Dentro de `deploy-environment.yml` sí queda un
+   `always()` —para que `skip_migrations` pueda saltarse el Job de migraciones—,
+   pero la condición es explícita sobre `needs.build` y `needs.migrate`.
+5. **El escaneo de la imagen es solo de producción.** `trivy-action` necesita
+   permisos de Cloud Storage para su caché, que `vondi-deployer` de staging no
+   tiene. Las dos imágenes salen del mismo commit, así que el gate de producción
+   cubre el mismo contenido; para escanear antes del merge hay que igualar los
+   permisos.
 
 Los PR despliegan a staging (salvo los de un fork, que no tienen secrets) porque
 probarlos contra una base de verdad es el objetivo del entorno. Las migraciones
