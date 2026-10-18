@@ -83,6 +83,7 @@ jobs:
     environment: ${{ inputs.environment }}
     permissions:
       contents: read
+      id-token: write
     outputs:
       digest: ${{ steps.push_app.outputs.digest }}
     steps:

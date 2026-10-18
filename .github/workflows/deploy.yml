@@ -40,8 +40,14 @@ on:
 # llamada cancelara o esperara a la primera —que es la llamada padre—, y el
 # pipeline se quedaría esperando a sí mismo.
 
+# `id-token: write` es OBLIGATORIO aquí y no opcional: un workflow llamado no
+# puede pedir más permisos de los que le concede quien lo llama, así que sin esto
+# el reusable se muere antes de empezar. El symptom es `startup_failure` en este
+# workflow y no un error en el job que lo pide, porque el que valida es el
+# orquestador.
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   # Los PR despliegan a staging: probarlos contra una base de verdad es el
