@@ -475,6 +475,10 @@ export class PaymentOrdersService {
         paymentMethod:
           existing.paymentReference !== null || existing.checkoutMode === 'oxxo' ? 'OXXO' : 'CARD',
         failureReason: null,
+        // Settled: whatever operation was holding the claim is over, and this is
+        // the statement that says so.
+        operationClaim: null,
+        operationClaimedAt: null,
       });
       return {
         orderId,
@@ -495,6 +499,10 @@ export class PaymentOrdersService {
         netpayTransactionId: transactionId,
         lastVerifiedAt: now,
         failureReason: 'The provider reported the charge as unsuccessful.',
+        // Terminal as well, so the claim goes with it. The branch below
+        // (PENDING_VERIFICATION) concludes nothing and deliberately keeps it.
+        operationClaim: null,
+        operationClaimedAt: null,
       });
       return {
         orderId,
@@ -1030,16 +1038,18 @@ export class PaymentOrdersService {
       throw new ConflictException('The transaction is not waiting for 3-D Secure confirmation.');
     }
     await this.claimOrder(existing.id, 'confirm', { status: { notIn: [STATUS_PAID, 'REFUNDED'] } });
-    try {
-      await this.netpay.confirmCharge(
-        config.environment,
-        config.secretKey,
-        existing.netpayTransactionId,
-        processorTransactionId,
-      );
-    } finally {
-      await this.releaseClaim(existing.id);
-    }
+    await this.netpay.confirmCharge(
+      config.environment,
+      config.secretKey,
+      existing.netpayTransactionId,
+      processorTransactionId,
+    );
+    // The claim is released by the settlement below, not here. Releasing it as
+    // soon as the provider answered would leave, until the order is settled, a
+    // state where it is confirmable and free: a second confirmation would claim
+    // it and repeat the request to the bank, which is the one thing Netpay warns
+    // about. If the settlement fails, the claim expires on its own and the
+    // notification still concludes the order.
     const result = await this.verifyOrderInSchema(
       this.tenantPrisma.requireCurrentSchema(),
       existing.id,
