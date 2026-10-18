@@ -1249,19 +1249,58 @@ de llegar a producción.
 | --------------- | ----------------------- | --------------------------------------------- | ------------------------------------------------ |
 | Proyecto GCP    | `vondi-0q-dev`          | `vondi-0q-staging`                            | `vondi-0q`                                       |
 | Rama Git        | —                        | `staging`                                     | `main`                                           |
-| Rama Neon       | `ci-<n>` efímera        | `staging`                                     | `main` (protegida)                               |
+| Rama Neon       | `ci-<n>` efímera        | `staging` (vacía)                             | `production` (`br-lucky-star-axilp2ho`)          |
+| Base de datos   | —                        | `vondi`                                       | `vondi`                                          |
+| Endpoint Neon   | —                        | `ep-soft-pond-ax98gbha` (+`-pooler`)           | `ep-rapid-block-axjfmfnn` (+`-pooler`)           |
+| Compute Neon    | 0.25 CU, suspende 5 min | 0.5 CU                                        | 1 CU, sin autosuspend                            |
 | Servicio        | local                   | `vondi-api-staging`                           | `vondi-api` + `vondi-api-canary`                 |
 | Job de migraciones | —                    | `vondi-migrate-staging`                       | `vondi-migrate`                                  |
 | IP de egress    | —                        | `136.79.186.85`                               | `34.162.112.204`                                 |
-| Compute Neon    | 0.25 CU, suspende 5 min | 0.5 CU                                        | 1 CU, sin autosuspend                            |
+| Compute Neon    | 0.25 CU, suspende 5 min | 0.25–1 CU, autosuspend 5 min                 | 1 CU, sin autosuspend                            |
 | `min-instances` | 0                       | 0                                             | 1                                                |
-| `ingress`       | —                        | `all` (URL pública)¹                          | `all` hasta que exista el LB (§13.2)             |
+| `ingress`       | —                        | `all` + IAM (no anónimo)²                    | `all` hasta que exista el LB (§13.2)             |
 | Cloud Armor     | No                      | No                                            | Sí                                               |
 | Despliegue      | Manual                  | Automático en `staging` y en cada PR          | Automático en `main` tras pasar por staging       |
 
-¹ Staging tiene ingress abierto porque su humo corre desde CI y no hay balanceador todavía. Es aceptable **mientras la base de staging no tenga datos reales**: la API real queda accesible a internet sin balanceador ni Cloud Armor que la filtre. Es el punto débil conocido de este entorno y lo que hace §13 (balanceador) un requisito antes de que staging reciba datos de preproducción reales.
+¹ El balanceador de §13 sigue pendiente en **producción**: sin él la URL `run.app` es la vía de entrada y `ingress=all` es lo único que hay.
 
-Anonimizar `staging` antes de cualquier prueba con datos personales y rotar las contraseñas de sus roles (heredadas de `main`).
+² Staging **no** acepta acceso anónimo. La URL `run.app` es pública, así que con `--allow-unauthenticated` la API quedaría alcanzable desde internet sin Cloud Armor que la filtre, y con un endpoint de alta de tenants eso es una base de datos abierta a quien encuentre el hostname. El control es IAM: `roles/run.invoker` sobre `vondi-api-staging` para la identidad del deployer (que es la del humo) y para quien mantiene el entorno. El humo lleva ID token en `X-Serverless-Authorization` porque Cloud Run da precedencia a esa cabecera: por `authorization` la petición pasaría IAM y el guard de la aplicación —que solo lee `authorization`— vería 401.
+
+Para probar staging a mano, sin abrir nada:
+
+```bash
+gcloud run services proxy vondi-api-staging --region=us-east5 --project=vondi-0q-staging
+# y en otra terminal
+curl -s http://127.0.0.1:8080/health/ready
+```
+
+### 17.1 La rama `staging` de Neon nació como copia
+
+`Neon_create_branch` sin `parent` crea la rama **desde la rama por defecto**, no vacía: el MCP devuelve `init_source: parent-data` y el `staging` de este repositorio llegó con 6 tenants reales (`tenant_acme`, `brightpath`, `cascadia_logistics`, `northwind_labs`, `solara_health`, `vertex_pay`) y su PII cifrado con las claves de producción.
+
+Por eso, antes del primer despliegue a staging, la rama se vacía **dentro de la rama** (la `production` no se toca):
+
+```sql
+-- como mtb_control, que es el dueño de los schemas de tenant
+DROP TABLE public._prisma_migrations CASCADE;
+DO $$ DECLARE s text; BEGIN
+  FOR s IN SELECT tablename FROM pg_tables WHERE schemaname='public'
+    LOOP EXECUTE format('DROP TABLE IF EXISTS public.%I CASCADE', s); END LOOP;
+  FOR s IN SELECT nspname FROM pg_namespace
+            WHERE nspname NOT IN ('public','pg_catalog','information_schema','pg_toast')
+              AND nspname NOT LIKE 'pg\_%'
+    LOOP EXECUTE format('DROP SCHEMA %I CASCADE', s); END LOOP;
+  -- Los ENUM no se van con DROP TABLE: sin este paso la primera migración
+  -- falla con 'type "PlatformRole" already exists'.
+  FOR s IN SELECT t.typname FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace
+            WHERE n.nspname='public' AND t.typtype IN ('e','c','d')
+    LOOP EXECUTE format('DROP TYPE IF EXISTS public.%I CASCADE', s); END LOOP;
+END $$;
+```
+
+Los roles `mtb_control` y `mtb_app` llegan heredados con la contraseña de producción, así que hay que **rotarlos en la rama** antes de usarlos: con las mismas contraseñas, un acceso a staging es un acceso a producción.
+
+Anonimizar `staging` antes de cualquier prueba con datos personales. Con la rama vacía y las claves nuevas, eso ya está hecho; vuelve a ser responsabilidad de quien use staging a partir de aquí.
 
 Costes: Cloud Run con CPU siempre asignada y `min-instances=1` factura de forma continua; compute Neon 1 CU sin autosuspend; Cloud NAT (hora + GB) **uno por proyecto de entorno**; Load Balancer; Cloud Armor; egreso. Control:
 
