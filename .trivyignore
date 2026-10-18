@@ -1,0 +1,46 @@
+# Findings de Trivy que se aceptan a propósito en la imagen de runtime.
+#
+# Contexto: el gate (`deploy.yml`, "Escanear la imagen por digest") falla el
+# build ante HIGH o CRITICAL. Aquí van los que se aceptan, cada uno con su
+# motivo. Un finding que no esté en esta lista se arregla, no se ignora.
+#
+# Los once siguientes están dentro de npm del sistema, es decir
+# /usr/local/lib/node_modules/npm/**, que es el npm que trae la imagen base
+# node:22-alpine. No es código de la aplicación: `npm ci --omit=dev` deja solo
+# el árbol de producción de este proyecto y ninguno de estos paquetes está en
+# él (la ruta exacta que reporta Trivy viene en el finding).
+#
+# No son ejecutables en runtime: la imagen arranca con `node dist/main.js` y
+# nunca invoca npm. La imagen de migraciones sí usa `npx tsx`, y por eso el
+# escaneo se hace sobre la imagen de runtime y no sobre esa.
+#
+# Y hay una razón operativa: la severidad de un advisory puede ser recalificada
+# entre versiones de la base de datos de Trivy. Estos dos mismos CVEs pasaron de
+# HIGH a MEDIUM en unos días, y un gate que se pone rojo porque cambió una nota
+# de la base, sobre código que no se ejecuta, entrena al equipo a ignorar el
+# gate. Lo que sí se arregla es lo que corre: los dos HIGH que estaban en el
+# árbol de producción (mysql2 y deepmerge-ts, traídos por prisma) se
+# resolvieron subiendo @prisma/client y prisma a 7.10.1.
+#
+# Revisar esta lista al subir `node:22-alpine`, no antes: si una imagen base
+# más nueva ya no trae esos paquetes, la entrada sobra.
+
+# CVE-2026-102276, CVE-2026-102278, CVE-2026-13149, CVE-2026-14257,
+# CVE-2026-69152  brace-expansion 2.0.2 (dentro de npm)
+CVE-2026-102276
+CVE-2026-102278
+CVE-2026-13149
+CVE-2026-14257
+CVE-2026-69152
+
+# CVE-2026-33671  picomatch 4.0.3 (dentro de npm)
+CVE-2026-33671
+
+# CVE-2026-48815  sigstore 3.1.0 (dentro de npm)
+CVE-2026-48815
+
+# CVE-2026-69192  ip-address 10.1.0 (dentro de npm)
+CVE-2026-69192
+
+# CVE-2026-9496  pacote 19.0.2 y 20.0.1 (dentro de npm)
+CVE-2026-9496

@@ -267,6 +267,9 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
+          # Findings aceptados a propósito, cada uno con su motivo. El gate
+          # sigue bloqueando ante cualquier otro HIGH/CRITICAL.
+          trivyignores: .trivyignore
         env:
           TRIVY_USERNAME: oauth2accesstoken
           TRIVY_PASSWORD: ${{ steps.auth.outputs.access_token }}
