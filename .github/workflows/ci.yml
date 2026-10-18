@@ -1,0 +1,195 @@
+# Verificación: formato, lint, tipos, secretos, tests unitarios con cobertura y
+# e2e contra un Postgres desechable.
+#
+# Este workflow no despliega nada y no depende de ningún environment de GitHub:
+# es el check que `main` puede exigir para poder mergear. Vive aparte del
+# despliegue por dos razones:
+#
+#   * Corre una sola vez. Con un único workflow, un PR disparaba `verify` y
+#     además el grupo de deploy; partirlo evita pagar la suite e2e (2 min 40 s
+#     medidos) y un Postgres de servicio por cada workflow.
+#   * No arrastra las variables de GCP. En el workflow de despliegue las
+#     `vars.*` del nivel de workflow se resuelven según el `environment:` de
+#     cada job, y un job sin environment las recibe **vacías y sin avisar**
+#     (IMAGE_BASE quedaba como `-docker.pkg.dev///vondi-api`). Aquí no hay
+#     ninguna: un job nuevo no puede heredar ese fallo silencioso.
+#
+# La cancelación sí se permite, y solo en PR: un commit nuevo invalida el
+# anterior. En el despliegue no, por §12.3.
+#
+# Diseño y motivos: docs/DEPLOY-GCP.md §12.
+
+name: ci
+
+on:
+  push:
+    branches: [main, staging]
+    # La documentación no cambia el runtime; no debe gastar un release.
+    paths-ignore: ['docs/**', '**/*.md']
+  pull_request:
+    branches: [main, staging]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.13.0'
+
+jobs:
+  verify:
+    name: Verificación, tests y e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mtb_test
+          # Misma configuración que en docker-compose.yml: la colación
+          # determinista evita que el orden de índices derive entre máquinas.
+          POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mtb_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # El escaneo de historia (secrets:history) necesita el historial.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # `secrets:staged` escanea el índice, que en un checkout de CI está
+      # vacío: escanea el set commiteable (`secrets`) y el histórico completo
+      # (`secrets:history`).
+      - name: Secrets (set commiteable)
+        run: npm run secrets
+
+      - name: Secrets (histórico)
+        run: npm run secrets:history
+
+      - name: Formato
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Validar migraciones
+        run: npm run migrations:validate
+
+      - name: Tests unitarios con cobertura
+        run: npm run test:cov
+
+      # La cobertura la escribe el paso anterior en coverage/lcov.info.
+      # `fail_ci_if_error: false` a propósito: la cobertura informa, no bloquea un
+      # release cuyos tests ya pasaron, y en un PR desde un fork el secret no
+      # existe, así que un upload fallido no puede romper el pipeline.
+      - name: Subir cobertura a Codecov
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          # Solo el lcov de Jest: sin búsqueda, el CLI no sube ni el HTML de
+          # coverage/lcov-report ni restos de otros formatos.
+          disable_search: true
+          fail_ci_if_error: false
+          verbose: true
+
+      # `services: postgres` no ejecuta docker/postgres/init, así que los roles
+      # de menor privilegio se crean aquí (§12.2). El plano de control migra
+      # como superusuario de este Postgres desechable y el plano de datos
+      # conecta como mtb_app, para que las políticas RLS sean exigibles
+      # (un dueño de tabla las ignora; ver docker/postgres/init/01-roles.sql).
+      - name: Crear roles de la base (mtb_control, mtb_app)
+        env:
+          PGPASSWORD: postgres
+          MTB_CONTROL_PASSWORD: ${{ github.run_id }}-control
+          MTB_APP_PASSWORD: ${{ github.run_id }}-app
+        run: |
+          command -v psql >/dev/null || sudo apt-get update && sudo apt-get install -y postgresql-client
+          psql -h localhost -U postgres -d mtb_test -v ON_ERROR_STOP=1 \
+            -f docker/postgres/init/01-roles.sql
+          echo "::add-mask::$MTB_APP_PASSWORD"
+
+      # El plano de control se migra con la variante sin pooler porque
+      # prisma.config.ts lee CONTROL_PLANE_DATABASE_URL_UNPOOLED y no acepta
+      # fallback: migrar por PgBouncer es justamente el fallo que ese
+      # desdoblamiento previene.
+      #
+      # Claves efímeras por ejecución: env.validation.ts rechaza los
+      # placeholders de .env.example, y la suite necesita que el seed, el
+      # servidor que arranca en beforeAll y el proceso de test compartan las
+      # mismas, porque las filas PII que el seed cifra las descifra el servidor.
+      - name: Credenciales efímeras para e2e
+        run: |
+          {
+            echo "PII_HMAC_KEY=$(openssl rand -base64 24)"
+            echo "PII_ENCRYPTION_KEY=$(openssl rand -base64 32)"
+            echo "JWT_ACCESS_SECRET=$(openssl rand -base64 32)"
+            echo "JWT_REFRESH_SECRET=$(openssl rand -base64 32)"
+            echo "DOCS_BASIC_AUTH_PASSWORD=$(openssl rand -base64 16)"
+            echo "SEED_OWNER_PASSWORD=$(openssl rand -base64 16)"
+            echo "SEED_MEMBER_PASSWORD=$(openssl rand -base64 16)"
+            echo "SEED_OWNER_EMAIL=ci-owner@example.test"
+            echo "SEED_MEMBER_EMAIL=ci-member@acme.test"
+            echo "SEED_TENANT_SLUG=acme"
+          } >> "$GITHUB_ENV"
+          echo "::add-mask::$(openssl rand -hex 8)"
+
+      # El catálogo RBAC (`roles`) lo siembra prisma/seed.ts, no la suite: sin
+      # él, `seedAdmin` no encuentra el rol platform-owner y toda ruta protegida
+      # responde 403. Y el seed necesita el esquema, así que las migraciones se
+      # aplican antes, con el mismo entrypoint que usa el Job de producción
+      # (scripts/migrate.ts), no con un `prisma migrate deploy` suelto.
+      - name: Aplicar migraciones del plano de control
+        env:
+          NODE_ENV: test
+          CONTROL_PLANE_DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+        run: npm run db:migrate:deploy
+
+      - name: Sembrar catálogo RBAC e identidades
+        env:
+          NODE_ENV: test
+          CONTROL_PLANE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+          CONTROL_PLANE_DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+        run: npm run prisma:seed
+
+      - name: E2E
+        env:
+          NODE_ENV: test
+          CONTROL_PLANE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+          CONTROL_PLANE_DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+          TENANT_PLANE_DATABASE_URL: postgresql://mtb_app:${{ github.run_id }}-app@localhost:5432/mtb_test?schema=public
+        run: npm run test:e2e
+
+  # =============================================================================
+  # staging: el entorno donde se prueba antes de tocar producción (§17)
+  # =============================================================================
