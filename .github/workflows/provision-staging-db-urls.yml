@@ -17,6 +17,12 @@
 name: provision-staging-db-urls
 
 on:
+  # `push` y no `workflow_dispatch`: un workflow que solo existe en una rama
+  # distinta de la principal no se puede despachar por nombre, porque GitHub lo
+  # busca en la rama por defecto. Con `push` se ejecuta desde el ref que trae el
+  # fichero, que es justo lo que se quiere para algo de un solo uso.
+  push:
+    branches: [staging]
   workflow_dispatch:
 
 permissions:
