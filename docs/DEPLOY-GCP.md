@@ -944,6 +944,86 @@ Cloud Run mantiene la revisión anterior hasta la promoción, por lo que las mig
 
 El provisioner ejecuta `CREATE SCHEMA` y DDL por el cliente del plano de control (host **pooled**), dentro de transacciones interactivas; es compatible con el modo transacción y no hay advisory locks de sesión. Si el volumen de provisiones crece, moverlo a un Job con conexión directa.
 
+### 12.6 Provisionar un entorno nuevo
+
+Un entorno no es un conjunto de pasos manuales: es el mismo `PROJECT_ID` pasado a tres scripts. Lo que hay a mano antes de empezar es solo el proyecto y su billing.
+
+```bash
+# 1. Proyecto (una vez). El ID global es único y no se recycle: se elige el
+#    nombre definitivo antes de crearlo.
+gcloud projects create vondi-0q-staging --organization=<ORG_ID> --name="vondi staging"
+CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud beta billing projects link \
+  vondi-0q-staging --billing-account=<BILLING_ID>
+
+# 2. APIs, cuentas, Artifact Registry, WIF y red de egress (§6, §7).
+GCP_PROJECT_ID=vondi-0q-staging GH_REPO=tuplastudio/back-nest \
+  GIT_ENVIRONMENT=staging ./scripts/provision-environment.sh
+
+# 3. Secretos: las cuatro cadenas de la rama de Neon de este entorno (§9).
+export CONTROL_URL=… APP_URL=… CONTROL_URL_UNPOOLED=… APP_URL_UNPOOLED=…
+GCP_PROJECT_ID=vondi-0q-staging ./scripts/provision-secrets.sh
+
+# 4. Servicio y Job, con la configuración completa (§11.1, §11.2).
+GCP_PROJECT_ID=vondi-0q-staging REGION=us-east5 \
+  SERVICE=vondi-api-staging MIGRATE_JOB=vondi-migrate-staging \
+  IMAGE_DIGEST=sha256:… MIGRATE_DIGEST=sha256:… ./scripts/provision-cloudrun.sh
+```
+
+Lo que **no** hacen los scripts, y por qué: la rama de Neon y sus cuatro
+cadenas de conexión (fuera de GCP), las variables del environment de GitHub, y la
+primera imagen (la sube el propio workflow). `provision-environment.sh` imprime
+las variables que el environment necesita.
+
+Las claves de cifrado las genera `provision-secrets.sh` y las imprime una vez:
+`PII_ENCRYPTION_KEY` y `PII_HMAC_KEY` no se rotan, así que la custodia fuera de
+GCP es parte del procedimiento y no un extra. Si la base del entorno nuevo
+hereda filas cifradas con las claves de otro entorno, hay que copiarlas
+(`KEYS_FROM_PROJECT=<otro>`) en lugar de generar otras: con claves nuevas esas
+filas no se descifran.
+
+### 12.7 Staging como puerta de producción
+
+Un solo workflow cubre los dos entornos. Lo que decide a dónde se despliega no es
+el workflow sino el `environment:` de cada job, que es también lo que resuelve
+las variables `vars.*` y lo que concede la identidad por WIF.
+
+```
+staging ─► verify ─► build_staging ─► staging_migrate ─► staging_deploy ─► staging_smoke
+                                                                          │
+main    ─► verify ─► build ─────────► migrate ─────────► deploy ─────────┤─► smoke ─► promote
+```
+
+| Entorno | Job               | Environment    | WIF exige                                  |
+| -------- | ----------------- | -------------- | ------------------------------------------ |
+| staging  | `build_staging` … | `staging`      | `sub == repo:…:environment:staging`        |
+| prod     | `build` …         | `production`   | `ref == refs/heads/main`                   |
+
+Cuatro diferencias con producción, y el motivo de cada una:
+
+1. **Staging no tiene canario.** En producción el canario existe porque su URL no
+   es alcanzable desde CI y porque una revisión mala no puede tocar tráfico real.
+   En staging la URL es pública, así que el humo va contra ella y el lazo inverso
+   es un `update-traffic` a la revisión anterior en el propio `staging_smoke`: si
+   el humo falla, el job queda en rojo **y** el servicio vuelve a la revisión que
+   respondía.
+2. **La condición de la WIF atada al environment, no a la rama.** El despliegue
+   de staging viene de un pull_request, cuya `ref` es `refs/pull/N/merge`; atar
+   la identidad a `refs/heads/staging` impediría probar los PR. Lo que ata la
+   identidad al entorno es el claim `sub`, que GitHub sustituye por
+   `repo:…:environment:<env>` cuando el job declara `environment`.
+3. **`build` solo corre en `main`.** Antes su condición era "cualquier push", lo
+   que con la rama `staging` en juego significaba empujar al registro de
+   producción desde un push a staging.
+4. **`staging_smoke` es un `needs` de `migrate` y aparece en la condición de
+   `deploy`.** Un job con `always()` se ejecuta aunque un `needs` se haya omitido:
+   sin la segunda mitad de la condición, un humo en rojo se convertiría en
+   `migrate: skipped` y producción seguiría adelante.
+
+Los PR despliegan a staging (salvo los de un fork, que no tienen secrets) porque
+probarlos contra una base de verdad es el objetivo del entorno. Las migraciones
+de un PR corren contra la rama `staging` de Neon, nunca contra producción: es el
+primer sitio donde se ve que una migración es válida.
+
 ---
 
 ## 13. Fase 8 — Balanceador, Cloud Armor y dominio
@@ -1153,18 +1233,29 @@ El rollback de código (`update-traffic`) no revierte migraciones. Si una migrac
 
 **Un proyecto GCP por entorno y una rama de Neon por entorno** (la rama es frontera de datos; el proyecto, de permisos).
 
-|                 | dev                     | staging              | producción                                       |
-| --------------- | ----------------------- | -------------------- | ------------------------------------------------ |
-| Proyecto GCP    | `vondi-0q-dev`          | `vondi-0q-staging`   | `vondi-0q`                                       |
-| Rama Neon       | `ci-<n>` efímera        | `staging`            | `main` (protegida)                               |
-| Compute Neon    | 0.25 CU, suspende 5 min | 0.5 CU               | 1 CU, sin autosuspend                            |
-| `min-instances` | 0                       | 0                    | 1                                                |
-| Cloud Armor     | No                      | No                   | Sí                                               |
-| Despliegue      | Manual                  | Automático en `main` | Automático en `main` + protección de environment |
+**`staging` es la rama de prueba y `main` la de producción.** El pipeline es
+[§12.7](#127-staging-como-puerta-de-producción): `main` pasa por staging antes
+de llegar a producción.
+
+|                 | dev                     | staging                                       | producción                                       |
+| --------------- | ----------------------- | --------------------------------------------- | ------------------------------------------------ |
+| Proyecto GCP    | `vondi-0q-dev`          | `vondi-0q-staging`                            | `vondi-0q`                                       |
+| Rama Git        | —                        | `staging`                                     | `main`                                           |
+| Rama Neon       | `ci-<n>` efímera        | `staging`                                     | `main` (protegida)                               |
+| Servicio        | local                   | `vondi-api-staging`                           | `vondi-api` + `vondi-api-canary`                 |
+| Job de migraciones | —                    | `vondi-migrate-staging`                       | `vondi-migrate`                                  |
+| IP de egress    | —                        | `136.79.186.85`                               | `34.162.112.204`                                 |
+| Compute Neon    | 0.25 CU, suspende 5 min | 0.5 CU                                        | 1 CU, sin autosuspend                            |
+| `min-instances` | 0                       | 0                                             | 1                                                |
+| `ingress`       | —                        | `all` (URL pública)¹                          | `all` hasta que exista el LB (§13.2)             |
+| Cloud Armor     | No                      | No                                            | Sí                                               |
+| Despliegue      | Manual                  | Automático en `staging` y en cada PR          | Automático en `main` tras pasar por staging       |
+
+¹ Staging tiene ingress abierto porque su humo corre desde CI y no hay balanceador todavía. Es aceptable **mientras la base de staging no tenga datos reales**: la API real queda accesible a internet sin balanceador ni Cloud Armor que la filtre. Es el punto débil conocido de este entorno y lo que hace §13 (balanceador) un requisito antes de que staging reciba datos de preproducción reales.
 
 Anonimizar `staging` antes de cualquier prueba con datos personales y rotar las contraseñas de sus roles (heredadas de `main`).
 
-Costes: Cloud Run con CPU siempre asignada y `min-instances=1` factura de forma continua; compute Neon 1 CU sin autosuspend; Cloud NAT (hora + GB); Load Balancer; Cloud Armor; egreso. Control:
+Costes: Cloud Run con CPU siempre asignada y `min-instances=1` factura de forma continua; compute Neon 1 CU sin autosuspend; Cloud NAT (hora + GB) **uno por proyecto de entorno**; Load Balancer; Cloud Armor; egreso. Control:
 
 ```bash
 BILLING_ACCOUNT="$(gcloud billing projects describe "$PROJECT_ID" --format='value(billingAccountName)' | sed 's|billingAccounts/||')"
