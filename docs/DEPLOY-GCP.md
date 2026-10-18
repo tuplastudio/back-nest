@@ -743,6 +743,26 @@ gcloud run services logs read "$SERVICE" --region="$REGION" --limit=50
 
 Esperado en los logs: `Listening on http://0.0.0.0:8080 (production)` y `API base path: /api/v1`; ausencia de la línea de documentación (confirma `DOCS_ENABLED=false`).
 
+#### 11.5 Consultar `/docs` en un servicio privado
+
+`DOCS_ENABLED=true` exige `DOCS_BASIC_AUTH_USER` y `DOCS_BASIC_AUTH_PASSWORD`: sin ellas el proceso muere al arrancar (`env.validation.ts`). La referencia se monta en `/docs` y el documento en `/docs/openapi.json`, **fuera** del prefijo `api/v1`.
+
+En el canario y en producción la URL `run.app` es privada, así que hacen falta las dos credenciales a la vez, en cabeceras distintas:
+
+```bash
+URL=https://vondi-api-259853160457.us-east5.run.app
+ID=$(gcloud auth print-identity-token)
+# Basic -> Authorization (lo consume el guard de la app)
+# ID token -> X-Serverless-Authorization (lo consume la IAM de Cloud Run, con precedencia)
+curl -u "$DOCS_USER:$DOCS_PASS" \
+     -H "X-Serverless-Authorization: Bearer $ID" \
+     "$URL/docs/openapi.json"
+```
+
+El guard de docs solo lee `authorization` (`scalar-docs.service.ts`), igual que el guard de la API; por eso el token de identidad tiene que ir en `X-Serverless-Authorization`. Un navegador no puede enviar un ID token de Google, así que para ver la UI hay que tunelizar: `gcloud run services proxy "$SERVICE" --region="$REGION"`.
+
+Guardar `DOCS_BASIC_AUTH_PASSWORD` como env var en claro es aceptable en el canario; en producción, moverlo a Secret Manager (`docs-basic-auth-password`, ver la matriz de §9.1) igual que `JWT_ACCESS_SECRET`.
+
 ---
 
 ## 12. Fase 7 — GitHub Actions
@@ -1009,10 +1029,19 @@ jobs:
         run: |
           set -euo pipefail
           URL='${{ steps.target.outputs.url }}'
-          AUTH="Authorization: Bearer ${{ steps.target.outputs.token }}"
           # Sustituir /api/v1/<ruta-protegida> por una ruta real que exija JWT.
-          # Nota: el token de identidad de Cloud Run viaja en Authorization; si la app
-          # también lee Authorization, usar la cabecera X-Serverless-Authorization.
+          # En un servicio privado hay DOS capas de autenticación y ambas leen
+          # Authorization: la IAM de Cloud Run y el guard de la app
+          # (src/auth/auth.guard.ts lee solo `authorization`). Cloud Run valida
+          # X-Serverless-Authorization CON PRECEDENCIA sobre Authorization, así
+          # que el token de identidad va SIEMPRE ahí y el header Authorization
+          # queda libre para el JWT de la app:
+          #
+          #   Authorization:               <JWT de la app>       (o vacío)
+          #   X-Serverless-Authorization:  <ID token de Google>   (pasa IAM)
+          #
+          # Enviar solo el ID token en X-Serverless-Authorization no alcanza para
+          # probar una ruta autenticada: la app no ve ningún JWT y responde 401.
           CODE=$(curl -s -o /dev/null -w '%{http_code}' \
                  -H "X-Serverless-Authorization: Bearer ${{ steps.target.outputs.token }}" \
                  "$URL/api/v1/<ruta-protegida>")
