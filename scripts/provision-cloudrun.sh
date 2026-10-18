@@ -39,7 +39,17 @@ IMAGE_BASE="${IMAGE_BASE:-$REGION-docker.pkg.dev/$PROJECT_ID/$AR_REPOSITORY/vond
 # Diferencias por entorno. Los valores por defecto son los de preproducción;
 # producción está en §11.2 y se pasa explícitamente al ejecutar el script.
 INGRESS="${INGRESS:-all}"
-ALLOW_UNAUTH="${ALLOW_UNAUTH:---allow-unauthenticated}"
+# Sin `--allow-unauthenticated` por defecto, ni en staging. La URL `run.app`
+# es pública, así que permitir acceso anónimo deja la API de preproducción
+# abierta a internet: sin balanceador (§13.2) no hay Cloud Armor que la filtre,
+# y un endpoint de alta de tenants convierte eso en una base de datos abierta
+# a quien lo encuentre. Con IAM, quien prueba en staging necesita un token.
+# El acceso de CI va con un ID token contra el invoker del deployer.
+ALLOW_UNAUTH="${ALLOW_UNAUTH:---no-allow-unauthenticated}"
+# Cuenta que puede invocar el servicio (además de leerlo). El humo de CI usa
+# esta identidad: sin ella, Cloud Run responde 403 antes de que la aplicación
+# vea la petición.
+INVOKER_SA="${INVOKER_SA:-vondi-deployer@${PROJECT_ID}.iam.gserviceaccount.com}"
 MIN_INSTANCES="${MIN_INSTANCES:-0}"
 MAX_INSTANCES="${MAX_INSTANCES:-2}"
 CONCURRENCY="${CONCURRENCY:-15}"
@@ -124,13 +134,20 @@ COMMON=(
   --startup-probe="httpGet.path=/health/live,initialDelaySeconds=0,periodSeconds=2,timeoutSeconds=2,failureThreshold=30"
   --liveness-probe="httpGet.path=/health/live,periodSeconds=30,timeoutSeconds=3,failureThreshold=3"
 )
-$ALLOW_UNAUTH && COMMON+=(--allow-unauthenticated) || COMMON+=(--no-allow-unauthenticated)
+# Comparación de cadena, no `$VAR && algo`: eso intentaría ejecutar el valor de
+# la variable como comando, que es como `--allow-unauthenticated: command not
+# found` acaba dejando el servicio a medias.
+if [[ "$ALLOW_UNAUTH" == "--allow-unauthenticated" ]]; then
+  COMMON+=(--allow-unauthenticated)
+else
+  COMMON+=(--no-allow-unauthenticated)
+fi
 
 # `/health/live` y no `/health/ready` en los probes: ready devuelve 503 si
 # Postgres no responde, y un probe que falla reinicia el contenedor. Con el
 # compute de Neon despertándose, eso es un bucle de reinicios (§11.3).
 RUN_SERVICE=(
-  gcloud run services deploy "$SERVICE" "${COMMON[@]}"
+  gcloud run deploy "$SERVICE" "${COMMON[@]}"
   --set-env-vars="^@^NODE_ENV=production@API_PREFIX=api/v1@TRUST_PROXY_HOPS=$TRUST_PROXY_HOPS@DOCS_ENABLED=$DOCS_ENABLED@PII_LOG_REDACTION=true@LOG_LEVEL=log@DATABASE_POOL_MAX=10@DATABASE_CONNECTION_TIMEOUT_MS=15000@DATABASE_STATEMENT_TIMEOUT_MS=15000@CORS_ORIGINS=$CORS_ORIGINS@OUTBOUND_WEBHOOK_ENABLED=$OUTBOUND_WEBHOOK_ENABLED"
   --set-secrets="CONTROL_PLANE_DATABASE_URL=control-plane-db-url:latest,TENANT_PLANE_DATABASE_URL=tenant-plane-db-url:latest,JWT_ACCESS_SECRET=jwt-access-secret:latest,JWT_REFRESH_SECRET=jwt-refresh-secret:latest,PII_HMAC_KEY=pii-hmac-key:1,PII_ENCRYPTION_KEY=pii-encryption-key:1,NETPAY_ENCRYPTION_KEY=netpay-encryption-key:1,DOCS_BASIC_AUTH_PASSWORD=docs-basic-auth-password:latest"
 )
@@ -138,6 +155,19 @@ run "${RUN_SERVICE[@]}"
 
 if $DRY_RUN; then
   exit 0
+fi
+
+# El `run.invoker` va en el servicio, no en el proyecto: es una excepción
+# puntual a un rol que proyecto entero no necesita para desplegar.
+echo "run.invoker para el humo de CI"
+if $DRY_RUN; then
+  echo "  [dry-run] add-iam-policy-binding $SERVICE -> $INVOKER_SA (run.invoker)"
+else
+  gcloud run services add-iam-policy-binding "$SERVICE" \
+    --project="$PROJECT_ID" --region="$REGION" \
+    --member="serviceAccount:$INVOKER_SA" --role="roles/run.invoker" \
+    --condition=None --quiet >/dev/null
+  echo "  $INVOKER_SA"
 fi
 
 # -----------------------------------------------------------------------------

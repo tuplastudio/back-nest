@@ -391,7 +391,7 @@ jobs:
           PREVIOUS: ${{ steps.previous.outputs.revision }}
         run: |
           set -euo pipefail
-          gcloud run services deploy "$SERVICE" --region="$REGION" --image="$IMAGE" \
+          gcloud run deploy "$SERVICE" --region="$REGION" --image="$IMAGE" \
             --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic \
             --service-account="vondi-runtime@$PROJECT_ID.iam.gserviceaccount.com" \
             --revision-suffix="$REVISION" --quiet
@@ -409,36 +409,54 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ needs.staging_deploy.outputs.url }}
+
       - name: Setup Cloud SDK
         uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
 
-      # Sin token de identidad, a diferencia del humo de producción: el servicio
-      # de staging tiene ingress abierto, que es el precio de no depender todavía
-      # del balanceador global (§13.2). El compromiso está documentado en
-      # scripts/provision-cloudrun.sh y es aceptable mientras la base de staging
-      # no tenga datos reales.
+      # El servicio de staging exige IAM (scripts/provision-cloudrun.sh), así que
+      # el humo necesita identidad, igual que el de producción.
+      #
+      # El ID token va en `X-Serverless-Authorization`, no en `authorization`: en
+      # un servicio privado Cloud Run da precedencia a la cabecera propia, así
+      # que por `authorization` la petición pasa IAM y el guard de la
+      # aplicación —que solo lee `authorization`— no vería ningún JWT y
+      # respondería 401. Probar 401/403 en la ruta protegida es lo que
+      # demuestra que el auth está montado y que la ruta llega a la aplicación.
       - name: Liveness y readiness
         env:
           URL: ${{ needs.staging_deploy.outputs.url }}
+          TOKEN: ${{ steps.auth.outputs.id_token }}
         run: |
           set -euo pipefail
           CODE=000
           for _ in $(seq 1 45); do
-            CODE=$(curl -s -o /tmp/live.json -w '%{http_code}' "$URL/health/live" || true)
+            CODE=$(curl -s -o /tmp/live.json -w '%{http_code}' \
+                   -H "X-Serverless-Authorization: Bearer $TOKEN" "$URL/health/live" || true)
             [ "$CODE" = "200" ] && break
             sleep 2
           done
           [ "$CODE" = "200" ] || { echo "FAIL live: $CODE"; exit 1; }
 
-          READY=$(curl -s -o /tmp/ready.json -w '%{http_code}' "$URL/health/ready")
+          READY=$(curl -s -o /tmp/ready.json -w '%{http_code}' \
+                    -H "X-Serverless-Authorization: Bearer $TOKEN" "$URL/health/ready")
           [ "$READY" = "200" ] || { echo "FAIL ready: $READY"; cat /tmp/ready.json; exit 1; }
 
       - name: Una ruta protegida responde 401/403
         env:
           URL: ${{ needs.staging_deploy.outputs.url }}
+          TOKEN: ${{ steps.auth.outputs.id_token }}
         run: |
           set -euo pipefail
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/api/v1/api-keys")
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+                 -H "X-Serverless-Authorization: Bearer $TOKEN" "$URL/api/v1/api-keys")
           case "$CODE" in
             401|403) echo "OK ($CODE)" ;;
             *) echo "FAIL: $CODE"; exit 1 ;;
