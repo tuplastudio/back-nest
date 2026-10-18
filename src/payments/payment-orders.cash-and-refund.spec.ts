@@ -297,4 +297,13 @@ describe('Full refund through the gateway cancellation', () => {
     expect(f.refund).not.toHaveBeenCalled();
     expect(f.writes.some((w) => 'refundedAmount' in w)).toBe(false);
   });
+
+  it('does NOT try the other route after a 5xx: it is an unknown outcome, not a refusal', async () => {
+    const f = fixture([row()]);
+    f.cancelCharge.mockRejectedValueOnce(new NetpayRequestError(500, '/v3/transactions/tx-1/refund', 'boom'));
+    await expect(f.service.refund('order-1', 'x')).rejects.toThrow(/refused the request \(status 500\)/);
+    expect(f.refund).not.toHaveBeenCalled();
+    // The order is left refundable so the caller can retry.
+    expect(f.writes.some((w) => 'refundedAmount' in w)).toBe(false);
+  });
 });

@@ -354,6 +354,12 @@ export EGRESS_IP="$(gcloud compute addresses describe vondi-egress \
 echo "IP de salida: $EGRESS_IP"
 ```
 
+> **Ejecutado por [scripts/provision-network.sh](../scripts/provision-network.sh)**, que
+> es idempotente y además concede `roles/compute.networkUser` a `vondi-runtime` y
+> `vondi-migrator` sobre la subred (sin eso, un servicio en la VPC no puede
+> tomar la subred). No lo ejecutes sin leer su cabecera: la red solo sirve cuando
+> la IP reservada está autorizada después en Neon, y ese paso es fuera de GCP.
+
 Notas:
 
 - `--enable-private-ip-google-access` es necesario: con `all-traffic` el acceso a APIs de Google también pasa por la VPC.
@@ -789,8 +795,9 @@ tabla separa lo desplegado de lo que este documento diseña:
 | `--no-cpu-throttling`                      | activo              | inactivo                      |
 | `--ingress`                                | cerrado + LB        | `all`                         |
 | `DOCS_ENABLED`                             | `false`             | `true`                        |
-| Canario                                    | `vondi-api-canary`  | **no existe**                 |
+| Canario                                    | `vondi-api-canary`  | existe (creado 2026-10-17)    |
 | SA del Job de migraciones                  | `vondi-migrator`    | **sin asignar**               |
+| IAM del deployer para el canario            | `run.invoker` + `serviceAccountTokenCreator` | ambos concedidos 2026-10-17 |
 
 Consecuencias:
 
@@ -804,8 +811,9 @@ Consecuencias:
 - El Job de migraciones sin SA propia usa la cuenta de servicio por defecto del
   proyecto, que tiene más permisos de los que necesita. `deploy.yml` ya le pasa
   `--service-account` explícito, así que se corrige en el próximo deploy.
-- Sin canario, el paso `deploy` del pipeline fallará: hay que crearlo antes
-  (§11.2).
+- El canario ya existe (privado, `run.invoker` para el deployer) y el deployer
+  tiene `serviceAccountTokenCreator` sobre sí mismo, que es lo que exige emitir
+  el ID token del smoke. Falta lo de la red.
 
 ---
 
@@ -860,12 +868,12 @@ documento, todos por una razón concreta:
    `npm run secrets` (set commiteable) y `npm run secrets:history`.
 3. **La ruta protegida del smoke es real**, no un marcador: `GET /api/v1/api-keys`
    exige JWT (`API_PREFIX=api/v1`, ver `.env.example`).
-4. **El e2e es non-blocking (`continue-on-error`).** La suite tiene dos tests rojos
-   en `payments.e2e-spec.ts` ("frees the order for a retry when the provider fails
-   a refund", que falla también aislado, y "charges an order at most once under
-   concurrent charges", dependiente del orden). Un gate permanentemente rojo
-   impediría todo despliegue, así que informa sin bloquear hasta arreglarlos; el
-   resto del gate (format, lint, typecheck, migraciones, tests, Trivy) sí bloquea.
+4. **Las migraciones se aplican antes del seed.** `prisma:seed` escribe en el
+   esquema, así que una base recién creada fallaría. Se usa
+   `npm run db:migrate:deploy`, que es el mismo entrypoint que ejecuta el Job de
+   producción (`scripts/migrate.ts`), y no un `prisma migrate deploy` suelto: el
+   CI ejercita la misma ruta que producción, incluido el guard que rechaza el
+   pooler.
 
 Detalles de `verify` que no son obvios:
 

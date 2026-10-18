@@ -162,8 +162,16 @@ jobs:
           echo "::add-mask::$(openssl rand -hex 8)"
 
       # El catálogo RBAC (`roles`) lo siembra prisma/seed.ts, no la suite: sin
-      # él, `seedAdmin` no encuentra el rol platform-owner y toda ruta
-      # protegida responde 403.
+      # él, `seedAdmin` no encuentra el rol platform-owner y toda ruta protegida
+      # responde 403. Y el seed necesita el esquema, así que las migraciones se
+      # aplican antes, con el mismo entrypoint que usa el Job de producción
+      # (scripts/migrate.ts), no con un `prisma migrate deploy` suelto.
+      - name: Aplicar migraciones del plano de control
+        env:
+          NODE_ENV: test
+          CONTROL_PLANE_DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+        run: npm run db:migrate:deploy
+
       - name: Sembrar catálogo RBAC e identidades
         env:
           NODE_ENV: test
@@ -171,16 +179,7 @@ jobs:
           CONTROL_PLANE_DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
         run: npm run prisma:seed
 
-      # Non-blocking a propósito, y hay que decirlo: la suite tiene dos tests
-      # rojos que no son culpa del cableado (payments.e2e-spec.ts,
-      # "frees the order for a retry when the provider fails a refund" y
-      # "charges an order at most once under concurrent charges"; el primero
-      # falla también aislado, el segundo es dependiente del orden). Un gate
-      # rojo permanente dejaría el pipeline sin poder desplegar nunca, así que
-      # el e2e informa y no bloquea, hasta que esos dos se arreglen y este
-      # paso vuelva a ser bloqueante.
       - name: E2E
-        continue-on-error: true
         env:
           NODE_ENV: test
           CONTROL_PLANE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
