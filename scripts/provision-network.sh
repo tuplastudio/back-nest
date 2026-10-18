@@ -98,19 +98,21 @@ echo "Dirección externa reservada"
 if exists compute addresses describe "$ADDRESS" --region "$REGION" --project "$PROJECT_ID"; then
   echo "  $ADDRESS ya existe"
 else
-  run gcloud compute addresses create "$ADDRESS" --region "$REGION" \
-    --address-tier=PREMIUM --ip-version=IPV4 --purpose=VPC --project "$PROJECT_ID"
+  # Regional external address, PREMIUM. No --ip-version: it is not supported for
+# regional addresses (they are IPv4) and asking for it fails the create.
+run gcloud compute addresses create "$ADDRESS" --region "$REGION" \
+    --network-tier=PREMIUM --project "$PROJECT_ID"
 fi
 
 echo "Cloud NAT"
-NAT_IP=$(gcloud compute addresses describe "$ADDRESS" --region "$REGION" --project "$PROJECT_ID" --format='value(address)' 2>/dev/null || echo '')
+
 if exists compute routers nats describe "$NAT" --router "$ROUTER" --region "$REGION" --project "$PROJECT_ID"; then
   echo "  $NAT ya existe"
 else
   run gcloud compute routers nats create "$NAT" \
     --router "$ROUTER" --region "$REGION" \
-    --nat-ip-allocation-option=manual --nat-manual-ips="$NAT_IP" \
-    --source-subnetwork-ip-ranges-to-nat=ALL_SUBNETWORKS_ALL_IP_RANGES \
+    --nat-custom-subnet-ip-ranges="$SUBNET" \
+    --nat-external-ip-pool="$ADDRESS" \
     --enable-logging --project "$PROJECT_ID"
 fi
 
@@ -121,24 +123,28 @@ for SA in "$RUNTIME_SA" "$MIGRATOR_SA"; do
     --member="serviceAccount:$SA" --role="roles/compute.networkUser"
 done
 
+NAT_IP=$(gcloud compute addresses describe "$ADDRESS" --region "$REGION" --project "$PROJECT_ID" --format='value(address)' 2>/dev/null || echo '')
+
 cat <<EOF
 
-Red lista${NAT_IP:+ (IP reservada: $NAT_IP)}.
+Red lista (IP reservada: $NAT_IP).
 
-Falta el paso fuera de GCP, y es el que hace que esto sirva de algo:
+El paso siguiente solo es seguro si Neon acepta esa IP. Cómo comprobarlo sin
+arriesgar el servicio: ejecutar el Job de migraciones ya conectado al NAT. Si
+termina bien, la base responde desde esa IP y se puede mover el servicio.
 
-  Autorizar $NAT_IP/32 en Neon (Settings → Network Restrictions / Allowed IPs)
+  gcloud run jobs deploy vondi-migrate --region=us-east5 
+    --image=\$(gcloud run jobs describe vondi-migrate --region=us-east5 
+      --format='value(spec.template.spec.template.spec.containers[0].image)') 
+    --network=$NETWORK --subnet=$SUBNET --vpc-egress=all-traffic 
+    --service-account=vondi-migrator@$PROJECT_ID.iam.gserviceaccount.com 
+    --tasks=1 --parallelism=1 --max-retries=0 --quiet
+  gcloud run jobs execute vondi-migrate --region=us-east5 --wait
 
-Hasta que esa IP esté en la allowlist, NO ejecutes el paso siguiente: el
-servicio dejaría de alcanzar la base. Cuando ya esté:
+Si el Job falla por conexión, Neon tiene una allowlist que no incluye la IP:
+autorizar $NAT_IP/32 en Neon y volver a ejecutar. Con el Job en verde, el
+servicio puede moverse a la VPC:
 
-  gcloud run services update vondi-api --region=$REGION \\
+  gcloud run services update vondi-api --region=$REGION 
     --network=$NETWORK --subnet=$SUBNET --vpc-egress=all-traffic --quiet
-
-  gcloud run jobs update vondi-migrate --region=$REGION \\
-    --network=$NETWORK --subnet=$SUBNET --vpc-egress=all-traffic --quiet
-
-Y añade al workflow, en los pasos de deploy y migrate:
-
-  --network=$NETWORK --subnet=$SUBNET --vpc-egress=all-traffic
 EOF
