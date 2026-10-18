@@ -162,7 +162,7 @@ Proyecto GCP: vondi-0q                       (un proyecto por entorno)
     ├── netpay-deployer   GitHub Actions (WIF)
     └── netpay-migrator   Job de migraciones
 
-Neon: proyecto "vondi"        (región aws-us-east-2, plan Scale)
+Neon: proyecto "dev"          (región aws-us-east-2, plan Scale)
 ├── main     producción  (protegida, 1 CU, sin autosuspend)
 ├── staging  preproducción (protegida mientras contenga datos reales)
 └── ci-<n>   efímera por PR (desde staging anonimizada, se borra al cerrar)
@@ -185,7 +185,7 @@ export SERVICE="netpay-api"
 export CANARY_SERVICE="netpay-api-canary"
 export MIGRATE_JOB="netpay-migrate"
 export AR_REPO="netpay-api"
-export GH_REPO="tupla-studio/netpay-api"   # DEBE coincidir con el repositorio real
+export GH_REPO="tuplastudio/back-nest"     # DEBE coincidir con el repositorio real
 export DB_NAME="neondb"
 export IMAGE_BASE="$REGION-docker.pkg.dev/$PROJECT_ID/$AR_REPO/netpay-api"
 ```
@@ -379,7 +379,7 @@ Neon genera el ID del proyecto (p. ej. `cool-leaf-12345678`); el nombre es libre
 npm i -g neonctl          # binario: neonctl (alias: neon)
 export NEON_API_KEY="…"   # API key personal o de organización
 
-neonctl projects create --name vondi --region-id aws-us-east-2
+neonctl projects create --name dev --region-id aws-us-east-2
 export NEON_PROJECT_ID="<id devuelto>"
 
 neonctl branches create --project-id "$NEON_PROJECT_ID" --name staging --parent main
@@ -703,7 +703,7 @@ COMMON=(
   --concurrency=15 --cpu=1 --memory=512Mi --timeout=60 --no-cpu-throttling
   --startup-probe="httpGet.path=/health/live,initialDelaySeconds=0,periodSeconds=2,timeoutSeconds=2,failureThreshold=30"
   --liveness-probe="httpGet.path=/health/live,periodSeconds=30,timeoutSeconds=3,failureThreshold=3"
-  --set-env-vars="^@^NODE_ENV=production@API_PREFIX=api/v1@API_BASE_DOMAIN=api.vondi.tupla.studio@CORS_ORIGINS=https://app.vondi.tupla.studio@TRUST_PROXY_HOPS=2@DOCS_ENABLED=false@PII_LOG_REDACTION=true@LOG_LEVEL=log@DATABASE_POOL_MAX=10@DATABASE_CONNECTION_TIMEOUT_MS=15000@DATABASE_STATEMENT_TIMEOUT_MS=15000@PAYMENT_REDIRECT_URL=https://api.vondi.tupla.studio/api/v1/payments/return@PAYMENT_CANCEL_URL=https://app.vondi.tupla.studio/payments/cancelled"
+  --set-env-vars="^@^NODE_ENV=production@API_PREFIX=api/v1@API_BASE_DOMAIN=netpay.tupla.dev@CORS_ORIGINS=https://app.tupla.dev@TRUST_PROXY_HOPS=2@DOCS_ENABLED=false@PII_LOG_REDACTION=true@LOG_LEVEL=log@DATABASE_POOL_MAX=10@DATABASE_CONNECTION_TIMEOUT_MS=15000@DATABASE_STATEMENT_TIMEOUT_MS=15000@PAYMENT_REDIRECT_URL=https://netpay.tupla.dev/api/v1/payments/return@PAYMENT_CANCEL_URL=https://app.tupla.dev/payments/cancelled"
   --set-secrets="CONTROL_PLANE_DATABASE_URL=control-plane-db-url:latest,TENANT_PLANE_DATABASE_URL=tenant-plane-db-url:latest,JWT_ACCESS_SECRET=jwt-access-secret:latest,JWT_REFRESH_SECRET=jwt-refresh-secret:latest,PII_HMAC_KEY=pii-hmac-key:latest,PII_ENCRYPTION_KEY=pii-encryption-key:latest,NETPAY_ENCRYPTION_KEY=netpay-encryption-key:latest"
 )
 
@@ -951,7 +951,7 @@ Un entorno no es un conjunto de pasos manuales: es el mismo `PROJECT_ID` pasado 
 ```bash
 # 1. Proyecto (una vez). El ID global es único y no se recycle: se elige el
 #    nombre definitivo antes de crearlo.
-gcloud projects create vondi-0q-staging --organization=<ORG_ID> --name="vondi staging"
+gcloud projects create vondi-0q-staging --organization=<ORG_ID> --name="netpay-api staging"
 CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud beta billing projects link \
   vondi-0q-staging --billing-account=<BILLING_ID>
 
@@ -1042,6 +1042,15 @@ primer sitio donde se ve que una migración es válida.
 
 ## 13. Fase 8 — Balanceador, Cloud Armor y dominio
 
+> **Descartado por decisión propia (2026-10-18).** Se sirve con la URL `run.app` que
+> da Cloud Run y no se monta balanceador. El domain mapping de Cloud Run —que daría
+> certificado gestionado sin balanceador— no está disponible en `us-east5`; y con
+> proyectos separados por entorno un balanceador no puede atender los dos hostnames, porque
+> un serverless NEG solo referencia servicios de su propio proyecto. Serían dos, ~40
+> USD/mes. La sección se conserva por si se revisa, y porque describe lo que habría que
+> rehacer.
+
+
 La URL `run.app` no admite Cloud Armor ni dominio propio con certificado gestionado; para una API pública se usa un balanceador global.
 
 ```
@@ -1095,21 +1104,21 @@ gcloud compute backend-services update netpay-be --global \
 gcloud compute url-maps create netpay-lb --default-service=netpay-be
 
 gcloud compute ssl-certificates create netpay-cert \
-  --domains="api.vondi.tupla.studio" --global
+  --domains="netpay.tupla.dev" --global
 
 gcloud compute target-https-proxies create netpay-proxy \
   --ssl-certificates=netpay-cert --url-map=netpay-lb
 
-gcloud compute forwarding-rules create vondi-fr \
+gcloud compute forwarding-rules create netpay-fr \
   --global --load-balancing-scheme=EXTERNAL_MANAGED --network-tier=PREMIUM \
   --target-https-proxy=netpay-proxy --address=netpay-lb-ip --ports=443
 ```
 
 ### 13.3 DNS
 
-Crear un registro `A` para `api.vondi.tupla.studio` hacia `netpay-lb-ip` **antes** de esperar el certificado gestionado (queda en `PROVISIONING` hasta que el DNS resuelve; puede tardar hasta decenas de minutos).
+Crear un registro `A` para `netpay.tupla.dev` hacia `netpay-lb-ip` **antes** de esperar el certificado gestionado (queda en `PROVISIONING` hasta que el DNS resuelve; puede tardar hasta decenas de minutos).
 
-Los tenants usan subdominios derivados de `API_BASE_DOMAIN` (`acme.api.vondi.tupla.studio`). Un certificado por dominio exacto **no** los cubre: se necesita un registro DNS comodín (`*.api.vondi.tupla.studio`) y un certificado que lo incluya (certificado autogestionado, o certificado gestionado con autorización DNS en Certificate Manager). Definirlo antes del lanzamiento si la resolución de tenant es por subdominio.
+Los tenants usan subdominios derivados de `API_BASE_DOMAIN` (`acme.netpay.tupla.dev`). Un certificado por dominio exacto **no** los cubre: se necesita un registro DNS comodín (`*.netpay.tupla.dev`) y un certificado que lo incluya (certificado autogestionado, o certificado gestionado con autorización DNS en Certificate Manager). Definirlo antes del lanzamiento si la resolución de tenant es por subdominio.
 
 ---
 
@@ -1153,7 +1162,7 @@ Uptime check externo contra el dominio público:
 ```bash
 gcloud monitoring uptime create netpay-api-ready \
   --resource-type=uptime-url \
-  --resource-labels=host=api.vondi.tupla.studio,project_id="$PROJECT_ID" \
+  --resource-labels=host=netpay.tupla.dev,project_id="$PROJECT_ID" \
   --path=/health/ready --protocol=https --period=1 --timeout=10
 ```
 
@@ -1293,21 +1302,22 @@ que "el renombrado está a medias".
 | `netpay-migrate`, `netpay-migrate-staging`   | Job de migraciones.                                        |
 | `netpay-runtime`, `netpay-deployer`, `netpay-migrator` | Cuentas de servicio.                                      |
 | `netpay-api` (Artifact Registry, ambos proyectos) | Registro de imágenes.                                 |
+| `JWT_ISSUER`, `JWT_AUDIENCE`                 | Issuer y audience del JWT. Cambiarlos invalida los tokens emitidos; con el producto sin usuarios se hizo de una vez. |
 
 El `PREFIX` de `scripts/provision-environment.sh`, `provision-cloudrun.sh`,
 `provision-secrets.sh` y `provision-network.sh` es lo que decide esos nombres:
 `SERVICE_PREFIX=netpay ./scripts/provision-environment.sh`. Renombrar el producto
 otra vez es cambiar esa variable, no editar cadenas en cuatro ficheros.
 
+`API_BASE_DOMAIN` apunta a la URL que da Cloud Run, no a un dominio propio: `netpay-api-lfspf6pqtq-ul.a.run.app` en producción y `netpay-api-staging-xgb5zmvjbq-ul.a.run.app` en staging. Está en la variable de cada servicio y no solo en el valor por defecto del código, porque el valor por defecto solo puede ser el de uno de los dos entornos.
+
 **Lo que sigue con `vondi` y por qué:**
 
 | Nombre                                     | Por qué no se renombra                                                             |
 | ------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `vondi-0q`, `vondi-0q-staging`             | El ID de un proyecto GCP es inmutable. Solo se puede cambiar el nombre a mostrar.     |
+| `vondi-0q`, `vondi-0q-staging`             | El ID de un proyecto GCP es inmutable. El nombre a mostrar ya es `netpay-api prod` y `netpay-api staging`. |
 | `vondi-net`, `vondi-subnet`, `vondi-router`, `vondi-nat`, `vondi-egress` | No se renombran: hay que recrearlos, y **recrear el NAT cambia la IP de salida**, que es la que se autoriza en Neon. |
-| `JWT_ISSUER=vondi-api`, `JWT_AUDIENCE=vondi-api-v1` | Cambiarlos **invalida todos los tokens emitidos** (toda sesión abierta). Es una migración, no un renombrado. |
-| `api.vondi.tupla.studio`, `app.vondi.tupla.studio` | DNS y certificados. |
-| base de datos `vondi` en Neon              | `ALTER DATABASE ... RENAME` es posible, pero rompe las cuatro URLs de conexión de golpe. |
+| `netpay.tupla.dev`, `app.tupla.dev` | DNS y certificados. |
 
 ### 17.1 La rama `staging` de Neon nació como copia
 
@@ -1343,7 +1353,7 @@ Costes: Cloud Run con CPU siempre asignada y `min-instances=1` factura de forma 
 BILLING_ACCOUNT="$(gcloud billing projects describe "$PROJECT_ID" --format='value(billingAccountName)' | sed 's|billingAccounts/||')"
 
 gcloud billing budgets create --billing-account="$BILLING_ACCOUNT" \
-  --display-name="vondi mensual" --budget-amount=500USD \
+  --display-name="netpay mensual" --budget-amount=500USD \
   --filter-projects="projects/$PROJECT_ID" \
   --threshold-rule=percent=0.5 --threshold-rule=percent=0.8 \
   --threshold-rule=percent=1.0 --threshold-rule=percent=1.5
@@ -1550,8 +1560,8 @@ El canario comparte la BD de producción. El smoke es de solo lectura y los webh
 ```
 NODE_ENV=production
 API_PREFIX=api/v1
-API_BASE_DOMAIN=api.vondi.tupla.studio
-CORS_ORIGINS=https://app.vondi.tupla.studio
+API_BASE_DOMAIN=netpay.tupla.dev
+CORS_ORIGINS=https://app.tupla.dev
 TRUST_PROXY_HOPS=2                         # verificar (§11.4)
 DOCS_ENABLED=false
 PII_LOG_REDACTION=true
@@ -1576,8 +1586,8 @@ THROTTLE_LIMIT=300
 THROTTLE_TTL=60s
 API_KEY_PREFIX=mtb
 API_KEY_DEFAULT_TTL_DAYS=90
-PAYMENT_REDIRECT_URL=https://api.vondi.tupla.studio/api/v1/payments/return
-PAYMENT_CANCEL_URL=https://app.vondi.tupla.studio/payments/cancelled
+PAYMENT_REDIRECT_URL=https://netpay.tupla.dev/api/v1/payments/return
+PAYMENT_CANCEL_URL=https://app.tupla.dev/payments/cancelled
 OUTBOUND_WEBHOOK_ENABLED=true              # false en el canario
 OUTBOUND_WEBHOOK_REQUIRE_HTTPS=true
 OUTBOUND_WEBHOOK_ALLOWED_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,169.254.0.0/16

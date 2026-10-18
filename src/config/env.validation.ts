@@ -45,7 +45,7 @@ export const envSchema = z
     PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
     API_PREFIX: z.string().min(1).default('api/v1'),
     CORS_ORIGINS: csv,
-    API_BASE_DOMAIN: z.string().min(1).default('api.vondi.tupla.studio'),
+    API_BASE_DOMAIN: z.string().min(1).default('netpay-api-lfspf6pqtq-ul.a.run.app'),
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
 
     CONTROL_PLANE_DATABASE_URL: z
@@ -174,8 +174,8 @@ export const envSchema = z
 
     JWT_ACCESS_TTL: duration.default('15m'),
     JWT_REFRESH_TTL: duration.default('30d'),
-    JWT_ISSUER: z.string().min(1).default('vondi-api'),
-    JWT_AUDIENCE: z.string().min(1).default('vondi-api-v1'),
+    JWT_ISSUER: z.string().min(1).default('netpay-api'),
+    JWT_AUDIENCE: z.string().min(1).default('netpay-api-v1'),
 
     ARGON2_MEMORY_COST: z.coerce.number().int().min(1024).max(1_048_576).default(19_456),
     ARGON2_TIME_COST: z.coerce.number().int().min(1).max(16).default(2),
