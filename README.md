@@ -2,6 +2,9 @@
 
 # NestJS + Prisma multitenancy base
 
+[![codecov](https://codecov.io/gh/tuplastudio/back-nest/branch/main/graph/badge.svg)](https://codecov.io/gh/tuplastudio/back-nest)
+[![CI](https://github.com/tuplastudio/back-nest/actions/workflows/ci.yml/badge.svg)](https://github.com/tuplastudio/back-nest/actions/workflows/ci.yml)
+
 # ---------------------------------------------------------------------------
 
 # Architecture
