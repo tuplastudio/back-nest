@@ -196,23 +196,47 @@ fi
 #
 #   * producción: `ref == refs/heads/main`. Nada que no sea la rama de
 #     producción despliega a producción, ni siquiera otro workflow del repo.
-#   * staging (GIT_ENVIRONMENT): `sub == repo:…:environment:staging`. Aquí el
-#     despliegue viene de un pull_request, así que atar a `ref` no sirve (la ref
-#     de un PR es `refs/pull/N/merge`); lo que ata la identidad al entorno es el
-#     claim `sub`, que GitHub sustituye por el environment cuando el job lo
-#     declara. Sin esta condición, cualquier rama del repositorio —incluida la
-#     de un colaborador— podría desplegar a staging.
+#   * staging (GIT_ENVIRONMENT): `environment == staging`. Aquí el despliegue
+#     viene de un pull_request, así que atar a `ref` no sirve (la ref de un PR
+#     es `refs/pull/N/merge`). Sin esta condición, cualquier rama del
+#     repositorio —incluida la de un colaborador— podría desplegar a staging.
+#
+# POR QUÉ EL CLAIM `environment` Y NO EL `sub`
+#
+# Lo natural sería `sub == 'repo:OWNER/REPO:environment:staging'`, y en un
+# repositorio anterior a julio de 2026 funciona. Este se creó después, así que
+# usa el formato inmutable: `repo:tuplastudio@119982788/back-nest@1423773262:…`,
+# con los IDs dentro. Una condición escrita con el formato anterior no falla al
+# desplegar —falla la autenticación, con "The given credential is rejected by
+# the attribute condition", que no dice nada del formato— y por eso atar la
+# identidad a `sub` es una trampa cada vez que GitHub cambia el formato.
+#
+# El claim `environment` dice lo mismo ("el job declaró este environment") y no
+# cambia con el formato ni con un renombrado del repositorio.
 if [[ -n "$GIT_ENVIRONMENT" ]]; then
-  CONDITION="assertion.repository == '$GH_REPO' && assertion.sub == 'repo:$GH_REPO:environment:$GIT_ENVIRONMENT'"
+  CONDITION="assertion.repository == '$GH_REPO' && assertion.environment == '$GIT_ENVIRONMENT'"
 else
   CONDITION="assertion.repository == '$GH_REPO' && assertion.ref == 'refs/heads/main'"
 fi
 
-run gcloud iam workload-identity-pools providers create-oidc github \
-  --project "$PROJECT_ID" --location=global --workload-identity-pool=github \
-  --issuer-uri="https://token.actions.githubusercontent.com" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner,attribute.ref=assertion.ref" \
-  --attribute-condition="$CONDITION"
+MAPPING="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner,attribute.ref=assertion.ref"
+
+# `update-oidc` y no siempre `create-oidc`: cambiar el criterio de atributos es
+# una corrección de seguridad, y tener que borrar el provider para poderla
+# aplicar es una forma de que la corrección no se aplique nunca.
+if exists iam workload-identity-pools providers describe github \
+  --project "$PROJECT_ID" --location=global --workload-identity-pool=github; then
+  run gcloud iam workload-identity-pools providers update-oidc github \
+    --project "$PROJECT_ID" --location=global --workload-identity-pool=github \
+    --attribute-mapping="$MAPPING" \
+    --attribute-condition="$CONDITION"
+else
+  run gcloud iam workload-identity-pools providers create-oidc github \
+    --project "$PROJECT_ID" --location=global --workload-identity-pool=github \
+    --issuer-uri="https://token.actions.githubusercontent.com" \
+    --attribute-mapping="$MAPPING" \
+    --attribute-condition="$CONDITION"
+fi
 
 # principalSet con el NÚMERO de proyecto, no el ID: con el ID la binding se
 # crea sin error y no concede nada.

@@ -995,7 +995,7 @@ main    ─► verify ─► build ─────────► migrate ──
 
 | Entorno | Job               | Environment    | WIF exige                                  |
 | -------- | ----------------- | -------------- | ------------------------------------------ |
-| staging  | `build_staging` … | `staging`      | `sub == repo:…:environment:staging`        |
+| staging  | `build_staging` … | `staging`      | `environment == staging`                   |
 | prod     | `build` …         | `production`   | `ref == refs/heads/main`                   |
 
 Cuatro diferencias con producción, y el motivo de cada una:
@@ -1006,11 +1006,19 @@ Cuatro diferencias con producción, y el motivo de cada una:
    es un `update-traffic` a la revisión anterior en el propio `staging_smoke`: si
    el humo falla, el job queda en rojo **y** el servicio vuelve a la revisión que
    respondía.
-2. **La condición de la WIF atada al environment, no a la rama.** El despliegue
-   de staging viene de un pull_request, cuya `ref` es `refs/pull/N/merge`; atar
-   la identidad a `refs/heads/staging` impediría probar los PR. Lo que ata la
-   identidad al entorno es el claim `sub`, que GitHub sustituye por
-   `repo:…:environment:<env>` cuando el job declara `environment`.
+2. **La condición de la WIF atada al claim `environment`, no a la rama.** El
+   despliegue de staging viene de un pull_request, cuya `ref` es
+   `refs/pull/N/merge`; atar la identidad a `refs/heads/staging` impediría
+   probar los PR. Lo que ata la identidad al entorno es el claim `environment`
+   que GitHub emite cuando el job declara `environment: staging`.
+
+   Y **no** el `sub`, que es lo que se escribiría por costumbre
+   (`assertion.sub == 'repo:tuplastudio/back-nest:environment:staging'`): los
+   repositorios creados después del 15 de julio de 2026 usan un formato inmutable
+   que incluye los IDs (`repo:tuplastudio@119982788/back-nest@1423773262:…`), así
+   que esa condición nunca casa. El síntoma no dice nada del formato —la
+   autenticación falla con "The given credential is rejected by the attribute
+   condition"— y el claim `environment` dice lo mismo sin depender del formato.
 3. **`build` solo corre en `main`.** Antes su condición era "cualquier push", lo
    que con la rama `staging` en juego significaba empujar al registro de
    producción desde un push a staging.
