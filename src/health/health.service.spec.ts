@@ -105,11 +105,11 @@ describe('readinessFor', () => {
   });
 
   it('does not leak dependency names or latencies when trimmed', () => {
-    const trimmed = readinessFor(report, false) as Record<string, unknown>;
+    // The assertion that matters: the trimmed body has exactly these two keys,
+    // so there is nothing left to enumerate. Checking the keys beats checking
+    // three absences, which would still pass if a fourth field appeared.
+    const trimmed = readinessFor(report, false);
 
-    expect(trimmed).not.toHaveProperty('checks');
-    expect(trimmed).not.toHaveProperty('uptimeSeconds');
-    expect(trimmed).not.toHaveProperty('version');
-    expect(Object.keys(trimmed)).toEqual(['status', 'timestamp']);
+    expect(Object.keys(trimmed).sort()).toEqual(['status', 'timestamp']);
   });
 });
