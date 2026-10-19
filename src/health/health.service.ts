@@ -19,6 +19,37 @@ export interface ReadinessReport {
 }
 
 /**
+ * Readiness probe data an anonymous caller is allowed to see.
+ *
+ * The readiness route is public so that CI and uptime checks can reach it
+ * without credentials, which also means anyone on the internet can ask. The
+ * full report names both databases and their latency: reconnaissance, with no
+ * operational value, because the status code already carries the verdict.
+ */
+export interface PublicReadinessReport {
+  /** Aggregate status. */
+  status: 'ok' | 'degraded';
+  /** ISO timestamp of the check. */
+  timestamp: string;
+}
+
+/**
+ * Narrows a readiness report to what the caller may see.
+ *
+ * Pure on purpose, and that is the point: "who sees what" is policy, not
+ * plumbing, so it lives where it can be exercised without booting Nest —and
+ * without the controller's decorators, which pull `@nestjs/throttler` into the
+ * module graph.
+ */
+export function readinessFor(
+  report: ReadinessReport,
+  authenticated: boolean,
+): ReadinessReport | PublicReadinessReport {
+  if (authenticated) return report;
+  return { status: report.status, timestamp: report.timestamp };
+}
+
+/**
  * Implements the health checks behind {@link HealthController}.
  *
  * Kept separate from the controller so the checks can be exercised directly in
@@ -29,11 +60,6 @@ export class HealthService {
   private readonly logger = new Logger(HealthService.name);
   private readonly startedAt = Date.now();
 
-  /**
-   * @param controlPlane Control-plane Prisma service.
-   * @param tenantPlane Tenant Prisma service.
-   * @param version Application version, injected by the module.
-   */
   constructor(
     private readonly controlPlane: ControlPlanePrismaService,
     private readonly tenantPlane: TenantPrismaService,
@@ -41,9 +67,8 @@ export class HealthService {
   ) {}
 
   /**
-   * Liveness check. Intentionally does not touch the database.
-   *
-   * @returns A minimal payload proving the event loop is responsive.
+   * Liveness: the process is responsive. Never touches the database, so a
+   * database outage cannot turn into a restart storm.
    */
   liveness(): { status: 'ok'; uptimeSeconds: number; timestamp: string } {
     return {
@@ -54,9 +79,7 @@ export class HealthService {
   }
 
   /**
-   * Readiness check with per-dependency timing.
-   *
-   * @returns A report whose `status` is `degraded` when any check failed.
+   * Readiness: both database planes answer. Degraded if either fails.
    */
   async readiness(): Promise<ReadinessReport> {
     const checks: ReadinessReport['checks'] = {};
@@ -83,24 +106,17 @@ export class HealthService {
   }
 
   /**
-   * Runs a probe and records how long it took.
-   *
-   * @param probe The operation to time.
-   * @returns A status record with latency and, on failure, a safe message.
+   * Runs one probe and reports how long it took, without leaking the error.
    */
   private async time(
     probe: () => Promise<void>,
-  ): Promise<{ status: 'up' | 'down'; latencyMs: number; message?: string }> {
+  ): Promise<{ status: 'up' | 'down'; latencyMs?: number; message?: string }> {
     const startedAt = Date.now();
     try {
       await probe();
       return { status: 'up', latencyMs: Date.now() - startedAt };
     } catch (error) {
-      // The detail goes to the log, never to the body: these probes are public
-      // and unthrottled, and a driver message can name the host, the database,
-      // the schema and the failing statement.
-      const detail = (error as Error).message;
-      this.logger.warn(`Health check failed: ${detail}`);
+      this.logger.warn(`Health probe failed: ${(error as Error).message}`);
       return { status: 'down', latencyMs: Date.now() - startedAt, message: 'probe failed' };
     }
   }

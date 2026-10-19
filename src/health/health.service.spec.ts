@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { jest } from '@jest/globals';
-import { HealthService } from './health.service';
+import { HealthService, readinessFor, type ReadinessReport } from './health.service';
 import type { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service';
 
@@ -66,5 +66,50 @@ describe('HealthService.readiness', () => {
     const report = await serviceFor(null, null).readiness();
     expect(typeof report.checks['control-plane-db']?.latencyMs).toBe('number');
     expect(report.version).toBe('1.0.0');
+  });
+});
+
+describe('readinessFor', () => {
+  const report: ReadinessReport = {
+    status: 'ok',
+    uptimeSeconds: 42,
+    timestamp: '2026-10-18T00:00:00.000Z',
+    version: '1.0.0',
+    checks: {
+      'control-plane-db': { status: 'up', latencyMs: 21 },
+      'tenant-plane': { status: 'up', latencyMs: 22 },
+    },
+  };
+
+  it('trims the report for an anonymous caller', () => {
+    // The route is public, so anyone can ask. Handing out both database names
+    // and their latency is reconnaissance with no operational gain: the status
+    // code already carries what a health check needs.
+    expect(readinessFor(report, false)).toEqual({
+      status: 'ok',
+      timestamp: report.timestamp,
+    });
+  });
+
+  it('keeps the detail for a caller that presented a credential', () => {
+    expect(readinessFor(report, true)).toEqual(report);
+  });
+
+  it('still reports degraded to an anonymous caller', () => {
+    // Trimming the body must not soften the verdict: a 503 with `degraded` is
+    // what makes a load balancer stop routing here.
+    expect(readinessFor({ ...report, status: 'degraded' }, false)).toEqual({
+      status: 'degraded',
+      timestamp: report.timestamp,
+    });
+  });
+
+  it('does not leak dependency names or latencies when trimmed', () => {
+    const trimmed = readinessFor(report, false) as Record<string, unknown>;
+
+    expect(trimmed).not.toHaveProperty('checks');
+    expect(trimmed).not.toHaveProperty('uptimeSeconds');
+    expect(trimmed).not.toHaveProperty('version');
+    expect(Object.keys(trimmed)).toEqual(['status', 'timestamp']);
   });
 });

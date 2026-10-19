@@ -3,37 +3,12 @@ import { ApiExcludeEndpoint, ApiOperation, ApiResponse, ApiTags } from '@nestjs/
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { Public } from '../common/decorators/public.decorator';
-import { HealthService } from './health.service';
-
-/**
- * Readiness report for an unauthenticated caller: the verdict, nothing else.
- *
- * Deliberately narrower than {@link HealthReport}. The status code already
- * carries everything an uptime check needs; the body is what a scanner would
- * read.
- */
-interface PublicHealthReport {
-  /** `ok` when every dependency is reachable, otherwise `degraded`. */
-  status: 'ok' | 'degraded';
-  /** ISO timestamp of the check. */
-  timestamp: string;
-}
-
-/**
- * Response body returned by the readiness probe.
- */
-interface HealthReport {
-  /** `ok` when every dependency is reachable, otherwise `degraded`. */
-  status: 'ok' | 'degraded';
-  /** Uptime in seconds since process start. */
-  uptimeSeconds: number;
-  /** ISO timestamp of the check. */
-  timestamp: string;
-  /** Application version from `package.json`. */
-  version: string;
-  /** Per-dependency state. */
-  checks: Record<string, { status: 'up' | 'down'; latencyMs?: number; message?: string }>;
-}
+import {
+  HealthService,
+  readinessFor,
+  type PublicReadinessReport,
+  type ReadinessReport,
+} from './health.service';
 
 /**
  * Liveness and readiness endpoints.
@@ -95,17 +70,18 @@ export class HealthController {
   })
   @ApiResponse({ status: 200, description: 'All dependencies are reachable.' })
   @ApiResponse({ status: 503, description: 'At least one dependency is unavailable.' })
-  async ready(@Req() request: Request): Promise<HealthReport | PublicHealthReport> {
+  async ready(@Req() request: Request): Promise<ReadinessReport | PublicReadinessReport> {
     const report = await this.health.readiness();
 
-    // An API key or a token in the header means the caller is inside the trust
-    // boundary; anything else is an anonymous probe.
-    const authenticated = Boolean(request.headers.authorization);
-    if (!authenticated) {
-      return { status: report.status, timestamp: report.timestamp };
-    }
+    // Both `authorization` and Cloud Run's own `X-Serverless-Authorization`
+    // count: the latter is what carries the identity token of an authenticated
+    // probe from CI, and Cloud Run gives it precedence. Reading only the former
+    // would hide the report from the very client that pays for it.
+    const authenticated = Boolean(
+      request.headers.authorization || request.headers['x-serverless-authorization'],
+    );
 
-    return report;
+    return readinessFor(report, authenticated);
   }
 
   /**
