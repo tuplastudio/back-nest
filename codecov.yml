@@ -27,7 +27,7 @@ comment:
 
 # Fuera del informe: artefactos (coverage/), código generado (dist/,
 # src/generated/), y código que Jest no instrumenta porque vive fuera de
-# `collectCoverageFrom` (test/, prisma/, scripts/, y el proyecto Astro de ui/).
+# `collectCoverageFrom` (test/, prisma/ y scripts/).
 ignore:
   - 'coverage/**'
   - 'dist/**'
@@ -35,4 +35,3 @@ ignore:
   - 'test/**'
   - 'prisma/**'
   - 'scripts/**'
-  - 'ui/**'
