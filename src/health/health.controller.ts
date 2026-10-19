@@ -5,6 +5,7 @@ import type { Request, Response } from 'express';
 import { Public } from '../common/decorators/public.decorator';
 import {
   HealthService,
+  isAuthenticatedRequest,
   readinessFor,
   type PublicReadinessReport,
   type ReadinessReport,
@@ -73,15 +74,7 @@ export class HealthController {
   async ready(@Req() request: Request): Promise<ReadinessReport | PublicReadinessReport> {
     const report = await this.health.readiness();
 
-    // Both `authorization` and Cloud Run's own `X-Serverless-Authorization`
-    // count: the latter is what carries the identity token of an authenticated
-    // probe from CI, and Cloud Run gives it precedence. Reading only the former
-    // would hide the report from the very client that pays for it.
-    const authenticated = Boolean(
-      request.headers.authorization || request.headers['x-serverless-authorization'],
-    );
-
-    return readinessFor(report, authenticated);
+    return readinessFor(report, isAuthenticatedRequest(request.headers));
   }
 
   /**

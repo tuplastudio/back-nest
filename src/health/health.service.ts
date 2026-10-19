@@ -50,6 +50,18 @@ export function readinessFor(
 }
 
 /**
+ * Whether a request proves who the caller is.
+ *
+ * Both headers count, and the second one is the easy mistake: Cloud Run gives
+ * precedence to `X-Serverless-Authorization`, so the identity token of an
+ * authenticated probe arrives there and never in `authorization`. Reading only
+ * the latter would classify CI's own smoke as anonymous.
+ */
+export function isAuthenticatedRequest(headers: Record<string, string | string[] | undefined>): boolean {
+  return Boolean(headers.authorization || headers['x-serverless-authorization']);
+}
+
+/**
  * Implements the health checks behind {@link HealthController}.
  *
  * Kept separate from the controller so the checks can be exercised directly in

@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { jest } from '@jest/globals';
-import { HealthService, readinessFor, type ReadinessReport } from './health.service';
+import { HealthService, isAuthenticatedRequest, readinessFor, type ReadinessReport } from './health.service';
 import type { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service';
 
@@ -111,5 +111,24 @@ describe('readinessFor', () => {
     const trimmed = readinessFor(report, false);
 
     expect(Object.keys(trimmed).sort()).toEqual(['status', 'timestamp']);
+  });
+});
+
+describe('isAuthenticatedRequest', () => {
+  it('accepts a bearer token', () => {
+    expect(isAuthenticatedRequest({ authorization: 'Bearer mtb_live_abc_123' })).toBe(true);
+  });
+
+  it('accepts the header Cloud Run gives precedence to', () => {
+    // The identity token of CI's smoke arrives here and nowhere else: Cloud Run
+    // reads X-Serverless-Authorization first, so `authorization` is empty on that
+    // request. Ignoring this header would classify our own smoke as anonymous
+    // and hide the report from it.
+    expect(isAuthenticatedRequest({ 'x-serverless-authorization': 'Bearer eyJhbGciOi' })).toBe(true);
+  });
+
+  it('rejects an anonymous probe', () => {
+    expect(isAuthenticatedRequest({})).toBe(false);
+    expect(isAuthenticatedRequest({ 'user-agent': 'curl/8.7.1' })).toBe(false);
   });
 });
