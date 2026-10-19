@@ -294,8 +294,17 @@ jobs:
         id: previous
         run: |
           set -euo pipefail
-          REV=$(gcloud run services describe "$SERVICE" --region="$REGION" \
-                --format='value(status.traffic[0].revisionName)')
+          # `status.traffic` viene vacío cuando el servicio sirve una sola
+          # revisión sin reparto explícito, que es lo normal. Sin respaldo, el
+          # rollback se quedaría sin destino y el paso de verificar abortaría
+          # con `--to-revisions==100`.
+          REV=$(gcloud run services describe "$SERVICE" --region="$REGION" --format=json \
+                | jq -r '.status.traffic[0].revisionName // .status.latestReadyRevisionName // ""')
+          if [ -z "$REV" ]; then
+            echo "No se pudo determinar la revisión en servicio; el rollback no" >&2
+            echo "tendría destino. Se aborta antes de desplegar." >&2
+            exit 1
+          fi
           echo "revision=$REV" >> "$GITHUB_OUTPUT"
 
       - name: Resolver la URL que humear
@@ -513,8 +522,14 @@ jobs:
           PREVIOUS: ${{ needs.deploy.outputs.previous }}
         run: |
           set -euo pipefail
-          READY=$(gcloud run revisions describe "$REVISION" --region="$REGION" \
-                  --format='value(status.conditions[?@.type=="Ready"].status)')
+          # El filtro `--format='value(status.conditions[?@.type=="Ready"]...)'`
+          # devuelve cadena vacía en esta versión de gcloud, y una cadena vacía
+          # leída como «no sana» revierte una revisión que lo está: pasó en el
+          # run 39182072940, que promoted una revisión sana y la revirtió
+          # después. Se lee el JSON y se busca la condición a mano.
+          READY=$(gcloud run revisions describe "$REVISION" --region="$REGION" --format=json \
+                  | jq -r '([.status.conditions[]? | select(.type=="Ready") | .status] | first) // ""')
+          echo "Estado de $REVISION: Ready=${READY:-<sin condición>}"
           if [ "$READY" != "True" ]; then
             echo "Revisión $REVISION no sana (Ready=$READY); revirtiendo a $PREVIOUS"
             gcloud run services update-traffic "$SERVICE" --region="$REGION" \

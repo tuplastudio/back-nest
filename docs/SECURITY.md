@@ -265,7 +265,47 @@ camin correcto es *On-Demand Scanning* —que también es nativo y por tanto
 determinista— consultado desde el pipeline, no un escáner que se descarga por
 internet en el momento de decidir.
 
-### 7.4 Credenciales expuestas en canales no confiables
+### 7.4 La verificación de la promoción leía mal la salud de la revisión
+
+El primer despliegue completo a producción (run `39182072940`) promovió la
+revisión nueva, leyó su salud como **vacía** y revirtió a la anterior. La
+revisión estaba perfectamente sana: el rollback se ejecutó porque el chequeo
+mintió.
+
+```
+PREVIOUS: netpay-api-00010-c4p
+Revisión netpay-api-rfd9ddbb…-1 no sana (Ready=); revirtiendo a netpay-api-00010-c4p
+100% netpay-api-00010-c4p
+```
+
+La causa está en el comando, no en la imagen:
+
+```bash
+# Devuelve cadena vacía aunque la revisión esté Ready=True
+gcloud run revisions describe "$REV" \
+  --format='value(status.conditions[?@.type=="Ready"].status)'
+
+# Esto sí funciona
+gcloud run revisions describe "$REV" --format=json \
+  | jq -r '([.status.conditions[]? | select(.type=="Ready") | .status] | first) // ""'
+```
+
+Un valor vacío leído como «no sana» es la peor forma de fallo posible en un gate:
+**revierte todos los despliegues, incluidos los buenos**. Un gate que siempre
+dice «mal» entrena aIgnorarlo en dos semanas, y el día que de verdad haya un
+problema ya nadie lo mira.
+
+El mismo tipo de trampa está en el paso anterior: `status.traffic` viene vacío
+cuando el servicio sirve una sola revisión sin reparto explícito —que es lo
+normal—, así que leer `status.traffic[0].revisionName` a secas deja al rollback
+sin destino. Ahora tiene respaldo a `latestReadyRevisionName` y **aborta antes
+de desplegar** si tampoco así lo consigue, en vez de desplegar sin red de
+seguridad.
+
+Las dos cosas se comprobaron contra la revisión real antes de arreglar nada:
+`Ready=True` por la vía JSON y vacío por el filtro, con la misma revisión.
+
+### 7.5 Credenciales expuestas en canales no confiables
 
 Las claves `PII_HMAC_KEY`, `PII_ENCRYPTION_KEY` y `NETPAY_ENCRYPTION_KEY` de
 producción **no son rotables** (ver limitaciones 1 y 2): cambiarlas deja
