@@ -148,23 +148,21 @@ jobs:
           cache-to: type=gha,mode=max,scope=migrate
           platforms: linux/amd64
 
-      # El gate de vulnerabilidades es de producción: además de que en staging
-      # costaría el doble para el mismo contenido, `trivy-action` escribe su
-      # caché en Cloud Storage y el deployer de staging no tiene ese permiso.
-      - name: Escanear la imagen por digest
-        if: inputs.environment == 'production'
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
-        with:
-          image-ref: ${{ env.IMAGE_BASE }}@${{ steps.push-app.outputs.digest }}
-          severity: HIGH,CRITICAL
-          exit-code: '1'
-          ignore-unfixed: true
-          # Findings aceptados a propósito, cada uno con su motivo. El gate
-          # sigue bloqueando ante cualquier otro HIGH/CRITICAL.
-          trivyignores: .trivyignore
-        env:
-          TRIVY_USERNAME: oauth2accesstoken
-          TRIVY_PASSWORD: ${{ steps.auth.outputs.access_token }}
+      # Aquí NO hay escaneo de vulnerabilidades, y es deliberado.
+      #
+      # `trivy-action` se descargaba su binario desde GitHub en cada run, y en el
+      # run 39169632356 —el primer despliegue a producción— esa descarga falló y
+      # el paso devolvió exit 1. El pipeline paró, que es lo correcto, pero no
+      # porque la imagen tuviera un CVE: Trivy no llegó a escanear nada. Un gate
+      # que no puede distinguir "encontré una vulnerabilidad" de "no pude
+      # descargar el escáner" no es un gate: es un paso que se re-lanza hasta que
+      # pasa, y el día que alguien no lo re-lanza el seguro no era seguro.
+      #
+      # El escaneo vive ahora en dos sitios que no pueden tumbar un despliegue:
+      # `ci.yml` escanea el árbol de dependencias en cada PR y sube el informe
+      # como artefacto, y Artifact Analysis escanea cada imagen al subirla al
+      # registro, dentro del proyecto. La señal se conserva; la dependencia de
+      # una descarga de terceros sale del camino crítico.
 
   # ===========================================================================
   # migrate: Cloud Run Job, una ejecución, sin reintentos

@@ -1,25 +1,15 @@
-import { Controller, Get, Header, HttpCode, HttpStatus, Res } from '@nestjs/common';
+import { Controller, Get, Header, HttpCode, HttpStatus, Req, Res } from '@nestjs/common';
 import { ApiExcludeEndpoint, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { Public } from '../common/decorators/public.decorator';
-import { HealthService } from './health.service';
-
-/**
- * Response body returned by the readiness probe.
- */
-interface HealthReport {
-  /** `ok` when every dependency is reachable, otherwise `degraded`. */
-  status: 'ok' | 'degraded';
-  /** Uptime in seconds since process start. */
-  uptimeSeconds: number;
-  /** ISO timestamp of the check. */
-  timestamp: string;
-  /** Application version from `package.json`. */
-  version: string;
-  /** Per-dependency state. */
-  checks: Record<string, { status: 'up' | 'down'; latencyMs?: number; message?: string }>;
-}
+import {
+  HealthService,
+  isAuthenticatedRequest,
+  readinessFor,
+  type PublicReadinessReport,
+  type ReadinessReport,
+} from './health.service';
 
 /**
  * Liveness and readiness endpoints.
@@ -62,6 +52,13 @@ export class HealthController {
    *
    * Responds 503 when a dependency is unavailable so a load balancer stops
    * routing traffic to this instance.
+   *
+   * The detailed report is only for authenticated callers. The endpoint has to
+   * stay `@Public()` so the smoke test and any uptime check can reach it without
+   * credentials, but with the service exposed to the internet a public 200 also
+   * answers "there are two databases behind this, and here is how long each one
+   * took" to anyone who asks. An anonymous caller gets the status and nothing
+   * else; the status code still carries the signal an orchestrator needs.
    */
   @Public()
   @SkipThrottle()
@@ -69,12 +66,15 @@ export class HealthController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: 'Readiness probe',
-    description: 'Verifies the control plane database is reachable. Responds 503 when it is not.',
+    description:
+      'Verifies the control plane database is reachable. Responds 503 when it is not. The per-dependency detail is only returned to authenticated callers.',
   })
   @ApiResponse({ status: 200, description: 'All dependencies are reachable.' })
   @ApiResponse({ status: 503, description: 'At least one dependency is unavailable.' })
-  async ready(): Promise<HealthReport> {
-    return this.health.readiness();
+  async ready(@Req() request: Request): Promise<ReadinessReport | PublicReadinessReport> {
+    const report = await this.health.readiness();
+
+    return readinessFor(report, isAuthenticatedRequest(request.headers));
   }
 
   /**

@@ -193,3 +193,51 @@ jobs:
   # =============================================================================
   # staging: el entorno donde se prueba antes de tocar producción (§17)
   # =============================================================================
+
+  # ===========================================================================
+  # scan: vulnerabilidades del árbol de dependencias, sin bloquear
+  # ===========================================================================
+  scan:
+    name: Vulnerabilidades (informativo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Nunca es un requisito: un escáner que se cae por red no puede decidir si
+    # alguien puede mergear. El informe se lee y se archiva; la decisión se toma
+    # con criterio humano o con Artifact Analysis sobre la imagen ya publicada.
+    continue-on-error: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Escanea el árbol (`scan-ref: .`), no la imagen: en un PR la imagen aún no
+      # está en el registro, y lo interesante en un PR es el lockfile, que es
+      # donde se introducen los CVE.
+      - name: Escanear dependencias
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          # Findings aceptados a propósito, cada uno con su motivo.
+          trivyignores: .trivyignore
+          format: table
+
+      - name: Publicar el informe
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: trivy-dependencies
+          path: trivy-results.*
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Si el paso anterior falló (por red o por lo que sea), el motivo tiene que
+      # quedar escrito: un escaneo que no se ejecutó no es un escaneo en verde.
+      - name: Por qué no hay informe
+        if: failure()
+        run: |
+          echo "::warning::El escaneo de dependencias no pudo completarse."
+          echo "::warning::Suele ser una caída de la descarga del binario de Trivy,"
+          echo "::warning::no una vulnerabilidad. Revisa el paso anterior."

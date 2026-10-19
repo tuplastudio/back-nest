@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { jest } from '@jest/globals';
-import { HealthService } from './health.service';
+import { HealthService, isAuthenticatedRequest, readinessFor, type ReadinessReport } from './health.service';
 import type { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service';
 
@@ -66,5 +66,69 @@ describe('HealthService.readiness', () => {
     const report = await serviceFor(null, null).readiness();
     expect(typeof report.checks['control-plane-db']?.latencyMs).toBe('number');
     expect(report.version).toBe('1.0.0');
+  });
+});
+
+describe('readinessFor', () => {
+  const report: ReadinessReport = {
+    status: 'ok',
+    uptimeSeconds: 42,
+    timestamp: '2026-10-18T00:00:00.000Z',
+    version: '1.0.0',
+    checks: {
+      'control-plane-db': { status: 'up', latencyMs: 21 },
+      'tenant-plane': { status: 'up', latencyMs: 22 },
+    },
+  };
+
+  it('trims the report for an anonymous caller', () => {
+    // The route is public, so anyone can ask. Handing out both database names
+    // and their latency is reconnaissance with no operational gain: the status
+    // code already carries what a health check needs.
+    expect(readinessFor(report, false)).toEqual({
+      status: 'ok',
+      timestamp: report.timestamp,
+    });
+  });
+
+  it('keeps the detail for a caller that presented a credential', () => {
+    expect(readinessFor(report, true)).toEqual(report);
+  });
+
+  it('still reports degraded to an anonymous caller', () => {
+    // Trimming the body must not soften the verdict: a 503 with `degraded` is
+    // what makes a load balancer stop routing here.
+    expect(readinessFor({ ...report, status: 'degraded' }, false)).toEqual({
+      status: 'degraded',
+      timestamp: report.timestamp,
+    });
+  });
+
+  it('does not leak dependency names or latencies when trimmed', () => {
+    // The assertion that matters: the trimmed body has exactly these two keys,
+    // so there is nothing left to enumerate. Checking the keys beats checking
+    // three absences, which would still pass if a fourth field appeared.
+    const trimmed = readinessFor(report, false);
+
+    expect(Object.keys(trimmed).sort()).toEqual(['status', 'timestamp']);
+  });
+});
+
+describe('isAuthenticatedRequest', () => {
+  it('accepts a bearer token', () => {
+    expect(isAuthenticatedRequest({ authorization: 'Bearer mtb_live_abc_123' })).toBe(true);
+  });
+
+  it('accepts the header Cloud Run gives precedence to', () => {
+    // The identity token of CI's smoke arrives here and nowhere else: Cloud Run
+    // reads X-Serverless-Authorization first, so `authorization` is empty on that
+    // request. Ignoring this header would classify our own smoke as anonymous
+    // and hide the report from it.
+    expect(isAuthenticatedRequest({ 'x-serverless-authorization': 'Bearer eyJhbGciOi' })).toBe(true);
+  });
+
+  it('rejects an anonymous probe', () => {
+    expect(isAuthenticatedRequest({})).toBe(false);
+    expect(isAuthenticatedRequest({ 'user-agent': 'curl/8.7.1' })).toBe(false);
   });
 });

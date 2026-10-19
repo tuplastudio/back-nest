@@ -27,7 +27,7 @@ comment:
 
 # Fuera del informe: artefactos (coverage/), código generado (dist/,
 # src/generated/), y código que Jest no instrumenta porque vive fuera de
-# `collectCoverageFrom` (test/, prisma/, scripts/, y el proyecto Astro de ui/).
+# `collectCoverageFrom` (test/, prisma/ y scripts/).
 ignore:
   - 'coverage/**'
   - 'dist/**'
@@ -35,4 +35,7 @@ ignore:
   - 'test/**'
   - 'prisma/**'
   - 'scripts/**'
+  # Rutas borradas. Codecov cuenta las líneas eliminadas como diff sin cubrir, así
+  # que un PR que solo borra marca 0% de patch y ahoga la cobertura real del
+  # resto del cambio. La entry sobrevive al borrado justamente para esto.
   - 'ui/**'

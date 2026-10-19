@@ -119,7 +119,7 @@ run gcloud services enable \
   compute.googleapis.com \
   monitoring.googleapis.com \
   logging.googleapis.com \
-  billingbudgets.googleapis.com \
+  containerscanning.googleapis.com \
   --project "$PROJECT_ID"
 
 # -----------------------------------------------------------------------------
@@ -174,8 +174,17 @@ else
 fi
 
 run gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" \
-  --project "$PROJECT_ID" --location "$REGION" \
+  --project="$PROJECT_ID" --location "$REGION" \
   --member="serviceAccount:$DEPLOYER_SA" --role="roles/artifactregistry.writer"
+
+# Escaneo de vulnerabilidades nativo, dentro del proyecto. Se activa aquí y no
+# desde el pipeline a propósito: un escáner de terceros que se descarga por
+# internet no puede decidir si un despliegue pasa —el run 39169632356 lo
+# demostró, con Trivy muriendo al descargarse y parando producción sin haber
+# escaneado nada—. Este lo hace Google, sin dependencias externas, y su
+# resultado vive en el proyecto.
+run gcloud artifacts repositories update "$AR_REPO" \
+  --project="$PROJECT_ID" --location "$REGION" --allow-vulnerability-scanning
 for SA in "$RUNTIME_SA" "$MIGRATOR_SA"; do
   run gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" \
     --project "$PROJECT_ID" --location "$REGION" \

@@ -157,7 +157,125 @@ would be a memory exhaustion vector.
 
 ---
 
-## 7. Known limitations
+## 7. Postura de la infraestructura
+
+Verificado con `gcloud` el 2026-10-18, no deducido del repositorio.
+
+| Control | Estado |
+| ------- | ------ |
+| Identidad de despliegue | WIF, sin claves JSON. La condición de la pool de producción exige `ref == refs/heads/main`; la de staging, `environment == staging` |
+| Acceso a secretos | Por secreto y por cuenta, nunca a nivel de proyecto |
+| Cuentas de servicio | `netpay-runtime` / `netpay-deployer` / `netpay-migrator`. La cuenta por defecto de cómputo ya no es `roles/editor` |
+| Superficie de administración | `tenants.controller.ts` solo tiene dos rutas `@Roles('OWNER')`, y el login limita a 5 intentos por minuto con bloqueo de cuenta |
+| Límites del servicio | `maxScale` 4 en producción, 1 en el canario, 2 en staging. `timeout` 60 s en los tres |
+| Salida por IP fija | Los tres servicios y los dos Jobs salen por el NAT de su proyecto |
+| Alertas | `netpay 5xx`, `netpay login fallido` y `netpay IAM denegada` en los dos proyectos, sobre métricas de log propias |
+| Filtrado en el borde | **Ninguno.** No hay balanceador ni Cloud Armor (§13) |
+| Escaneo de vulnerabilidades | **Artifact Analysis** activo en los dos registros (`SCANNING_ACTIVE`). Sin gate bloqueante, por diseño (§7.3) |
+| Allowlist de IP en Neon | **No disponible en el plan Launch**: el máximo de entradas es 0. Requiere el plan Scale |
+| Informe de readiness | Anónimo devuelve solo estado y timestamp; el detalle por base va autenticado |
+
+### 7.1 Lo que falta y por qué no se ha hecho
+
+1. **Sin WAF.** Cloud Armor exige el balanceador global y cuesta ~32 USD/mes
+   (18,25 de forwarding rule + 3,60 de IP + 5,00 de política + 1,00 por regla).
+   El compromiso actual es que la autenticación de la aplicación es
+   *deny-by-default* y el limitador global rechaza el ruido: filtrar en el
+   origen cuesta CPU y facturabilidad, no gratis.
+2. **La base sigue siendo alcanzable desde internet.** Con Launch no hay
+   allowlist. Lo que sí se hizo fue reducir la ventana: los servicios salen por
+   IP fija, y las credenciales de `staging` y su `neondb_owner` se rotaron
+   porque la rama los heredaba de producción.
+3. **Sin alertas de coste.** Los presupuestos de Cloud Billing no se pueden
+   crear en una cuenta de facturación heredada (`016863-…`); requiere migrar a
+   una cuenta de tipo nuevo.
+4. **`run.developer` a nivel de proyecto.** Necesario para que el pipeline
+   despliegue, y no se puede acotar por servicio: los roles de IAM que Cloud Run
+   admite sobre un servicio concreto son `run.invoker` y `run.viewer`.
+5. **`main` no fuerza revisiones.** `enforce_admins` está desactivado porque
+   hasta ahora hay una sola persona: exigir un aprobador bloquearía el trabajo.
+
+### 7.2 Rotar un secreto: el detalle que costó una caída
+
+Un secreto referenciado con `:latest` **no cambia de valor en un servicio en
+marcha**: la instancia resuelve la referencia al arrancar. Además
+`gcloud run services update` se niega a crear una revisión si nada más cambia,
+así que la rotación no se aplica y el servicio se queda con la contraseña
+antigua —que ya no vale— y ambos planos de base caen.
+
+El procedimiento que funciona, y que conviene dejar escrito:
+
+```bash
+# 1. Añadir la versión nueva al secreto (no sobrescribir la anterior).
+printf '%s' "$NUEVO" | gcloud secrets versions add control-plane-db-url --data-file=-
+
+# 2. Fijar la versión explícitamente en el servicio. Fijar, no :latest: es lo
+#    que fuerza la revisión nueva.
+gcloud run services update netpay-api-staging   --set-secrets="CONTROL_PLANE_DATABASE_URL=control-plane-db-url:2,…"
+```
+
+Fijar la versión numérica tiene un segundo beneficio: deja constancia de qué
+secrete se usó en cada revisión.
+
+### 7.3 Por qué no hay un gate de vulnerabilidades que bloquee
+
+El pipeline no detiene un despliegue por vulnerabilidades, y es una decisión
+consciente, no un descuido.
+
+El primer intento era escanear la imagen en el job de build de producción con
+`trivy-action` y `exit-code: 1`. En el run `39169632356` —el primer despliegue a
+producción— ese paso falló, y no por un CVE:
+
+```
+installing Trivy binary
+aquasecurity/trivy info checking GitHub for tag 'v0.65.0'
+aquasecurity/trivy info found version: 0.65.0
+##[error]Process completed with exit code 1
+```
+
+Murió tres décimas de segundo después de resolver la versión, descargando su
+propio binario desde GitHub. No llegó a escanear la imagen. El pipeline paró,
+que es lo correcto, pero por una causa que no tenía nada que ver con la
+seguridad de la imagen.
+
+El problema de fondo: **`trivy-action` devuelve el mismo código de salida si
+encuentra un CVE y si no puede ejecutarse.** Un control así no es un control de
+seguridad, es un paso que se relanza hasta que pasa, y el día que alguien no lo
+re-lanza porque va con prisa, el "aseguramiento" era-fiction.
+
+Lo que hay ahora, repartido donde un fallo no puede costar un despliegue:
+
+| Dónde | Qué | ¿Bloquea? |
+| --- | --- | --- |
+| `ci.yml`, job `scan` | Trivy sobre el lockfile en cada PR, informe como artefacto | No, y con `continue-on-error` en el paso: si Trivy no baja, el job sigue en verde y lo dice con un `::warning` |
+| Artifact Registry | **Artifact Analysis**: Google escanea cada imagen al subirla | No puede tumbar nada: no hay descarga de terceros, usa las credenciales del proyecto |
+| `provision-environment.sh` | Activa el escaneo al provisionar | — |
+
+Cómo consultar el resultado del escaneo nativo:
+
+```bash
+gcloud artifacts docker images describe IMAGE@sha256:DIGEST \
+  --project=vondi-0q --format='value(vulnerabilityAnalysis)'
+```
+
+**Lo que esto deja sin cubrir**, y hay que decirlo: no hay un bloqueo
+automático por CVE antes de producción. Hoy lo cubren la revisión del PR y que
+Artifact Analysis esté activo. Si en el futuro se quiere un gate duro, el
+camin correcto es *On-Demand Scanning* —que también es nativo y por tanto
+determinista— consultado desde el pipeline, no un escáner que se descarga por
+internet en el momento de decidir.
+
+### 7.4 Credenciales expuestas en canales no confiables
+
+Las claves `PII_HMAC_KEY`, `PII_ENCRYPTION_KEY` y `NETPAY_ENCRYPTION_KEY` de
+producción **no son rotables** (ver limitaciones 1 y 2): cambiarlas deja
+indescifrable el PII ya escrito. Si se han transcrito fuera del almacén de
+secretos, la única salida correcta es un proyecto de recifrado por lotes
+(RB-04), no un `secrets versions add`. Lo que sí se puede hacer de inmediato es
+sacarlas de la transcripción y custodiarlas fuera de GCP.
+
+Las de `staging` sí se rotaron sin coste, porque esa base no tiene datos.
+## 8. Known limitations
 
 Stated plainly, because a base that hides these is worse than one that names
 them.
