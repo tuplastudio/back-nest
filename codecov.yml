@@ -35,3 +35,7 @@ ignore:
   - 'test/**'
   - 'prisma/**'
   - 'scripts/**'
+  # Rutas borradas. Codecov cuenta las líneas eliminadas como diff sin cubrir, así
+  # que un PR que solo borra marca 0% de patch y ahoga la cobertura real del
+  # resto del cambio. La entry sobrevive al borrado justamente para esto.
+  - 'ui/**'
