@@ -26,7 +26,10 @@ const ROW = {
  * @param rows Rows the registry "contains".
  * @returns The resolver plus the lookup counter.
  */
-function resolverOver(rows: unknown[]): {
+function resolverOver(
+  rows: unknown[],
+  configOverrides: Partial<AppConfig> = {},
+): {
   resolver: TenantResolverService;
   lookups: { count: number };
 } {
@@ -48,7 +51,7 @@ function resolverOver(rows: unknown[]): {
     },
     isValidSchemaName: (): boolean => true,
   } as unknown as TenantSchemaNamingService;
-  const config = { tenantClientCacheMax: 100 } as AppConfig;
+  const config = { tenantClientCacheMax: 100, ...configOverrides } as AppConfig;
   const crypto = { hashIp: (): string => 'hash' } as unknown as PiiCryptoService;
   const requestContext = {} as RequestContextService;
   return {
@@ -107,5 +110,30 @@ describe('TenantResolverService.bySlug', () => {
     await resolver.bySlug('ghost');
     await resolver.bySlug('ghost');
     expect(lookups.count).toBe(1);
+  });
+});
+
+describe('TenantResolverService cache TTL (BN-REQ-SEC-012: suspension visible in <= 5 s)', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('re-reads the registry once the default TTL (5 s) has passed', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const { resolver, lookups } = resolverOver([ROW]);
+    await resolver.byId(KNOWN_UUID);
+    now.mockReturnValue(1_000_000 + 4_999);
+    await resolver.byId(KNOWN_UUID);
+    expect(lookups.count).toBe(1);
+    now.mockReturnValue(1_000_000 + 5_001);
+    await resolver.byId(KNOWN_UUID);
+    expect(lookups.count).toBe(2);
+  });
+
+  it('honours AUTHZ_CACHE_TTL_MS', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(2_000_000);
+    const { resolver, lookups } = resolverOver([ROW], { authzCacheTtlMs: 1_000 });
+    await resolver.byId(KNOWN_UUID);
+    now.mockReturnValue(2_000_000 + 1_001);
+    await resolver.byId(KNOWN_UUID);
+    expect(lookups.count).toBe(2);
   });
 });

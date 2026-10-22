@@ -2,8 +2,13 @@
 # `environment: staging` o `environment: production`.
 #
 #   build ─► migrate ─► deploy ─► smoke ─► promote
-#                            │        │
-#                  falla: nada llega └ falla: rollback
+#                         (sin tráfico,   (URL     (10 → 50 → 100 en producción,
+#                          tag rc-<sha>)   del tag)  100 en staging; 5xx por
+#                                                    escalón; rollback si falla)
+#
+# Lo mismo en los dos entornos (BN-REQ-OPS-006): la revisión nueva nunca recibe
+# tráfico hasta que su URL etiquetada pasó el humo, y luego lo recibe por
+# escalones vigilando su tasa de 5xx en Cloud Monitoring.
 #
 # POR QUÉ REUTILIZABLE Y NO DOS FICHEROS
 #
@@ -29,21 +34,13 @@
 # en el job de verificación. A nivel de job, la variable y el environment que
 # la resuelve están en la misma pantalla.
 #
-# LO QUE ES SOLO DE UN ENTENTIMENT
+# LO QUE CAMBIA ENTRE ENTORNOS
 #
-# Tres cosas, y cada una por su motivo:
-#
-#   * el canario, solo en producción: su URL no es alcanzable desde CI porque
-#     producción tiene el ingress cerrado, así que hace falta una revisión
-#     desplegada aparte contra la que humear antes de que nada llegue a tráfico;
-#   * la promoción, solo en producción: en staging el despliegue ya va al 100%,
-#     y `promote` es el mecanismo de "no sirvas tráfico hasta que el humo pase";
-#   * el escaneo de la imagen, solo en producción: `trivy-action` necesita
-#     permisos de Cloud Storage para su caché, que el deployer de staging no
-#     tiene. Las dos imágenes salen del mismo commit, así que escanear en el
-#     gate de producción cubre el mismo contenido. Si se quiere el escaneo
-#     antes del merge, hay que darle al deployer de staging los mismos
-#     permisos que al de producción.
+# Solo datos, no pasos: los flags de runtime salen de .github/cloudrun/flags.json
+# (BN-REQ-OPS-007, verificados a diario por drift-check.yml) y los escalones de
+# la promoción se eligen por entorno en el job `promote`. El canario aparte
+# (`netpay-api-canary`) ya no hace falta: la revisión etiquetada tiene su propia
+# URL y es exactamente lo que se va a promover.
 #
 # Diseño y motivos: docs/DEPLOY-GCP.md §12.
 
@@ -128,6 +125,10 @@ jobs:
           target: runtime
           push: true
           tags: ${{ env.IMAGE_BASE }}:${{ github.sha }}
+          # Lo que /health/ready autenticado reporta (src/config/build-info.ts).
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
+            BUILD_VERSION=run-${{ github.run_number }}.${{ github.run_attempt }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=app
@@ -197,6 +198,12 @@ jobs:
       - name: Setup Cloud SDK
         uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
 
+      # `npm run db:migrate:all`: plano de control y después las migraciones de
+      # tenant en todo tenant ACTIVE, con lock advisory por esquema, ledger de
+      # checksums y verificación final (scripts/migrate-tenants.ts,
+      # BN-REQ-OPS-002). Si un esquema queda atrás o un checksum no coincide, el
+      # Job falla y no se despliega nada.
+      #
       # Las migraciones no corren en el arranque: Cloud Run arranca N instancias
       # a la vez y `prisma migrate deploy` no es idempotente bajo concurrencia.
       # El Job corre además con la conexión **directa**, no por el pooler.
@@ -225,21 +232,20 @@ jobs:
             --service-account="$MIGRATOR_SA" \
             --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic \
             --tasks=1 --parallelism=1 --max-retries=0 --task-timeout=900s \
+            --command=npm --args=run,db:migrate:all \
             --quiet
           # `--wait` devuelve error si la ejecución falla: detiene el pipeline
           # antes de desplegar código contra un esquema a medias.
           gcloud run jobs execute "$MIGRATE_JOB" --region="$REGION" --wait
 
   # ===========================================================================
-  # deploy: la revisión nueva, sin tráfico en producción
+  # deploy: la revisión nueva, sin tráfico y con tag rc-<sha>
   # ===========================================================================
   deploy:
     name: Desplegar
     needs: [build, migrate]
     # `always()` con la condición explícita: es lo que permite que
-    # `skip_migrations` salte el Job y el despliegue siga. `staging_smoke` ya no
-    # aparece aquí — que producción espere a staging es una dependencia de jobs
-    # en deploy.yml, no una condición dentro de este workflow.
+    # `skip_migrations` salte el Job y el despliegue siga.
     if: >-
       always() && needs.build.result == 'success' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
@@ -250,25 +256,18 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      # La URL que el humo debe probar. En producción es la del canario, porque
-      # la URL de producción no es alcanzable desde CI; en staging es el propio
-      # servicio. El humo no necesita saber por qué: solo necesita una URL y un
-      # token.
-      url: ${{ steps.target.outputs.url }}
+      # URL de la revisión etiquetada: lo único que el humo prueba.
+      tag_url: ${{ steps.deploy.outputs.tag_url }}
+      # URL del servicio: audiencia del ID token del humo.
+      url: ${{ steps.deploy.outputs.url }}
       previous: ${{ steps.previous.outputs.revision }}
-      # Los dos pasos de despliegue (con y sin tráfico) no pueden compartir `id`
-      # dentro del mismo job, así que la revisión sale del que corresponde a este
-      # entorno. `||` es el fallback: el otro paso no se ejecutó y su salida no
-      # existe.
-      revision: ${{ steps.deploy_no_traffic.outputs.revision || steps.deploy_traffic.outputs.revision }}
+      revision: ${{ steps.deploy.outputs.revision }}
+      tag: ${{ steps.deploy.outputs.tag }}
     env:
       ENVIRONMENT: ${{ inputs.environment }}
       PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       REGION: ${{ vars.GCP_REGION }}
       SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
-      # Vacío en staging: ese environment no define `CLOUD_RUN_CANARY`, y aquí
-      # no se usa. Es `if` de shell, no una variable interpolada en el comando.
-      CANARY: ${{ vars.CLOUD_RUN_CANARY }}
       RUNTIME_SA: ${{ vars.RUNTIME_SA }}
       IMAGE_BASE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.AR_REPOSITORY }}/${{ vars.IMAGE_NAME }}
       NETWORK: vondi-net
@@ -277,29 +276,29 @@ jobs:
       # en vez de depender de "la última revisión" (§12.3).
       REVISION: r${{ github.sha }}-${{ github.run_attempt }}
     steps:
+      # Para scripts/gcp/cloudrun-flags.sh y .github/cloudrun/flags.json.
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
       - name: Authenticate to Google Cloud
-        id: auth
         uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
-          token_format: access_token
 
       - name: Setup Cloud SDK
         uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
 
-      # La revisión que sirve tráfico se registra ANTES de desplegar: leerla
-      # después devuelve la nueva, y el rollback se quedaría sin a qué volver.
+      # La revisión que sirve tráfico se registra ANTES de desplegar. Con tags,
+      # `status.traffic` lista también revisiones etiquetadas al 0%, así que se
+      # toma la de mayor porcentaje y no la primera de la lista.
       - name: Registrar la revisión que sirve tráfico hoy
         id: previous
         run: |
           set -euo pipefail
-          # `status.traffic` viene vacío cuando el servicio sirve una sola
-          # revisión sin reparto explícito, que es lo normal. Sin respaldo, el
-          # rollback se quedaría sin destino y el paso de verificar abortaría
-          # con `--to-revisions==100`.
           REV=$(gcloud run services describe "$SERVICE" --region="$REGION" --format=json \
-                | jq -r '.status.traffic[0].revisionName // .status.latestReadyRevisionName // ""')
+                | jq -r '([.status.traffic[]? | select((.percent // 0) > 0)] | max_by(.percent) // {}) as $t
+                         | $t.revisionName // .status.latestReadyRevisionName // ""')
           if [ -z "$REV" ]; then
             echo "No se pudo determinar la revisión en servicio; el rollback no" >&2
             echo "tendría destino. Se aborta antes de desplegar." >&2
@@ -307,87 +306,50 @@ jobs:
           fi
           echo "revision=$REV" >> "$GITHUB_OUTPUT"
 
-      - name: Resolver la URL que humear
-        id: target
-        run: |
-          set -euo pipefail
-          # En producción la URL del servicio no es alcanzable desde CI
-          # (ingress cerrado, §13.2), así que se humea el canario. En staging
-          # el servicio es el objetivo. En ambos casos lo desplegado es
-          # `$SERVICE`.
-          TARGET="$SERVICE"
-          if [ "$ENVIRONMENT" = production ]; then
-            TARGET="$CANARY"
-          fi
-          URL=$(gcloud run services describe "$TARGET" --region="$REGION" \
-                --format='value(status.url)')
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-
-      # El canario existe porque producción tiene el ingress cerrado: sin una
-      # revisión desplegada aparte contra la que humear, el humo no podría
-      # comprobar nada antes de que la revisión nueva reciba tráfico. Es
-      # privado (requiere token de identidad) y con webhooks desactivados para
-      # no despachar nada desde una versión sin validar.
-      - name: Desplegar el canario
-        if: inputs.environment == 'production'
+      # `--no-traffic --tag`: la revisión existe y tiene URL propia, pero no
+      # recibe ni una petición de usuarios hasta `promote` (BN-REQ-OPS-006).
+      #
+      # BUILD_SHA/BUILD_VERSION también como variables del servicio: ya vienen
+      # en la imagen, pero así `services describe` dice qué commit corre sin
+      # inspeccionar la imagen.
+      #
+      # Los flags de runtime (min/max instancias, CPU, ingress, egress,
+      # concurrencia, timeout) se declaran en .github/cloudrun/flags.json y se
+      # aplican en cada despliegue, así que una edición manual en la consola dura
+      # hasta el siguiente release y drift-check.yml la detecta antes
+      # (BN-REQ-OPS-007). Variables, secretos y probes siguen viviendo en el
+      # servicio (scripts/provision-cloudrun.sh).
+      - name: Desplegar la revisión sin tráfico
+        id: deploy
         env:
           IMAGE: ${{ env.IMAGE_BASE }}@${{ needs.build.outputs.digest }}
         run: |
           set -euo pipefail
-          gcloud run deploy "$CANARY" --region="$REGION" --image="$IMAGE" \
-            --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic \
+          TAG="rc-${GITHUB_SHA::8}"
+          mapfile -t FLAGS < <(bash scripts/gcp/cloudrun-flags.sh args "$ENVIRONMENT")
+          printf 'Flags declarados para %s:\n' "$ENVIRONMENT"; printf '  %s\n' "${FLAGS[@]}"
+          gcloud run deploy "$SERVICE" --region="$REGION" --image="$IMAGE" \
+            --network="$NETWORK" --subnet="$SUBNET" \
             --service-account="$RUNTIME_SA" \
-            --ingress=all --no-allow-unauthenticated \
-            --min-instances=0 --max-instances=1 \
             --revision-suffix="$REVISION" \
-            --update-env-vars="OUTBOUND_WEBHOOK_ENABLED=false" --quiet
-
-      # Solo cambian imagen y nombre de revisión: el resto de la configuración
-      # (probes, secretos, variables) vive en el servicio (§11.2). Un flag
-      # ausente aquí no se resetea, porque `gcloud run deploy` parte de la
-      # configuración actual y aplica encima lo indicado; verificado en el
-      # canario, cuyo egress por NAT sobrevive a un deploy solo-imagen.
-      #
-      # El egress se repite de todas formas en vez de confiar en eso: es lo que
-      # hace que la IP de salida sea la del NAT y no una efímera de Google, y si
-      # alguien recrea el servicio sin la VPC, aquí se ve en el log en vez de
-      # descubrirlo cuando Neon deje de aceptar la conexión.
-      - name: Desplegar la revisión sin tráfico (producción)
-        if: inputs.environment == 'production'
-        id: deploy_no_traffic
-        env:
-          IMAGE: ${{ env.IMAGE_BASE }}@${{ needs.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          gcloud run deploy "$SERVICE" --region="$REGION" --image="$IMAGE" \
-            --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic \
-            --service-account="$RUNTIME_SA" \
-            --revision-suffix="$REVISION" --no-traffic --quiet
-          echo "revision=${SERVICE}-${REVISION}" >> "$GITHUB_OUTPUT"
-
-      # En staging el despliegue va al 100% y el lazo inverso es el rollback del
-      # humo: si falla, el servicio vuelve a la revisión que sí respondía. No hay
-      # canario porque su URL es alcanzable, así que el humo puede comprobar la
-      # revisión nueva donde está sirviendo de verdad.
-      #
-      # Sin `--update-env-vars`: las variables, los secretos y los probes viven
-      # en el servicio (scripts/provision-cloudrun.sh). Duplicarlos aquí sería
-      # una segunda fuente de verdad que deriva.
-      - name: Desplegar la revisión con tráfico (staging)
-        if: inputs.environment == 'staging'
-        id: deploy_traffic
-        env:
-          IMAGE: ${{ env.IMAGE_BASE }}@${{ needs.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          gcloud run deploy "$SERVICE" --region="$REGION" --image="$IMAGE" \
-            --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic \
-            --service-account="$RUNTIME_SA" \
-            --revision-suffix="$REVISION" --quiet
-          echo "revision=${SERVICE}-${REVISION}" >> "$GITHUB_OUTPUT"
+            --no-traffic --tag="$TAG" \
+            --update-env-vars="BUILD_SHA=${GITHUB_SHA},BUILD_VERSION=run-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" \
+            "${FLAGS[@]}" --quiet
+          DESCRIBE=$(gcloud run services describe "$SERVICE" --region="$REGION" --format=json)
+          TAG_URL=$(jq -r --arg t "$TAG" '.status.traffic[]? | select(.tag == $t) | .url' <<<"$DESCRIBE")
+          if [ -z "$TAG_URL" ]; then
+            echo "La revisión no quedó etiquetada como $TAG." >&2
+            exit 1
+          fi
+          {
+            echo "revision=${SERVICE}-${REVISION}"
+            echo "tag=$TAG"
+            echo "tag_url=$TAG_URL"
+            echo "url=$(jq -r '.status.url' <<<"$DESCRIBE")"
+          } >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
-  # smoke: contra el canario en producción, contra el servicio en staging
+  # smoke: contra la URL etiquetada de la revisión nueva, que aún no tiene tráfico
   # ===========================================================================
   smoke:
     name: Humo
@@ -398,15 +360,11 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      REGION: ${{ vars.GCP_REGION }}
-      SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
     steps:
       # `gcloud auth print-identity-token` rechaza credenciales WIF
-      # (external_account): el token lo emite la propia action de auth.
-      #
-      # Ambos entornos exigen IAM (scripts/provision-cloudrun.sh), así que el
-      # humo necesita identidad en los dos.
+      # (external_account): el token lo emite la propia action de auth. La
+      # audiencia es la URL del servicio; Cloud Run la acepta también en las
+      # URLs de sus tags.
       - name: Token de identidad para el servicio
         id: id_token
         uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
@@ -416,13 +374,10 @@ jobs:
           token_format: id_token
           id_token_audience: ${{ needs.deploy.outputs.url }}
 
-      - name: Setup Cloud SDK
-        uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
-
       # La revisión nueva arranca en frío: /health/live hasta 90 s.
       - name: Liveness y readiness
         env:
-          URL: ${{ needs.deploy.outputs.url }}
+          URL: ${{ needs.deploy.outputs.tag_url }}
           TOKEN: ${{ steps.id_token.outputs.id_token }}
         run: |
           set -euo pipefail
@@ -446,7 +401,7 @@ jobs:
       # ruta alcanza la aplicación.
       - name: Una ruta protegida responde 401/403
         env:
-          URL: ${{ needs.deploy.outputs.url }}
+          URL: ${{ needs.deploy.outputs.tag_url }}
           TOKEN: ${{ steps.id_token.outputs.id_token }}
         run: |
           set -euo pipefail
@@ -458,47 +413,42 @@ jobs:
             *) echo "FAIL: $CODE"; exit 1 ;;
           esac
 
-      # El rollback va antes de propagar el fallo: el job tiene que quedar en
-      # rojo para que el pipeline no siga, y el servicio tiene que volver a la
-      # revisión que sí respondía. Un despliegue fallido que deja el entorno
-      # roto es peor que un pipeline rojo.
-      #
-      # Solo cuando el despliegue fue con tráfico (staging). En producción la
-      # revisión nueva nunca recibió tráfico y `promote` es quien decide; revertir
-      # aquí no tocaría nada y escondería el fallo real.
-      - name: Volver a la revisión anterior
-        if: failure() && inputs.environment == 'staging'
-        env:
-          PREVIOUS: ${{ needs.deploy.outputs.previous }}
-        run: |
-          set -euo pipefail
-          if [ -z "$PREVIOUS" ]; then
-            echo "No hay revisión anterior registrada; nada que revertir."
-            exit 1
-          fi
-          gcloud run services update-traffic "$SERVICE" --region="$REGION" \
-            --to-revisions="$PREVIOUS=100" --quiet
-          echo "$SERVICE revertido a $PREVIOUS"
+      # Sin rollback aquí: la revisión nunca recibió tráfico. Un humo rojo deja
+      # el job en rojo, `promote` no corre y los usuarios siguen en la anterior.
 
   # ===========================================================================
-  # promote: 100% a la revisión nueva; rollback si no queda sana (producción)
+  # promote: tráfico por escalones, 5xx en cada uno, rollback automático
   # ===========================================================================
   promote:
     name: Promoción de tráfico
-    # Solo producción: en staging el despliegue ya va al 100% y este job no
-    # tendría nada que promover.
-    if: ${{ inputs.environment == 'production' }}
     needs: [deploy, smoke]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     environment: ${{ inputs.environment }}
     permissions:
       contents: read
       id-token: write
     env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       REGION: ${{ vars.GCP_REGION }}
       SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      REVISION: ${{ needs.deploy.outputs.revision }}
+      PREVIOUS: ${{ needs.deploy.outputs.previous }}
+      TAG: ${{ needs.deploy.outputs.tag }}
+      # Producción por escalones; staging, con poco tráfico real, de una vez,
+      # pero con la misma verificación de 5xx y el mismo rollback.
+      STEPS: ${{ inputs.environment == 'production' && '10 50 100' || '100' }}
+      # Observación por escalón antes de leer la métrica.
+      OBSERVE_SECONDS: ${{ inputs.environment == 'production' && '300' || '90' }}
+      # Toda la vida de la revisión, más el retraso de ingesta de Cloud
+      # Monitoring (~3 min): la revisión es nueva, así que es su historial completo.
+      WINDOW_SECONDS: '1800'
+      MAX_5XX_RATIO: '0.02'
     steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # La identidad necesita roles/monitoring.viewer para leer la tasa de 5xx.
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@71fee32a0bb7e97b4d33d548e7d957010649d8fa # v2.1.3
         with:
@@ -508,32 +458,57 @@ jobs:
       - name: Setup Cloud SDK
         uses: google-github-actions/setup-gcloud@4111bea454dcfe1b4c2db3753685db043571e112 # v2.1.3
 
-      - name: Promover
+      # El filtro `--format='value(status.conditions[?@.type=="Ready"]...)'`
+      # devuelve cadena vacía en esta versión de gcloud y revirtió una revisión
+      # sana (run 39182072940). Se lee el JSON y se busca la condición a mano.
+      - name: La revisión está Ready
         run: |
           set -euo pipefail
-          gcloud run services update-traffic "$SERVICE" --region="$REGION" \
-            --to-revisions="${{ needs.deploy.outputs.revision }}=100" --quiet
-
-      # Un rollback de código no revierte migraciones: por eso las migraciones
-      # son compatibles hacia atrás (§12.4).
-      - name: Verificar la promoción (rollback si falla)
-        env:
-          REVISION: ${{ needs.deploy.outputs.revision }}
-          PREVIOUS: ${{ needs.deploy.outputs.previous }}
-        run: |
-          set -euo pipefail
-          # El filtro `--format='value(status.conditions[?@.type=="Ready"]...)'`
-          # devuelve cadena vacía en esta versión de gcloud, y una cadena vacía
-          # leída como «no sana» revierte una revisión que lo está: pasó en el
-          # run 39182072940, que promoted una revisión sana y la revirtió
-          # después. Se lee el JSON y se busca la condición a mano.
           READY=$(gcloud run revisions describe "$REVISION" --region="$REGION" --format=json \
                   | jq -r '([.status.conditions[]? | select(.type=="Ready") | .status] | first) // ""')
           echo "Estado de $REVISION: Ready=${READY:-<sin condición>}"
-          if [ "$READY" != "True" ]; then
-            echo "Revisión $REVISION no sana (Ready=$READY); revirtiendo a $PREVIOUS"
+          [ "$READY" = "True" ]
+
+      - name: Promover por escalones vigilando 5xx
+        run: |
+          set -euo pipefail
+          for PERCENT in $STEPS; do
+            if [ "$PERCENT" -ge 100 ]; then
+              SPLIT="$REVISION=100"
+            else
+              SPLIT="$REVISION=$PERCENT,$PREVIOUS=$((100 - PERCENT))"
+            fi
+            echo "::group::$PERCENT% a $REVISION"
             gcloud run services update-traffic "$SERVICE" --region="$REGION" \
-              --to-revisions="$PREVIOUS=100" --quiet
+              --to-revisions="$SPLIT" --quiet
+            sleep "$OBSERVE_SECONDS"
+            bash scripts/ci/revision-error-rate.sh
+            echo "::endgroup::"
+          done
+          echo "Promovida $REVISION"
+
+      # Un rollback de código no revierte migraciones: por eso las migraciones
+      # siguen expand/contract (§12.4, docs/MIGRATIONS.md).
+      - name: Rollback a la revisión anterior
+        if: failure()
+        run: |
+          set -euo pipefail
+          if [ -z "$PREVIOUS" ]; then
+            echo "No hay revisión anterior registrada; nada que revertir." >&2
             exit 1
           fi
-          echo "Promovida $REVISION"
+          gcloud run services update-traffic "$SERVICE" --region="$REGION" \
+            --to-revisions="$PREVIOUS=100" --quiet
+          echo "::error::$SERVICE revertido a $PREVIOUS"
+
+      # Los tags rc- de releases anteriores ya no sirven para nada y cada uno
+      # mantiene una URL viva. Se conserva solo el de esta revisión.
+      - name: Retirar tags rc- anteriores
+        if: success()
+        run: |
+          set -euo pipefail
+          OLD=$(gcloud run services describe "$SERVICE" --region="$REGION" --format=json \
+                | jq -r --arg t "$TAG" '[.status.traffic[]? | select(.tag != null and (.tag | startswith("rc-")) and .tag != $t) | .tag] | join(",")')
+          if [ -n "$OLD" ]; then
+            gcloud run services update-traffic "$SERVICE" --region="$REGION" --remove-tags="$OLD" --quiet
+          fi

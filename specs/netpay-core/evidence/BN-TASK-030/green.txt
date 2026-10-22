@@ -1,0 +1,311 @@
+# BN-TASK-030 green (audit: payment status, payment config, webhook endpoints, replay) — 2026-10-21T19:06:40Z
+# npm test -- src/payments/payment-config.audit.spec.ts src/payments/payment-orders.cash-and-refund.spec.ts src/payments/payment-orders.service.spec.ts src/payments/outbound/outbound-webhook.service.spec.ts
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/payment-config.audit.spec.ts src/payments/payment-orders.cash-and-refund.spec.ts src/payments/payment-orders.service.spec.ts src/payments/outbound/outbound-webhook.service.spec.ts
+
+(node:43528) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:43529) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PAID → PARTIALLY_REFUNDED',
+  orderId: 'order-1',
+  from: 'PAID',
+  to: 'PARTIALLY_REFUNDED',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PARTIALLY_REFUNDED → REFUNDED',
+  orderId: 'order-1',
+  from: 'PARTIALLY_REFUNDED',
+  to: 'REFUNDED',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PAID → REFUNDED',
+  orderId: 'order-1',
+  from: 'PAID',
+  to: 'REFUNDED',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PAID → REFUNDED',
+  orderId: 'order-1',
+  from: 'PAID',
+  to: 'REFUNDED',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PAID → PARTIALLY_REFUNDED',
+  orderId: 'order-1',
+  from: 'PAID',
+  to: 'PARTIALLY_REFUNDED',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PAID → REFUNDED',
+  orderId: 'order-1',
+  from: 'PAID',
+  to: 'REFUNDED',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PAID → REFUNDED',
+  orderId: 'order-1',
+  from: 'PAID',
+  to: 'REFUNDED',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PAID → PARTIALLY_REFUNDED',
+  orderId: 'order-1',
+  from: 'PAID',
+  to: 'PARTIALLY_REFUNDED',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'api'
+}
+(node:43527) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PAID',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PAID',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → AMOUNT_MISMATCH',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'AMOUNT_MISMATCH',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → FAILED',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'FAILED',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PAID',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PAID',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → FAILED',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'FAILED',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PENDING_VERIFICATION',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PENDING_VERIFICATION',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → FAILED',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'FAILED',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → FAILED',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'FAILED',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PAID',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PAID',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PAID',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PAID',
+  source: 'webhook'
+}
+(node:43526) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Test Suites: 4 passed, 4 total
+Tests:       118 passed, 118 total
+Snapshots:   0 total
+Time:        5.475 s, estimated 7 s
+Ran all test suites matching src/payments/payment-config.audit.spec.ts|src/payments/payment-orders.cash-and-refund.spec.ts|src/payments/payment-orders.service.spec.ts|src/payments/outbound/outbound-webhook.service.spec.ts.

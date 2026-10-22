@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { AppConfig } from '../config/app-config.service';
 import { PiiCryptoService } from './pii-crypto.service';
+import { Keyring } from './keyring';
 import { PiiMaskService } from './pii-mask.service';
 import { PiiRedactionService } from './pii-redaction.service';
 
@@ -19,7 +20,15 @@ import { PiiRedactionService } from './pii-redaction.service';
     PiiMaskService,
     {
       provide: PiiCryptoService,
-      useFactory: (config: AppConfig) => new PiiCryptoService(config.piiHmacKey, config.piiEncryptionKey),
+      // Versioned keyring (BN-REQ-SEC-007): PII_KEYS_JSON when set, else a
+      // one-key ring of PII_ENCRYPTION_KEY, which also reads legacy values.
+      useFactory: (config: AppConfig) =>
+        new PiiCryptoService(
+          config.piiHmacKey,
+          config.piiKeysJson
+            ? Keyring.fromJson(config.piiKeysJson, config.piiEncryptionKey)
+            : config.piiEncryptionKey,
+        ),
       inject: [AppConfig],
     },
     {

@@ -1,0 +1,141 @@
+# BN-TASK-030 red (payment status changes not audited) — 2026-10-21T19:05:25Z
+# npm test -- src/payments/payment-orders.cash-and-refund.spec.ts src/payments/payment-orders.service.spec.ts -t Audit of payment status changes|audits a webhook-driven
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/payment-orders.cash-and-refund.spec.ts src/payments/payment-orders.service.spec.ts -t Audit of payment status changes|audits a webhook-driven
+
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+  event: 'payment_status_change',
+  message: 'order order-1: PAID → PARTIALLY_REFUNDED',
+  orderId: 'order-1',
+  from: 'PAID',
+  to: 'PARTIALLY_REFUNDED',
+  source: 'api'
+}
+  event: 'payment_status_change',
+  message: 'order order-new: ∅ → PENDING',
+  orderId: 'order-new',
+  from: null,
+  to: 'PENDING',
+  source: 'api'
+}
+(node:42917) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/payment-orders.cash-and-refund.spec.ts
+  ● Audit of payment status changes (BN-TASK-030, BN-REQ-OPS-011) › records the change with the actor, the tenant, the order and from → to
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 17
+    + Received  +  1
+
+    - Array [
+    -   ObjectContaining {
+    -     "action": "payment.status_changed",
+    -     "actorId": "key-1",
+    -     "actorLabel": "erp",
+    -     "actorType": "API_KEY",
+    -     "metadata": ObjectContaining {
+    -       "event": "payment.refunded",
+    -       "from": "PAID",
+    -       "orderId": "order-1",
+    -       "to": "PARTIALLY_REFUNDED",
+    -     },
+    -     "resourceId": "order-1",
+    -     "resourceType": "payment_order",
+    -     "tenantId": "11111111-1111-4111-8111-111111111111",
+    -   },
+    - ]
+    + Array []
+
+      400 |     const f = fixture([row()]);
+      401 |     await f.service.refund('order-1', 'cliente', '30.00');
+    > 402 |     expect(f.audits).toEqual([
+          |                      ^
+      403 |       expect.objectContaining({
+      404 |         tenantId: TENANT_ID,
+      405 |         actorType: 'API_KEY',
+
+      at Object.<anonymous> (src/payments/payment-orders.cash-and-refund.spec.ts:402:22)
+
+  ● Audit of payment status changes (BN-TASK-030, BN-REQ-OPS-011) › records the creation of an order as ∅ → PENDING
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 9
+    + Received  + 1
+
+    - Array [
+    -   ObjectContaining {
+    -     "action": "payment.status_changed",
+    -     "metadata": ObjectContaining {
+    -       "from": null,
+    -       "to": "PENDING",
+    -     },
+    -   },
+    - ]
+    + Array []
+
+      429 |     const f = fixture([]);
+      430 |     await f.service.create({ merchantReferenceCode: 'H', amount: '50.00', checkoutMode: 'custom' });
+    > 431 |     expect(f.audits).toEqual([
+          |                      ^
+      432 |       expect.objectContaining({
+      433 |         action: 'payment.status_changed',
+      434 |         metadata: expect.objectContaining({ from: null, to: 'PENDING' }) as unknown,
+
+      at Object.<anonymous> (src/payments/payment-orders.cash-and-refund.spec.ts:431:22)
+
+  event: 'payment_status_change',
+  message: 'order order-1: PENDING → PAID',
+  orderId: 'order-1',
+  from: 'PENDING',
+  to: 'PAID',
+  source: 'webhook'
+}
+(node:42918) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/payment-orders.service.spec.ts
+  ● PaymentOrdersService status changes: audit and metrics (BN-TASK-030, BN-TASK-044) › audits a webhook-driven PENDING → PAID as the system, with the tenant and the order
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 16
+    + Received  +  1
+
+    - Array [
+    -   ObjectContaining {
+    -     "action": "payment.status_changed",
+    -     "actorType": "SYSTEM",
+    -     "metadata": ObjectContaining {
+    -       "event": "payment.paid",
+    -       "from": "PENDING",
+    -       "orderId": "order-1",
+    -       "source": "webhook",
+    -       "to": "PAID",
+    -     },
+    -     "resourceId": "order-1",
+    -     "resourceType": "payment_order",
+    -     "tenantId": "11111111-1111-4111-8111-111111111111",
+    -   },
+    - ]
+    + Array []
+
+      980 |     const { service, audits } = serviceOver([order()], { status: 'DONE', amount: 150.75 });
+      981 |     await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
+    > 982 |     expect(audits).toEqual([
+          |                    ^
+      983 |       expect.objectContaining({
+      984 |         tenantId: TENANT_ID,
+      985 |         actorType: 'SYSTEM',
+
+      at Object.<anonymous> (src/payments/payment-orders.service.spec.ts:982:20)
+
+Test Suites: 2 failed, 2 total
+Tests:       3 failed, 94 skipped, 1 passed, 98 total
+Snapshots:   0 total
+Time:        3.96 s
+Ran all test suites matching src/payments/payment-orders.cash-and-refund.spec.ts|src/payments/payment-orders.service.spec.ts with tests matching "Audit of payment status changes|audits a webhook-driven".

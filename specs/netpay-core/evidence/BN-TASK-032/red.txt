@@ -1,0 +1,21 @@
+# BN-TASK-032 red — 2026-10-21T18:16:26Z
+# npm test -- src/auth/throttling.spec.ts src/auth/redis-throttler.storage.spec.ts
+FAIL src/auth/throttling.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './throttling' from 'src/auth/throttling.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+FAIL src/auth/redis-throttler.storage.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './redis-throttler.storage' from 'src/auth/redis-throttler.storage.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+Test Suites: 2 failed, 2 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        2.672 s
+Ran all test suites matching src/auth/throttling.spec.ts|src/auth/redis-throttler.storage.spec.ts.

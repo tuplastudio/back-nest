@@ -23,8 +23,8 @@ export class ResponseHeadersMiddleware implements NestMiddleware {
    * @param next Next middleware in the chain.
    */
   use(_request: unknown, response: { setHeader(name: string, value: string): void }, next: () => void): void {
-    // Documentation is intentionally not advertised to scanners.
-    response.setHeader('X-Powered-By', 'masked');
+    // No X-Powered-By, not even a masked one (BN-REQ-SEC-011): Express' own
+    // header is disabled in applyHttpSettings and helmet strips it as well.
     response.setHeader('X-Content-Type-Options', 'nosniff');
     this.logger.debug(`Response headers applied (redaction: ${this.redaction.isEnabled}).`);
     next();

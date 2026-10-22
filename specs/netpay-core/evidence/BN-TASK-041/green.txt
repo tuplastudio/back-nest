@@ -1,0 +1,85 @@
+$ jest scripts/ci/workflow-policy --verbose
+Test Suites: 1 passed, 1 total
+Tests:       14 passed, 14 total
+Snapshots:   0 total
+Time:        2.295 s, estimated 9 s
+Ran all test suites matching scripts/ci/workflow-policy.
+
+$ actionlint .github/workflows/*.yml
+actionlint: ok
+
+$ REPO=example/repo REVIEWERS=user:octocat scripts/github/protect-repo.sh   # dry-run, nothing written
+Modo simulación: nada se escribe. Repite con --apply.
+[dry-run] gh api -X PUT repos/example/repo/environments/production
+    {
+      "reviewers": [
+        {
+          "type": "User",
+          "id": 583231
+        }
+      ],
+      "prevent_self_review": false,
+      "deployment_branch_policy": {
+        "protected_branches": false,
+        "custom_branch_policies": true
+      }
+    }
+[dry-run] gh api -X POST repos/example/repo/environments/production/deployment-branch-policies
+    {
+      "name": "main",
+      "type": "branch"
+    }
+[dry-run] gh api -X PUT repos/example/repo/environments/production-readonly
+    {
+      "reviewers": [],
+      "prevent_self_review": false,
+      "deployment_branch_policy": {
+        "protected_branches": false,
+        "custom_branch_policies": true
+      }
+    }
+[dry-run] gh api -X POST repos/example/repo/environments/production-readonly/deployment-branch-policies
+    {
+      "name": "main",
+      "type": "branch"
+    }
+[dry-run] gh api -X PUT repos/example/repo/environments/staging-readonly
+    {
+      "reviewers": [],
+      "prevent_self_review": false,
+      "deployment_branch_policy": {
+        "protected_branches": false,
+        "custom_branch_policies": true
+      }
+    }
+[dry-run] gh api -X POST repos/example/repo/environments/staging-readonly/deployment-branch-policies
+    {
+      "name": "main",
+      "type": "branch"
+    }
+[dry-run] gh api -X PUT repos/example/repo/environments/staging
+    {
+      "deployment_branch_policy": null
+    }
+[dry-run] gh api -X PUT repos/example/repo/branches/main/protection
+    {
+      "required_status_checks": {
+        "strict": true,
+        "contexts": [
+          "CI / Verificación, tests y e2e",
+          "CI / Vulnerabilidades"
+        ]
+      },
+      "enforce_admins": true,
+      "required_pull_request_reviews": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews": true,
+        "require_code_owner_reviews": false
+      },
+      "restrictions": null,
+      "required_linear_history": false,
+      "allow_force_pushes": false,
+      "allow_deletions": false,
+      "required_conversation_resolution": true
+    }
+Listo. Comprobar con: scripts/github/protect-repo.sh --verify

@@ -1,0 +1,6 @@
+# BN-TASK-026 green (e2e: built server + stand-in Netpay + PostgreSQL 17 bn-e2e-w3) — 2026-10-21T21:07:13Z
+# node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --runInBand test/payments.e2e-spec.ts --verbose
+PASS test/payments.e2e-spec.ts (26.933 s)
+      ✓ reports drift of the webhook Netpay calls, and none once it is this deployment (BN-TASK-026) (88 ms)
+Test Suites: 1 passed, 1 total
+Tests:       151 passed, 151 total

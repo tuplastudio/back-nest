@@ -1,0 +1,14 @@
+# BN-TASK-034 red — 2026-10-21T18:21:11Z
+# npm test -- src/auth/totp.spec.ts
+FAIL src/auth/totp.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './totp' from 'src/auth/totp.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        2.006 s
+Ran all test suites matching src/auth/totp.spec.ts.

@@ -1,0 +1,6 @@
+
+> netpay-api@1.0.0 docs:lint
+> tsx scripts/docs-lint.ts
+
+docs-lint: sin variables huérfanas ni rutas inexistentes.
+exit=0

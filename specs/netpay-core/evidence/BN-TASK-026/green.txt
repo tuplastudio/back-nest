@@ -1,0 +1,54 @@
+# BN-TASK-026 green (unit: drift comparison, stored verdict, netpay_webhook_drift, cached /health/ready summary) — 2026-10-21T21:02:18Z
+# node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/webhook-drift.service.spec.ts src/health/health.service.spec.ts src/common/logging/payment-log-events.spec.ts -t drift|Drift --verbose --reporters=default
+PASS src/common/logging/payment-log-events.spec.ts
+  payment log events (BN-TASK-044)
+    ✓ netpay_webhook_drift is 1 (warning) on drift and 0 otherwise (BN-TASK-026) (13 ms)
+    ○ skipped payment_status_change carries the fields the metric reads
+    ○ skipped netpay_request is a rounded latency, warn on failure
+    ○ skipped outbound_delivery_result carries result
+    ○ skipped reconcile_checked / reconcile_corrected / reconcile_errors carry counts and the transition (BN-TASK-016)
+    ○ skipped the log-based metrics filter on these exact event names and fields
+PASS src/payments/webhook-drift.service.spec.ts
+  compareWebhookUrl (BN-REQ-CFG-004)
+    ✓ https://netpay-api-staging-abc-ul.a.run.app/api/v1/payments/webhook/tok_current_0123456789 → drift false (match) (2 ms)
+    ✓ https://betydeliv.replit.app/api/v1/payments/webhook/tok_current_0123456789 → drift true (origin) (1 ms)
+    ✓ https://netpay-api-staging-abc-ul.a.run.app/api/v1/payments/webhook/tok_old_token_value → drift true (token)
+    ✓ https://netpay-api-staging-abc-ul.a.run.app/webhooks/netpay → drift true (path)
+    ✓ null → drift true (none_registered) (1 ms)
+    ✓ not a url → drift true (path)
+    ○ skipped compares the token alone when PUBLIC_BASE_URL is not configured
+  WebhookDriftService (BN-TASK-026)
+    ✓ reports drift when Netpay calls another deployment, records it and logs netpay_webhook_drift=1 (2 ms)
+    ✓ reports no drift for this deployment and the current token (1 ms)
+    ✓ checks a tenant against Netpay only when its last check is older than the interval (1 ms)
+    ✓ summarises the stored verdicts for /health/ready without calling Netpay, and caches it
+PASS src/health/health.service.spec.ts
+  HealthService.readiness
+    ○ skipped reports ok when both planes answer
+    ○ skipped really probes the tenant plane instead of assuming it is up
+    ○ skipped marks the report degraded when the control plane is down
+    ○ skipped does not leak the dependency error into the public body
+    ○ skipped truncates nothing user-visible but still reports a latency
+  HealthService.readiness with outbound webhooks switched off (BN-TASK-003)
+    ○ skipped reports degraded, with the cause, when ACTIVE endpoints exist
+    ○ skipped stays ok when switched off and nobody subscribed
+    ○ skipped does not even look for endpoints when deliveries are on
+    ○ skipped names a failing dependency as the reason too
+  HealthService.readiness cache (BN-TASK-037)
+    ○ skipped answers from a 5 s cache instead of probing the databases on every call
+    ○ skipped shares one probe between concurrent callers
+    ○ skipped carries the build version and commit SHA
+  readinessFor
+    ○ skipped trims the report for an anonymous caller
+    ○ skipped keeps the detail, build included, for a verified principal
+    ○ skipped still reports degraded to an anonymous caller
+    ○ skipped does not leak dependency names or latencies when trimmed
+  hasVerifiedPrincipal
+    ○ skipped trusts the principal the authentication guard verified and attached
+    ○ skipped does not take a header for proof: a forged bearer token is still anonymous
+    ○ skipped treats an anonymous probe as anonymous
+  netpayWebhookDrift in /health/ready (BN-TASK-026)
+    ✓ adds the cached drift summary to the verified report, never to the public one (4 ms)
+    ✓ reports the drift as unknown when the summary cannot be read (1 ms)
+Test Suites: 3 passed, 3 total
+Tests:       25 skipped, 13 passed, 38 total

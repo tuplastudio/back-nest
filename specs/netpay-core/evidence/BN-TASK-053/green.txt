@@ -1,0 +1,10 @@
+# BN-TASK-053 green — 2026-10-21T18:18:41Z
+# jest src/payments/payment-orders.service.spec.ts -t "BN-TASK-053|stored cards"
+[Nest] 11692  - 10/21/2026, 11:18:42 AM    WARN [PaymentOrdersService] Could not read the stored card digits back from Netpay.
+(node:11692) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Test Suites: 1 passed, 1 total
+Tests:       54 skipped, 12 passed, 66 total
+Snapshots:   0 total
+Time:        1.431 s, estimated 2 s
+Ran all test suites matching src/payments/payment-orders.service.spec.ts with tests matching "BN-TASK-053|stored cards".

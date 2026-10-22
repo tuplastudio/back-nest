@@ -1,8 +1,35 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import { PaymentConfigService } from './payment-config.service';
 import { PaymentOrdersService } from './payment-orders.service';
+import { NetpayClient } from './netpay.client';
+
+/** How long a notification key suppresses a repeat verification (BN-REQ-IDM-005). */
+export const INBOUND_DEDUPE_WINDOW_MS = 10 * 60_000;
+
+/**
+ * Deterministic dedupe key of an inbound notification.
+ *
+ * `sha256(eventType|transactionId|status)`: the same notification redelivered by
+ * Netpay always yields the same key, while a new status for the same transaction
+ * (a payment, then its cancellation) yields a new one. No random component, so the
+ * key survives restarts and is shared by every instance.
+ *
+ * @param eventType Netpay event name.
+ * @param transactionId Transaction named by the payload, if any.
+ * @param status Status named by the payload, if any.
+ * @returns Hex SHA-256.
+ */
+export function inboundDedupeKey(
+  eventType: string,
+  transactionId: string | null,
+  status: string | null,
+): string {
+  return createHash('sha256')
+    .update(`${eventType}|${transactionId ?? ''}|${status ?? ''}`)
+    .digest('hex');
+}
 
 /**
  * Payload fields of an inbound notification that are safe to keep.
@@ -77,6 +104,7 @@ export class NetpayWebhookService {
     private readonly tenantPrisma: TenantPrismaService,
     private readonly config: PaymentConfigService,
     private readonly orders: PaymentOrdersService,
+    private readonly netpay: NetpayClient,
   ) {}
 
   /**
@@ -109,20 +137,34 @@ export class NetpayWebhookService {
         : typeof data['merchantReferenceCode'] === 'string'
           ? data['merchantReferenceCode']
           : null;
+    const statusField = data['status'] ?? data['transactionStatus'];
+    const status = typeof statusField === 'string' ? statusField : null;
     const eventId = `ntf_${randomUUID().replace(/-/g, '')}`;
 
+    // Every copy is kept as evidence; only the verification is deduplicated.
     const stored = await this.recordEvent(schemaName, eventId, eventType, transactionId, payload);
     if (!stored) {
-      // A redelivery of an id already handled: nothing to do, and no second
-      // verification, which is what keeps a retried notification harmless.
+      return;
+    }
+    const dedupeKey = inboundDedupeKey(eventType, transactionId, status);
+    if (!(await this.claimDedupeKey(schemaName, dedupeKey))) {
+      // The same notification inside the window: Netpay is not asked again, which
+      // is what keeps a retried or replayed notification from amplifying traffic.
+      await this.markProcessed(schemaName, eventId, 'DUPLICATE');
       return;
     }
 
-    const orderId = await this.findOrder(schemaName, reference ?? merchantRef, sessionId, merchantRef);
-    if (orderId !== null && reference !== null && /^(cep|oxxopay)\./.test(eventType)) {
-      // The buyer picked cash on the hosted page, or the reference was just
-      // announced: remember it so the payment can be matched and shown.
-      await this.orders.attachCashReferenceInSchema(schemaName, orderId, reference, null);
+    const order = await this.findOrder(schemaName, reference ?? merchantRef, sessionId, merchantRef);
+    const orderId = order?.id ?? null;
+    if (order !== null && reference !== null && /^(cep|oxxopay)\./.test(eventType)) {
+      // The buyer picked cash on the hosted page, or the reference was just announced.
+      // The payload is unsigned, so the reference is written only once Netpay confirms
+      // that the transaction it names belongs to this order (BN-THR-015).
+      if (await this.providerConfirms(schemaName, transactionId, order.orderReference)) {
+        await this.orders.attachCashReferenceInSchema(schemaName, order.id, reference, null);
+      } else {
+        this.logger.warn(`Ignored an unconfirmed cash reference on a ${eventType} notification.`);
+      }
     }
 
     if (transactionId === null) {
@@ -144,9 +186,85 @@ export class NetpayWebhookService {
       await this.markProcessed(schemaName, eventId, result.status);
     } catch {
       // Verification failing leaves the order unconfirmed. It is never promoted
-      // to paid on the strength of the notification.
+      // to paid on the strength of the notification. The dedupe key is released so
+      // Netpay's own retry can verify again instead of being dropped as a duplicate.
       this.logger.error(`Verification failed for a ${eventType} notification.`);
+      await this.releaseDedupeKey(schemaName, dedupeKey);
       await this.markProcessed(schemaName, eventId, 'VERIFICATION_FAILED');
+    }
+  }
+
+  /**
+   * Claims a dedupe key for the window, atomically across instances.
+   *
+   * Expired keys are pruned first, then the key is inserted; a unique violation means
+   * the same notification was seen inside the window.
+   *
+   * @param schemaName Tenant schema.
+   * @param key Dedupe key.
+   * @returns `true` when this notification should be processed.
+   */
+  private async claimDedupeKey(schemaName: string, key: string): Promise<boolean> {
+    const now = new Date();
+    try {
+      await this.tenantPrisma.forTenantTransaction(schemaName, async (client) => {
+        await client.inboundEventSeen.deleteMany({
+          where: { seenAt: { lt: new Date(now.getTime() - INBOUND_DEDUPE_WINDOW_MS) } },
+        });
+        await client.inboundEventSeen.create({ data: { key, seenAt: now } });
+      });
+      return true;
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Forgets a dedupe key, so the next copy of the notification is processed.
+   *
+   * @param schemaName Tenant schema.
+   * @param key Dedupe key.
+   */
+  private async releaseDedupeKey(schemaName: string, key: string): Promise<void> {
+    try {
+      await this.tenantPrisma.forTenantTransaction(schemaName, (client) =>
+        client.inboundEventSeen.deleteMany({ where: { key } }),
+      );
+    } catch {
+      // Left to expire with the window.
+      this.logger.error('Could not release an inbound dedupe key; it will expire.');
+    }
+  }
+
+  /**
+   * Asks Netpay whether a transaction belongs to an order.
+   *
+   * @param schemaName Tenant schema.
+   * @param transactionId Transaction named by the notification.
+   * @param orderReference Reference this system sent for the order.
+   * @returns `true` only when Netpay names this order for the transaction.
+   */
+  private async providerConfirms(
+    schemaName: string,
+    transactionId: string | null,
+    orderReference: string,
+  ): Promise<boolean> {
+    if (transactionId === null) {
+      return false;
+    }
+    try {
+      const config = await this.config.getUsableInSchema(schemaName);
+      const transaction = await this.netpay.getTransaction(
+        config.environment,
+        config.secretKey,
+        transactionId,
+      );
+      return transaction.merchantReferenceCode === orderReference;
+    } catch {
+      return false;
     }
   }
 
@@ -237,14 +355,14 @@ export class NetpayWebhookService {
    * @param schemaName Tenant schema.
    * @param reference Order reference, when present.
    * @param sessionId Checkout Hosted session id, when present.
-   * @returns The order id, or `null` when the reference is absent or unknown.
+   * @returns The order id and reference, or `null` when the reference is absent or unknown.
    */
   private async findOrder(
     schemaName: string,
     reference: string | null,
     sessionId: string | null,
     merchantRef: string | null = null,
-  ): Promise<string | null> {
+  ): Promise<{ id: string; orderReference: string } | null> {
     const keys: (
       { orderReference: string } | { checkoutSessionId: string } | { paymentReference: string }
     )[] = [];
@@ -265,7 +383,7 @@ export class NetpayWebhookService {
     const row = await this.tenantPrisma.forTenantTransaction(schemaName, (client) =>
       client.paymentOrder.findFirst({
         where: { OR: keys },
-        select: { id: true },
+        select: { id: true, orderReference: true },
       }),
     );
     if (row === null) {
@@ -277,6 +395,6 @@ export class NetpayWebhookService {
     // transaction that does not exist: the real notification would then be refused
     // as "already bound to a different transaction" and the order could never
     // settle. Verification binds the id only after the provider has confirmed it.
-    return row.id;
+    return row;
   }
 }

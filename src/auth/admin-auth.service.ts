@@ -8,10 +8,12 @@ import { ControlPlanePrismaService } from '../prisma/control-plane-prisma.servic
 import { AppConfig } from '../config/app-config.service';
 import {
   AccountLockedException,
+  ConflictException,
   InvalidCredentialsException,
   TokenReuseDetectedException,
 } from '../common/errors/app.exception';
 import { PiiCryptoService } from '../pii/pii-crypto.service';
+import { AdminMfaService, InvalidMfaCodeException } from './admin-mfa.service';
 
 /**
  * Context about the calling client, captured for the audit trail.
@@ -49,6 +51,11 @@ export interface SignInResult {
   readonly role: PlatformRole;
   /** Whether a password change is mandatory. */
   readonly mustChangePassword: boolean;
+  /**
+   * Whether the session still owes a second factor: MFA is enrolled but was
+   * not verified, or it is required and not enrolled yet (BN-REQ-SEC-006).
+   */
+  readonly mfaRequired: boolean;
 }
 
 /**
@@ -95,6 +102,7 @@ export class AdminAuthService {
     private readonly audit: AuditLogService,
     private readonly crypto: PiiCryptoService,
     private readonly config: AppConfig,
+    private readonly mfa: AdminMfaService,
   ) {}
 
   /**
@@ -103,11 +111,19 @@ export class AdminAuthService {
    * @param email Submitted e-mail address (normalised before lookup).
    * @param password Submitted password.
    * @param context Request metadata for the audit trail.
+   * @param secondFactor Optional TOTP or recovery code; when valid the session
+   * is MFA-verified from the start.
    * @returns The issued token pair and profile fields.
    * @throws {InvalidCredentialsException} On bad credentials.
    * @throws {AccountLockedException} When the account is currently locked.
+   * @throws {InvalidMfaCodeException} When a second factor is sent and is wrong.
    */
-  async signIn(email: string, password: string, context: SignInContext): Promise<SignInResult> {
+  async signIn(
+    email: string,
+    password: string,
+    context: SignInContext,
+    secondFactor?: string,
+  ): Promise<SignInResult> {
     const normalized = PiiCryptoService.normalizeEmail(email);
     const lookup = this.crypto.blindIndex(normalized);
 
@@ -164,7 +180,18 @@ export class AdminAuthService {
     // password was set, re-hash it now using the fresh password.
     const passwordHash = verification.needsRehash ? await this.passwords.hash(password) : admin.passwordHash;
 
-    const pair = this.tokens.issuePair(admin.id, 'platform-admin');
+    let mfaAt: number | undefined;
+    if (secondFactor !== undefined && admin.mfaEnabledAt !== null) {
+      if (!(await this.mfa.verify(admin.id, secondFactor))) {
+        // A wrong second factor after a right password counts towards lockout
+        // like a wrong password, so the code cannot be brute-forced.
+        await this.registerFailedAttempt(admin, context);
+        throw new InvalidMfaCodeException();
+      }
+      mfaAt = Math.floor(Date.now() / 1000);
+    }
+
+    const pair = this.tokens.issuePair(admin.id, 'platform-admin', undefined, undefined, mfaAt);
 
     await this.prisma.client.$transaction([
       this.prisma.client.adminRefreshToken.create({
@@ -213,6 +240,7 @@ export class AdminAuthService {
       displayName: admin.displayName,
       role: admin.role,
       mustChangePassword: admin.mustChangePassword,
+      mfaRequired: this.owesMfa(admin.mfaEnabledAt !== null, mfaAt),
     };
   }
 
@@ -274,7 +302,15 @@ export class AdminAuthService {
 
     // The family id is the FOURTH argument: passing it in the tenantId position
     // would start a new rotation family on every refresh, defeating reuse detection.
-    const pair = this.tokens.issuePair(stored.adminId, 'platform-admin', undefined, stored.familyId);
+    // The verification time travels with the family: a refreshed session stays
+    // verified, but never looks recently verified for a step-up.
+    const pair = this.tokens.issuePair(
+      stored.adminId,
+      'platform-admin',
+      undefined,
+      stored.familyId,
+      payload.mfa,
+    );
 
     // Revoke the presented token and link it to its replacement, all in one
     // transaction so a crash cannot leave the old token usable.
@@ -306,7 +342,113 @@ export class AdminAuthService {
       displayName: stored.admin.displayName,
       role: stored.admin.role,
       mustChangePassword: stored.admin.mustChangePassword,
+      mfaRequired: this.owesMfa(stored.admin.mfaEnabledAt !== null, payload.mfa),
     };
+  }
+
+  /**
+   * Starts a fresh session (new rotation family) for an already authenticated
+   * administrator, e.g. after a second-factor verification or a password change.
+   *
+   * @param adminId Administrator.
+   * @param context Request metadata.
+   * @param mfaAt Epoch seconds of the MFA verification to embed, if any.
+   * @returns The new token pair and profile fields.
+   */
+  async issueSession(
+    adminId: string,
+    context: SignInContext,
+    mfaAt: number | undefined,
+  ): Promise<SignInResult> {
+    const admin = await this.prisma.client.platformAdmin.findUniqueOrThrow({ where: { id: adminId } });
+    const pair = this.tokens.issuePair(admin.id, 'platform-admin', undefined, undefined, mfaAt);
+    await this.prisma.client.adminRefreshToken.create({
+      data: {
+        adminId: admin.id,
+        familyId: pair.familyId,
+        tokenHash: pair.refreshTokenDigest,
+        expiresAt: new Date(pair.refreshTokenExpiresAt),
+        ipHash: context.ipHash,
+        userAgentHash: context.userAgentHash,
+      },
+    });
+    return {
+      accessToken: pair.accessToken,
+      refreshToken: pair.refreshToken,
+      accessTokenExpiresAt: pair.accessTokenExpiresAt,
+      refreshTokenExpiresAt: pair.refreshTokenExpiresAt,
+      familyId: pair.familyId,
+      refreshTokenDigest: pair.refreshTokenDigest,
+      emailMasked: admin.emailMasked,
+      displayName: admin.displayName,
+      role: admin.role,
+      mustChangePassword: admin.mustChangePassword,
+      mfaRequired: this.owesMfa(admin.mfaEnabledAt !== null, mfaAt),
+    };
+  }
+
+  /**
+   * Changes an administrator's password (BN-REQ-SEC-008).
+   *
+   * Clears `mustChangePassword`, revokes every other session and returns a new
+   * one that keeps the caller's MFA verification.
+   *
+   * @param adminId Administrator.
+   * @param currentPassword Password in use.
+   * @param newPassword Replacement.
+   * @param context Request metadata.
+   * @param mfaAt MFA verification carried by the calling session.
+   * @returns The new session.
+   * @throws {InvalidCredentialsException} When the current password is wrong.
+   */
+  async changePassword(
+    adminId: string,
+    currentPassword: string,
+    newPassword: string,
+    context: SignInContext,
+    mfaAt: number | undefined,
+  ): Promise<SignInResult> {
+    const admin = await this.prisma.client.platformAdmin.findUniqueOrThrow({ where: { id: adminId } });
+    const verification = await this.passwords.verify(admin.passwordHash, currentPassword);
+    if (!verification.valid) {
+      await this.registerFailedAttempt(admin, context);
+      throw new InvalidCredentialsException();
+    }
+    if (currentPassword === newPassword) {
+      throw new ConflictException('The new password must differ from the current one.');
+    }
+    await this.prisma.client.platformAdmin.update({
+      where: { id: adminId },
+      data: {
+        passwordHash: await this.passwords.hash(newPassword),
+        passwordChangedAt: new Date(),
+        mustChangePassword: false,
+      },
+    });
+    await this.revokeAllSessions(adminId);
+    await this.audit.record({
+      tenantId: null,
+      actorType: AuditActorType.PLATFORM_ADMIN,
+      actorId: adminId,
+      action: 'auth.password-changed',
+      resourceType: 'platform-admin',
+      resourceId: adminId,
+      outcome: AuditOutcome.SUCCESS,
+      ipHash: context.ipHash,
+      userAgentHash: context.userAgentHash,
+    });
+    return this.issueSession(adminId, context, mfaAt);
+  }
+
+  /**
+   * Whether a session still owes a second factor.
+   *
+   * @param enrolled MFA is active for the admin.
+   * @param mfaAt Verification carried by the session.
+   * @returns `true` when the session must still verify or enrol.
+   */
+  private owesMfa(enrolled: boolean, mfaAt: number | undefined): boolean {
+    return (enrolled || this.config.mfaRequiredForAdmins) && mfaAt === undefined;
   }
 
   /**

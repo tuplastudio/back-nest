@@ -1,0 +1,65 @@
+# BN-TASK-031 green — 2026-10-21T18:15:24Z
+# npm test -- src/tenant-api/tenant-users.service.spec.ts src/common/rbac-audit.routes.spec.ts
+PASS src/tenant-api/tenant-users.service.spec.ts
+  TenantUsersService.create (regression: role grant is authorized)
+    ✓ refuses to grant OWNER from a VIEWER session (5 ms)
+    ✓ refuses to grant OWNER even from an ADMIN session (1 ms)
+    ✓ refuses a VIEWER granting ADMIN, which is above its own role
+    ✓ allows a MEMBER granting MEMBER (1 ms)
+    ✓ allows an ADMIN granting ADMIN (1 ms)
+    ✓ defaults an omitted role to MEMBER for a MEMBER caller
+    ✓ refuses a VIEWER even with no role requested, because the default MEMBER exceeds it
+    ✓ refuses a MEMBER granting ADMIN
+    ✓ grants the ADMIN member the tenant-admin system role (1 ms)
+    ✓ grants the MEMBER member the tenant-member system role (1 ms)
+    ✓ grants nothing when the request is refused (1 ms)
+    ✓ activates the row and records the caller
+    ✓ refuses to create a member when no principal is present
+    ✓ caps an api-key principal at MEMBER: ADMIN is refused (BN-REQ-SEC-002) (1 ms)
+    ✓ refuses a caller-supplied password from an api-key principal with 422 (BN-REQ-SEC-002)
+    ✓ invites the member created by an api-key: INVITED, no password, one-time token returned
+    ✓ returns no invitation for a member created active with a password
+    ✓ still refuses OWNER from an api-key principal (1 ms)
+  TenantUsersService.acceptInvitation (BN-REQ-SEC-002 invitation flow)
+    ✓ activates the invited member with the chosen password (1 ms)
+    ✓ is one-time: an already active member cannot be re-activated with the same token
+    ✓ refuses a token minted for another tenant (1 ms)
+    ✓ refuses a forged or expired token
+
+PASS src/common/rbac-audit.routes.spec.ts
+  RBAC route table (BN-REQ-SEC-001)
+    ✓ has no route with @RequirePermissions and no @RequireScopes (3 ms)
+    ✓ boots: every route declares a policy and a scope where it declares permissions (1 ms)
+    ✓ makes webhooks:read and webhooks:write grantable to API keys
+    ✓ requires a webhooks scope on every /t/webhooks route (1 ms)
+    ✓ requires users:write at method level on POST /t/users, so VIEWER is refused (BN-REQ-SEC-003)
+
+Test Suites: 2 passed, 2 total
+Tests:       27 passed, 27 total
+Snapshots:   0 total
+Time:        3.431 s, estimated 4 s
+Ran all test suites matching src/tenant-api/tenant-users.service.spec.ts|src/common/rbac-audit.routes.spec.ts.
+
+================ e2e ================
+# BN-TASK-029/031/032/034/038/039 e2e — test/security.e2e-spec.ts against compiled app (Postgres bn-e2e-b:55432)
+PASS test/security.e2e-spec.ts
+  Security hardening (e2e)
+    ✓ never answers 429 to 30 readiness probes a minute, and does not count them (52 ms)
+    ✓ refuses an admin without MFA with 403 MFA_REQUIRED (86 ms)
+    ✓ enrols TOTP, confirms it and unlocks the control plane (61 ms)
+    ✓ requires the second factor at sign-in once enrolled (62 ms)
+    ✓ provisions the tenant used below (113 ms)
+    ✓ requires a step-up (MFA within 5 min) for a cross-tenant payment write (41 ms)
+    ✓ refuses /t/webhooks to a key holding only payments:read, and admits webhooks:* keys (143 ms)
+    ✓ caps API-key member creation at MEMBER, refuses a password and invites instead (217 ms)
+    ✓ refuses POST /t/users to a VIEWER (method-level users:write) (101 ms)
+    ✓ restricts an admin with mustChangePassword to the password change endpoint (70 ms)
+    ✓ answers an allowed preflight with 204 and a disallowed one with 403 (1 ms)
+    ✓ sends no X-Powered-By header (12 ms)
+    ✓ answers 429 on the 11th sign-in within a minute (242 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       13 passed, 13 total
+Snapshots:   0 total
+Time:        5.093 s, estimated 6 s
+Ran all test suites matching test/security.e2e-spec.ts.

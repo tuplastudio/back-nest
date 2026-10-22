@@ -242,19 +242,37 @@ enum PaymentEnvironment {
 
 /// Lifecycle of a payment order.
 ///
-/// Only `PAID`, `FAILED`, `REFUNDED` and `AMOUNT_MISMATCH` are reached from a
-/// verified call to Netpay; `PENDING_*` means "we have not confirmed anything
-/// yet" and must never be read as paid.
+/// Only `PAID`, `FAILED`, `PARTIALLY_REFUNDED`, `REFUNDED` and `AMOUNT_MISMATCH`
+/// are reached from a verified call to Netpay; `PENDING_*` means "we have not
+/// confirmed anything yet" and must never be read as paid.
 enum PaymentStatus {
   PENDING
   PENDING_VERIFICATION
+  /// A charge was sent and Netpay gave no definitive answer: the buyer may have been
+  /// charged. New charges are refused until a verification resolves it (BN-REQ-PAY-003).
+  CHARGE_UNKNOWN
   PAID
+  /// Part of the charge went back to the buyer; the rest is still settled (BN-REQ-PAY-005).
+  PARTIALLY_REFUNDED
   FAILED
   REFUNDED
   AMOUNT_MISMATCH
+  /// Withdrawn before payment by the merchant (BN-REQ-PAY-004). A payment Netpay
+  /// still reports afterwards keeps the order CANCELLED and sets `paidAfterCancelAt`.
+  CANCELLED
+  /// Never paid in time: 3-D Secure abandoned for 30 min, or a cash reference past its
+  /// expiry (BN-REQ-REC-002/003). Set by reconciliation.
+  EXPIRED
 }
 
-/// A tenant's Netpay configuration. One row per tenant.
+/// A tenant's Netpay configuration, versioned and append-only (BN-REQ-CFG-002).
+///
+/// Every change of keys, environment or settings inserts a new row with the next
+/// `version` and makes it the one `active` row (a partial unique index enforces
+/// that). Orders keep the `configId` they were created with, so a refund or a
+/// verification of an old order uses the credentials and environment it was
+/// charged with. The webhook bookkeeping columns (`webhookTokenHash`,
+/// `webhookRegisteredAt`, `webhookDrift*`) are updated in place on the active row.
 ///
 /// `secretKeyCiphertext` is encrypted with the payments key, which is
 /// deliberately NOT the PII key: a payments credential and personal data have
@@ -289,12 +307,32 @@ model PaymentProviderConfig {
 
   enabled Boolean @default(true)
 
+  /// Per tenant, from 1. A new version is written for every configuration change.
+  version Int @default(1)
+
+  /// The version new orders use. Exactly one row is active (partial unique index).
+  active Boolean @default(true)
+
+  /// Origins (`https://shop.example`) a hosted order may return the buyer to
+  /// (BN-REQ-PAY-007). Empty: any `https` origin, logged as a warning.
+  allowedReturnOrigins String[] @default([])
+
+  /// ISO currencies this tenant may charge in (BN-REQ-PAY-008).
+  allowedCurrencies String[] @default(["MXN"])
+
+  /// Last drift check of the URL Netpay has registered (BN-REQ-CFG-004): `true` when it
+  /// is not this deployment's URL for this tenant's token; `null` until checked.
+  webhookDrift Boolean?
+
+  webhookDriftCheckedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   orders PaymentOrder[]
 
   @@index([tenantId])
+  @@index([active, version])
   @@map("payment_provider_config")
 }
 
@@ -343,8 +381,19 @@ model PaymentOrder {
   /// Per-resource counter that lets a subscriber detect a gap in ordering.
   sequence Int @default(0)
 
+  /// Sequence of the last event written to the outbox for this order. Bumped with
+  /// an atomic increment in the transaction that changes the order, so events of
+  /// one order carry strictly increasing numbers (BN-REQ-EVT-004/006).
+  eventSequence Int @default(0)
+
   lastVerifiedAt DateTime?
   failureReason String? @db.VarChar(240)
+
+  /// Stable decline code (BN-REQ-PAY-006): INSUFFICIENT_FUNDS, CARD_EXPIRED, …, UNKNOWN.
+  failureCode String? @db.VarChar(32)
+
+  /// Netpay's own decline code behind `failureCode`. Internal: never in a response.
+  providerFailureCode String? @db.VarChar(16)
 
   /// Checkout Hosted session. The `sessionLink.paid` notification names the
   /// payment only by this id, so it is how a hosted payment finds its order.
@@ -372,6 +421,14 @@ model PaymentOrder {
   /// When the claim was taken. A claim past the claim window is abandoned.
   operationClaimedAt DateTime?
 
+  /// Set when Netpay reports a payment for an order already CANCELLED or EXPIRED
+  /// (`payment.paid_after_cancel`). The status stays; the merchant refunds.
+  paidAfterCancelAt DateTime?
+
+  /// Reconciliation lease (BN-REQ-REC-004): an instance that picked the order holds it
+  /// until then, so concurrent workers never check the same order in one pass.
+  reconcileLeaseUntil DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -381,11 +438,133 @@ model PaymentOrder {
   events PaymentWebhookEvent[]
   customers PaymentCustomer[]
   deliveries WebhookDelivery[]
+  outboxEvents PaymentEventOutbox[]
+  attempts PaymentAttempt[]
+  pendingProviderResults PendingProviderResult[]
 
   @@index([tenantId, status])
   @@index([netpayTransactionId])
   @@index([paymentReference])
+  @@index([status, updatedAt])
+  @@index([updatedAt, id])
   @@map("payment_orders")
+}
+
+/// Transactional outbox of payment events (BN-REQ-EVT-004/005).
+///
+/// Written in the same transaction as the order change it describes, so an event
+/// exists exactly when the change committed. `payload` is the snapshot delivered
+/// to subscribers, never rebuilt from the order's current row.
+model PaymentEventOutbox {
+  id String @id @db.Uuid
+
+  orderId String @db.Uuid
+  order PaymentOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// Per order, strictly increasing.
+  sequence Int
+
+  eventType String @db.VarChar(64)
+
+  /// The full event body: eventId, eventType, occurredAt, sequence, tenantId, data.
+  payload Json
+
+  /// When the change happened.
+  occurredAt DateTime
+
+  /// When the dispatcher fanned the event out to the subscribed endpoints.
+  dispatchedAt DateTime?
+
+  deliveries WebhookDelivery[]
+
+  @@unique([orderId, sequence])
+  @@index([dispatchedAt, occurredAt])
+  @@map("payment_event_outbox")
+}
+
+/// One charge sent to Netpay for an order (BN-REQ-PAY-001/002).
+///
+/// The order's `netpayTransactionId` points at the current attempt. Orders charged
+/// before this table existed have no row; their bound transaction is attempt 1.
+model PaymentAttempt {
+  id String @id @db.Uuid
+
+  orderId String @db.Uuid
+  order PaymentOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// Per order, from 1.
+  attemptNo Int
+
+  /// Null while the charge has no answer (UNKNOWN).
+  netpayTransactionId String? @db.VarChar(120)
+
+  /// SUBMITTED, UNKNOWN, FAILED, PAID or ABANDONED.
+  status String @db.VarChar(32)
+
+  /// Stable decline code of a FAILED attempt (BN-REQ-PAY-006).
+  declineCode String? @db.VarChar(32)
+
+  createdAt DateTime
+
+  @@unique([orderId, attemptNo])
+  @@index([netpayTransactionId])
+  @@map("payment_attempt")
+}
+
+/// A result Netpay confirmed whose local write failed (BN-REQ-IDM-004).
+///
+/// Written with a separate insert; the order keeps its operation claim until
+/// reconciliation applies the row, once, and stamps `appliedAt`.
+model PendingProviderResult {
+  id String @id @db.Uuid
+
+  orderId String @db.Uuid
+  order PaymentOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// `refund` or `charge`.
+  operation String @db.VarChar(16)
+
+  /// What is needed to apply the result. Never card data.
+  providerPayload Json
+
+  createdAt DateTime
+
+  appliedAt DateTime?
+
+  /// How it was applied: `applied`, `already_applied`, …
+  outcome String? @db.VarChar(32)
+
+  @@index([appliedAt, createdAt])
+  @@index([orderId])
+  @@map("pending_provider_result")
+}
+
+/// Stored outcome of a request sent with an `Idempotency-Key` (BN-REQ-IDM-001/002/003).
+///
+/// `route` is the method and the concrete path; `requestHash` the SHA-256 of the
+/// canonical body. A DONE row answers repeats for 24 h; an IN_PROGRESS row (running,
+/// or a 5xx whose outcome is unknown) expires 10 min after it was last touched.
+model IdempotencyRecord {
+  key String @db.VarChar(255)
+
+  route String @db.VarChar(255)
+
+  requestHash String @db.Char(64)
+
+  /// IN_PROGRESS or DONE.
+  status String @db.VarChar(16)
+
+  responseStatus Int?
+
+  responseBody Json?
+
+  createdAt DateTime
+
+  expiresAt DateTime
+
+  @@id([key, route])
+  @@index([expiresAt])
+  @@map("idempotency_record")
 }
 
 /// Raw record of every inbound notification, kept even when it is a duplicate or
@@ -521,6 +700,16 @@ model WebhookDelivery {
 
   status WebhookDeliveryStatus @default(PENDING)
 
+  /// Snapshot this delivery sends. Null for deliveries queued before the outbox.
+  outboxId String? @db.Uuid
+  outbox PaymentEventOutbox? @relation(fields: [outboxId], references: [id], onDelete: SetNull)
+
+  /// Last operator replay. The retry window restarts here (BN-REQ-EVT-010).
+  replayedAt DateTime?
+
+  /// Attempts made before the last replay, so the attempt cap counts only later ones.
+  attemptsBeforeReplay Int @default(0)
+
   responseStatus Int?
   durationMs Int?
 
@@ -542,5 +731,21 @@ model WebhookDelivery {
   @@index([status, nextAttemptAt])
   @@index([eventId])
   @@index([status, lockedAt])
+  @@index([outboxId])
+  @@unique([eventId, endpointId])
   @@map("webhook_deliveries")
+}
+
+/// Inbound notifications seen recently, keyed by sha256(eventType|transactionId|status).
+///
+/// Netpay's notification is unsigned and retried; each copy would otherwise cost a
+/// verification call to Netpay. A key seen within the dedupe window (10 min) is not
+/// verified again (BN-REQ-IDM-005). Rows past the window are pruned on the way in.
+model InboundEventSeen {
+  key String @id @db.Char(64)
+
+  seenAt DateTime
+
+  @@index([seenAt])
+  @@map("inbound_event_seen")
 }

@@ -259,6 +259,33 @@ describe('AuthorizationService', () => {
     expect(findMany).toHaveBeenCalledTimes(2);
   });
 
+  it('re-reads roles within 5 s by default, so a revocation propagates (BN-REQ-SEC-012)', async () => {
+    const findMany = jest.fn<() => Promise<unknown[]>>().mockResolvedValue([]);
+    const controlPlane = {
+      client: { platformAdminRole: { findMany } },
+    } as unknown as ConstructorParameters<typeof AuthorizationService>[0];
+    const service = new AuthorizationService(
+      controlPlane,
+      {} as ConstructorParameters<typeof AuthorizationService>[1],
+    );
+    expect(service.ttlMs).toBeLessThanOrEqual(5_000);
+    const now = jest.spyOn(Date, 'now').mockReturnValue(5_000_000);
+    await service.resolve(platformAdmin('ADMIN'));
+    now.mockReturnValue(5_000_000 + 5_001);
+    await service.resolve(platformAdmin('ADMIN'));
+    expect(findMany).toHaveBeenCalledTimes(2);
+    now.mockRestore();
+  });
+
+  it('takes its TTL from AUTHZ_CACHE_TTL_MS when configured', () => {
+    const service = new AuthorizationService(
+      {} as ConstructorParameters<typeof AuthorizationService>[0],
+      {} as ConstructorParameters<typeof AuthorizationService>[1],
+      { authzCacheTtlMs: 1_500 } as ConstructorParameters<typeof AuthorizationService>[2],
+    );
+    expect(service.ttlMs).toBe(1_500);
+  });
+
   it('returns no authority for an API key', async () => {
     const controlPlane = {} as ConstructorParameters<typeof AuthorizationService>[0];
     const tenantPlane = {} as ConstructorParameters<typeof AuthorizationService>[1];

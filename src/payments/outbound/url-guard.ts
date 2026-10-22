@@ -1,5 +1,6 @@
+import { HttpStatus } from '@nestjs/common';
 import { isIP } from 'node:net';
-import { ValidationException } from '../../common/errors/app.exception';
+import { AppException } from '../../common/errors/app.exception';
 
 /** A DNS answer, resolved by the injected resolver. */
 export interface DnsAnswer {
@@ -19,16 +20,33 @@ export type UrlRejectionReason =
   | 'UNRESOLVED'
   | 'PRIVATE_ADDRESS'
   | 'METADATA_ADDRESS'
-  | 'NOT_ALLOWED_BY_POLICY'
-  | 'AMBIGUOUS_ADDRESS';
+  | 'NOT_ALLOWED_BY_POLICY';
+
+/** Reasons that mean "the URL is well formed, but where it points is off limits". */
+const BLOCKED_REASONS: ReadonlySet<UrlRejectionReason> = new Set([
+  'PRIVATE_ADDRESS',
+  'METADATA_ADDRESS',
+  'NOT_ALLOWED_BY_POLICY',
+]);
 
 /** A destination that passed validation. */
 export interface ValidatedUrl {
-  /** URL to connect to, pinned to the validated address. */
+  /**
+   * The subscribed URL, normalised but otherwise untouched: scheme, host, port,
+   * path and query are exactly what the tenant registered.
+   */
   readonly url: string;
-  /** Host header value, because we connect by IP. */
+  /** Hostname without brackets. Drives SNI and certificate validation. */
+  readonly hostname: string;
+  /** Host header value, including a non-default port. */
   readonly hostHeader: string;
-  /** The address the host resolved to and was approved for. */
+  /**
+   * Every address the host resolved to, each one validated, IPv4 first. The
+   * transport connects to these and never resolves the name again, which is
+   * what keeps the pin: a connection can only reach an address checked here.
+   */
+  readonly addresses: readonly DnsAnswer[];
+  /** The preferred address, `addresses[0]`. */
   readonly address: string;
   readonly family: 4 | 6;
 }
@@ -36,16 +54,25 @@ export interface ValidatedUrl {
 /**
  * Raised for any destination that must not be contacted.
  *
- * Extends {@link ValidationException} rather than `Error` so the refusal is
- * reported as the 400 it is. A generic error would surface as a 500, which both
- * misattributes a client mistake to the server and pollutes the 5xx log.
+ * Extends {@link AppException} rather than `Error` so the refusal is reported
+ * as the client error it is; a generic error would surface as a 500, which both
+ * misattributes a client mistake to the server and pollutes the 5xx log. A URL
+ * that points at a forbidden address is a well-formed request the server
+ * refuses to act on, so it is a 422 `BLOCKED_ADDRESS`; anything else (not a URL,
+ * wrong scheme, a name that does not resolve) is a plain 400.
  */
-export class UrlRejectedError extends ValidationException {
+export class UrlRejectedError extends AppException {
   constructor(
     readonly reason: UrlRejectionReason,
     readonly detail: string,
   ) {
-    super(`The webhook URL was refused: ${reason}.`, { reason, detail });
+    const blocked = BLOCKED_REASONS.has(reason);
+    super(
+      `The webhook URL was refused: ${reason}.`,
+      blocked ? 'BLOCKED_ADDRESS' : 'VALIDATION_ERROR',
+      blocked ? HttpStatus.UNPROCESSABLE_ENTITY : HttpStatus.BAD_REQUEST,
+      { reason, detail },
+    );
   }
 }
 
@@ -63,10 +90,15 @@ export class UrlRejectedError extends ValidationException {
  *   usual target of an SSRF attempt.
  * - IPv6 is handled explicitly, including the IPv4-mapped form
  *   (`::ffff:127.0.0.1`) that defeats checks which only look at IPv4.
- * - Several answers are refused rather than picking one: a name resolving to both
- *   a public and a private address is exactly the DNS-rebinding pattern.
- * - The returned `url` is **pinned to the validated IP**, so the connection
- *   cannot be re-pointed between the check and the connect.
+ * - A name with several answers is normal (any PaaS or CDN publishes several A
+ *   and AAAA records), so it is accepted only when **every** answer passes. One
+ *   private answer among public ones is exactly the DNS-rebinding pattern, and
+ *   it refuses the whole name.
+ * - The validated addresses are returned and the transport **pins** the
+ *   connection to them, IPv4 first, falling back to the next validated address
+ *   only when connecting fails. It never resolves the name again, so the
+ *   connection cannot be re-pointed between the check and the connect.
+ * - The check runs again on every delivery, not only at registration.
  */
 export class UrlGuard {
   constructor(
@@ -107,32 +139,32 @@ export class UrlGuard {
     if (answers.length === 0) {
       throw new UrlRejectedError('UNRESOLVED', hostname);
     }
-    // A name with several answers, or several addresses for one literal, is the
-    // shape of a rebinding attempt. Refuse instead of picking a convenient one.
-    const distinct = new Set(answers.map((a) => a.address));
-    if (distinct.size > 1) {
-      throw new UrlRejectedError('AMBIGUOUS_ADDRESS', `${hostname} resolves to ${distinct.size} addresses`);
+
+    // Every answer is checked before any is used. Picking "the public one" from
+    // a mixed answer would let the resolver choose where we connect.
+    const addresses = preferIpv4(dedupe(answers));
+    for (const answer of addresses) {
+      if (isBlockedAddress(answer.address)) {
+        throw new UrlRejectedError(
+          isMetadataAddress(answer.address) ? 'METADATA_ADDRESS' : 'PRIVATE_ADDRESS',
+          answer.address,
+        );
+      }
     }
-    const answer = answers[0];
-    if (isBlockedAddress(answer.address)) {
-      throw new UrlRejectedError(
-        answer.address === '169.254.169.254' ? 'METADATA_ADDRESS' : 'PRIVATE_ADDRESS',
-        answer.address,
-      );
-    }
-    if (!this.isAllowedByPolicy(answer.address)) {
-      throw new UrlRejectedError('NOT_ALLOWED_BY_POLICY', answer.address);
+    for (const answer of addresses) {
+      if (!this.isAllowedByPolicy(answer.address)) {
+        throw new UrlRejectedError('NOT_ALLOWED_BY_POLICY', answer.address);
+      }
     }
 
-    // Pin to the validated address. The Host header keeps name-based TLS
-    // validation and virtual hosting working.
-    const pinned = new URL(parsed.toString());
-    pinned.hostname = answer.family === 6 ? `[${answer.address}]` : answer.address;
+    const preferred = addresses[0];
     return {
-      url: pinned.toString(),
+      url: parsed.toString(),
+      hostname,
       hostHeader: parsed.host,
-      address: answer.address,
-      family: answer.family,
+      addresses,
+      address: preferred.address,
+      family: preferred.family,
     };
   }
 
@@ -177,6 +209,47 @@ export class UrlGuard {
       return (value & mask) >>> 0 === (network & mask) >>> 0;
     });
   }
+}
+
+/**
+ * Removes repeated answers, keeping the first occurrence.
+ *
+ * @param answers Resolver output.
+ * @returns Distinct answers.
+ */
+function dedupe(answers: readonly DnsAnswer[]): DnsAnswer[] {
+  const seen = new Set<string>();
+  const out: DnsAnswer[] = [];
+  for (const answer of answers) {
+    if (!seen.has(answer.address)) {
+      seen.add(answer.address);
+      out.push(answer);
+    }
+  }
+  return out;
+}
+
+/**
+ * Orders answers IPv4 first, keeping the resolver's order within each family.
+ *
+ * IPv4 first because egress from Cloud Run without a VPC connector is IPv4
+ * only: an IPv6 address would fail to connect and only cost a timeout.
+ *
+ * @param answers Distinct answers.
+ * @returns The same answers, reordered.
+ */
+function preferIpv4(answers: readonly DnsAnswer[]): DnsAnswer[] {
+  return [...answers.filter((a) => a.family === 4), ...answers.filter((a) => a.family !== 4)];
+}
+
+/**
+ * Whether an address is the cloud instance metadata service, in either family.
+ *
+ * @param address Literal IP address.
+ * @returns `true` for `169.254.169.254` and its IPv4-mapped spellings.
+ */
+function isMetadataAddress(address: string): boolean {
+  return (extractIpv4Mapped(address) ?? address) === '169.254.169.254';
 }
 
 /**

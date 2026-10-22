@@ -5,6 +5,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Logger } from '@nestjs/common';
 import type { NestJSReferenceConfiguration } from '@scalar/nestjs-api-reference';
 import { type AppConfig } from '../config/app-config.service';
+import { applyContractExtensions } from './openapi-contract';
 
 /** Mount path of the OpenAPI JSON document, relative to the docs root. */
 export const OPENAPI_JSON_SUFFIX = 'openapi.json';
@@ -110,7 +111,8 @@ export class ScalarDocsService {
     // OpenAPI 3.1 is what Scalar and modern clients expect; the DTO-derived
     // schema is already 3.1 compatible.
     document['openapi'] = '3.1.0';
-    return document;
+    // Outbound events (`x-webhooks`) and the error envelope (BN-REQ-API-001).
+    return applyContractExtensions(document);
   }
 
   /**

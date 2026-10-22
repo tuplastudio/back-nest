@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiTags
 import { ArrayMinSize, IsArray, IsBoolean, IsOptional, IsString, IsUrl, MaxLength } from 'class-validator';
 import { TenantGuard } from '../../tenancy/tenant.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
+import { RequireScopes } from '../../common/decorators/scopes.decorator';
 import { OutboundWebhookService } from './outbound-webhook.service';
 import { ALL_PAYMENT_EVENTS } from '../payment-events';
 
@@ -54,6 +55,7 @@ export class OutboundWebhookController {
    */
   @Get()
   @RequirePermissions('webhooks:read')
+  @RequireScopes('webhooks:read')
   @ApiOperation({ summary: 'List outbound webhook endpoints' })
   list() {
     return this.endpoints.list();
@@ -67,6 +69,7 @@ export class OutboundWebhookController {
    */
   @Post()
   @RequirePermissions('webhooks:write')
+  @RequireScopes('webhooks:write')
   @ApiOperation({ summary: 'Register an outbound webhook endpoint' })
   @ApiCreatedResponse({ description: 'The endpoint; the secret is shown only here.' })
   create(@Body() body: CreateWebhookEndpointDto) {
@@ -84,6 +87,7 @@ export class OutboundWebhookController {
    */
   @Get('events')
   @RequirePermissions('webhooks:read')
+  @RequireScopes('webhooks:read')
   @ApiOperation({ summary: 'List subscribable events' })
   availableEvents() {
     return { events: ALL_PAYMENT_EVENTS };
@@ -97,6 +101,7 @@ export class OutboundWebhookController {
    */
   @Post(':id/rotate-secret')
   @RequirePermissions('webhooks:rotate-secret')
+  @RequireScopes('webhooks:write')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rotate an endpoint signing secret' })
   @ApiOkResponse({ description: 'The endpoint; the new secret is shown only here.' })
@@ -111,6 +116,7 @@ export class OutboundWebhookController {
    */
   @Post(':id/end-rotation')
   @RequirePermissions('webhooks:rotate-secret')
+  @RequireScopes('webhooks:write')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Retire the previous signing secret' })
   endRotation(@Param('id') id: string) {
@@ -125,10 +131,32 @@ export class OutboundWebhookController {
    */
   @Post(':id/status')
   @RequirePermissions('webhooks:write')
+  @RequireScopes('webhooks:write')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Enable or disable an endpoint' })
   setStatus(@Param('id') id: string, @Body() body: ToggleWebhookEndpointDto) {
     return this.endpoints.setEnabled(id, body.enabled);
+  }
+
+  /**
+   * Disables an endpoint: what a consumer calls when it disconnects (BN-REQ-API-003).
+   *
+   * Same effect as `POST /t/webhooks/:id/status` with `enabled: false`: nothing
+   * further is fanned out to it, and its delivery history is kept.
+   *
+   * @param id Endpoint id.
+   */
+  @Post(':id/disable')
+  @RequirePermissions('webhooks:write')
+  @RequireScopes('webhooks:write')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Disable an endpoint (consumer disconnect)',
+    description:
+      'No further event is delivered to it; deliveries already recorded are kept. 204, idempotent.',
+  })
+  disable(@Param('id') id: string) {
+    return this.endpoints.setEnabled(id, false);
   }
 
   /**
@@ -139,6 +167,7 @@ export class OutboundWebhookController {
    */
   @Get(':id/deliveries')
   @RequirePermissions('webhooks:read')
+  @RequireScopes('webhooks:read')
   @ApiOperation({ summary: 'List recent deliveries for an endpoint' })
   deliveries(@Param('id') id: string) {
     return this.endpoints.deliveries(id);
@@ -151,6 +180,7 @@ export class OutboundWebhookController {
    */
   @Post('deliveries/:deliveryId/replay')
   @RequirePermissions('webhooks:replay')
+  @RequireScopes('webhooks:write')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Re-queue a delivery' })
   replay(@Param('deliveryId') deliveryId: string) {

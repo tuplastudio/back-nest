@@ -1,0 +1,16 @@
+# BN-TASK-033 red — 2026-10-21T18:14:13Z
+# jest src/common/filters/all-exceptions.filter.spec.ts -t "log redaction"
+FAIL src/common/filters/all-exceptions.filter.spec.ts
+  ● Test suite failed to run
+
+    SyntaxError: The requested module '../errors/app.exception' does not provide an export named 'ProviderDeclinedException'
+
+      at EsmLoader.linkAndEvaluateModule (node_modules/jest-runtime/build/index.js:1989:7)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        1.337 s
+Ran all test suites matching src/common/filters/all-exceptions.filter.spec.ts with tests matching "log redaction".
+(node:5484) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

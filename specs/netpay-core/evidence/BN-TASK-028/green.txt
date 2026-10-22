@@ -1,0 +1,5 @@
+Test Suites: 1 passed, 1 total
+Tests:       12 passed, 12 total
+Snapshots:   0 total
+Time:        2.314 s, estimated 7 s
+Ran all test suites matching src/config/payment-urls.

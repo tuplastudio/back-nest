@@ -1,0 +1,33 @@
+# BN-TASK-017 green (unit: cursor listing, filters, verified fields + attempts on GET) — 2026-10-21T21:01:56Z
+# node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/payment-orders.lifecycle.spec.ts -t cursor --verbose --reporters=default
+PASS src/payments/payment-orders.lifecycle.spec.ts
+  GET /t/payments/orders with a cursor (BN-TASK-017)
+    ✓ round-trips an opaque cursor and refuses a forged one (15 ms)
+    ✓ pages oldest-update first from updatedSince, with the filters, and hands back a cursor (3 ms)
+    ✓ continues after the cursor and says when there is nothing more
+    ✓ lists newest first without updatedSince, and refuses an unknown status (1 ms)
+    ✓ reads one order with verifiedAmount, the transaction, refunds, failure code and its attempts (1 ms)
+  POST /t/payments/orders/:id/cancel (BN-TASK-018)
+    ○ skipped cancels an unpaid order, under a claim, and emits payment.cancelled
+    ○ skipped cancels a FAILED order
+    ○ skipped answers an already cancelled order as it is, emitting nothing
+    ○ skipped refuses a PAID order with 409 ORDER_STATE_CONFLICT
+    ○ skipped refuses a PARTIALLY_REFUNDED order with 409 ORDER_STATE_CONFLICT
+    ○ skipped refuses a REFUNDED order with 409 ORDER_STATE_CONFLICT
+    ○ skipped refuses a EXPIRED order with 409 ORDER_STATE_CONFLICT
+    ○ skipped refuses a AMOUNT_MISMATCH order with 409 ORDER_STATE_CONFLICT
+    ○ skipped refuses a CHARGE_UNKNOWN order with 409 ORDER_STATE_CONFLICT
+    ○ skipped asks Netpay first when a charge is bound, and refuses with the PAID order when it was charged
+    ○ skipped cancels a charge abandoned in 3-D Secure
+    ○ skipped uses the configuration the order was created with (BN-REQ-CFG-002)
+    ○ skipped records a payment Netpay reports later without reopening the order, and audits it
+    ○ skipped does not move a cancelled order when Netpay reports a decline
+  hosted return URLs (BN-TASK-021)
+    ○ skipped refuses a return URL that is not https with 422 RETURN_URL_NOT_ALLOWED
+    ○ skipped refuses an origin outside the tenant allowlist once one is configured
+    ○ skipped accepts any https origin while the allowlist is empty, and warns
+  currencies (BN-TASK-022)
+    ○ skipped refuses a currency the tenant is not enabled for with 422 CURRENCY_NOT_ENABLED
+    ○ skipped accepts it once the tenant is enabled for it
+Test Suites: 1 passed, 1 total
+Tests:       19 skipped, 5 passed, 24 total

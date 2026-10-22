@@ -1,0 +1,10 @@
+# BN-TASK-023 green — 2026-10-21T18:18:36Z
+# jest src/payments/netpay.client.spec.ts -t "provider-echoed"
+[Nest] 11439  - 10/21/2026, 11:18:37 AM    WARN [NetpayClient] Netpay GET /v3/transactions/tx returned status 400
+(node:11439) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Test Suites: 1 passed, 1 total
+Tests:       39 skipped, 3 passed, 42 total
+Snapshots:   0 total
+Time:        1.272 s, estimated 2 s
+Ran all test suites matching src/payments/netpay.client.spec.ts with tests matching "provider-echoed".

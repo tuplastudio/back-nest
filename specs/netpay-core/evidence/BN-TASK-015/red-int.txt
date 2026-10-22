@@ -1,0 +1,87 @@
+# BN-TASK-011/014/015 red (integration, real PostgreSQL 17) — 2026-10-21T20:16:18Z
+# npm run test:int -- test/payment-recovery.int-spec.ts
+> node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-int.json --runInBand test/payment-recovery.int-spec.ts
+[95m[Nest] 61625  - [39m10/21/2026, 1:16:22 PM [95m  DEBUG[39m [38;5;3m[TenantPrismaService] [39m[95mCreated tenant client for schema "tenant_recovery_c9053e27".[39m
+[32m[Nest] 61625  - [39m10/21/2026, 1:16:22 PM [32m    LOG[39m [38;5;3m[PaymentOrdersService] [39mObject(6) {
+  event: [32m'payment_status_change'[39m,
+  message: [32m'order bc9f3ed0-633b-4c40-80fc-78cb7ca60f6f: PENDING → PAID'[39m,
+  orderId: [32m'bc9f3ed0-633b-4c40-80fc-78cb7ca60f6f'[39m,
+  from: [32m'PENDING'[39m,
+  to: [32m'PAID'[39m,
+  source: [32m'webhook'[39m
+}
+[32m[Nest] 61625  - [39m10/21/2026, 1:16:23 PM [32m    LOG[39m [38;5;3m[PaymentOrdersService] [39mObject(6) {
+  event: [32m'payment_status_change'[39m,
+  message: [32m'order 6cd5fe15-6c71-4e8e-9667-cea31d3b059b: PENDING → FAILED'[39m,
+  orderId: [32m'6cd5fe15-6c71-4e8e-9667-cea31d3b059b'[39m,
+  from: [32m'PENDING'[39m,
+  to: [32m'FAILED'[39m,
+  source: [32m'webhook'[39m
+}
+[32m[Nest] 61625  - [39m10/21/2026, 1:16:23 PM [32m    LOG[39m [38;5;3m[TenantPrismaService] [39m[32mTenant data plane pool closed.[39m
+(node:61625) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL test/payment-recovery.int-spec.ts
+  ● payment recovery paths (BN-TASK-010/011/014/015, integration) › pending provider results (BN-TASK-011) › keeps a confirmed refund whose local write failed, holds the claim, and applies it once
+    expect(received).rejects.toMatchObject(expected)
+    - Expected  - 3
+    + Received  + 1
+    - Object {
+    -   "code": "PROVIDER_RESULT_PENDING",
+    - }
+    + [Error: database write failed while recording payment.refunded]
+      271 |       await expect(
+      272 |         inTenant(() => service(new FailingEvents('payment.refunded')).refund(order.id, 'injected')),
+    > 273 |       ).rejects.toMatchObject({ code: 'PROVIDER_RESULT_PENDING' });
+          |                 ^
+      274 |       expect(calls.filter((c) => c === 'cancel' || c === 'refund')).toHaveLength(1);
+      275 |
+      276 |       // Netpay reversed it; the order does not say so yet, and the claim holds.
+      at Object.toMatchObject (node_modules/expect/build/index.js:2155:20)
+      at Object.<anonymous> (test/payment-recovery.int-spec.ts:273:17)
+  ● payment recovery paths (BN-TASK-010/011/014/015, integration) › pending provider results (BN-TASK-011) › keeps a declined charge whose local write failed, and applies the decline once
+    expect(received).rejects.toMatchObject(expected)
+    - Expected  - 3
+    + Received  + 1
+    - Object {
+    -   "code": "PROVIDER_RESULT_PENDING",
+    - }
+    + [Error: database write failed while recording payment.failed]
+      334 |           }),
+      335 |         ),
+    > 336 |       ).rejects.toMatchObject({ code: 'PROVIDER_RESULT_PENDING' });
+          |                 ^
+      337 |       expect((await orderOf(order.id)).operationClaim).toBe('charge');
+      338 |       expect((await pendingOf(order.id))[0]).toMatchObject({ operation: 'charge', appliedAt: null });
+      339 |
+      at Object.toMatchObject (node_modules/expect/build/index.js:2155:20)
+      at Object.<anonymous> (test/payment-recovery.int-spec.ts:336:17)
+  ● payment recovery paths (BN-TASK-010/011/014/015, integration) › CHARGE_UNKNOWN and attempts (BN-TASK-014, BN-TASK-015) › leaves a charge that timed out CHARGE_UNKNOWN, refuses new charges, and resolves on verify
+    expect(received).toBe(expected) // Object.is equality
+    Expected: "CHARGE_UNKNOWN"
+    Received: "PENDING"
+      374 |         );
+      375 |       await expect(charge()).rejects.toMatchObject({ code: 'PROVIDER_OUTCOME_UNKNOWN', status: 504 });
+    > 376 |       expect((await orderOf(order.id)).status).toBe('CHARGE_UNKNOWN');
+          |                                                ^
+      377 |       expect(await attemptsOf(order.id)).toEqual([
+      378 |         { attemptNo: 1, netpayTransactionId: null, status: 'UNKNOWN', declineCode: null },
+      379 |       ]);
+      at Object.<anonymous> (test/payment-recovery.int-spec.ts:376:48)
+  ● payment recovery paths (BN-TASK-010/011/014/015, integration) › CHARGE_UNKNOWN and attempts (BN-TASK-014, BN-TASK-015) › accepts a new attempt once verify finds the unknown charge declined
+    ConflictException: Another operation is in progress on this order, or it no longer qualifies.
+      1398 |     );
+      1399 |     if (result.count !== 1) {
+    > 1400 |       throw new ConflictException(
+           |             ^
+      1401 |         'Another operation is in progress on this order, or it no longer qualifies.',
+      1402 |       );
+      1403 |     }
+      at PaymentOrdersService.claimOrder (src/payments/payment-orders.service.ts:1400:13)
+      at PaymentOrdersService.chargeToken (src/payments/payment-orders.service.ts:822:5)
+      at Object.<anonymous> (test/payment-recovery.int-spec.ts:424:22)
+Test Suites: 1 failed, 1 total
+Tests:       4 failed, 2 passed, 6 total
+Snapshots:   0 total
+Time:        4.053 s
+Ran all test suites matching test/payment-recovery.int-spec.ts.

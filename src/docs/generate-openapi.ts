@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppModule } from '../app.module';
 import { AppConfig } from '../config/app-config.service';
@@ -20,8 +20,12 @@ import { PiiRedactionService } from '../pii/pii-redaction.service';
  * serves it at runtime, so it cannot drift from the DTOs.
  *
  * ```bash
- * npm run docs:openapi
+ * npm run docs:openapi     # write docs/openapi.json
+ * npm run openapi:check    # exit 1 when docs/openapi.json is stale (CI)
  * ```
+ *
+ * Both pin `API_BASE_DOMAIN`, which names the first server, so the output does
+ * not depend on the environment it is generated in.
  *
  * The script lives under `src/` and is compiled with the application because Nest's
  * dependency injection relies on TypeScript's `design:paramtypes` metadata, which
@@ -39,7 +43,7 @@ async function main(): Promise<void> {
   // The same prefix the server uses, so the generated paths match the served ones.
   applyHttpSettings(app, config, app.get(PiiRedactionService));
   app.setGlobalPrefix(config.apiPrefix, {
-    exclude: ['health', 'health/{*path}', config.docsPath, `${config.docsPath}/{*path}`],
+    exclude: ['health', 'health/{*path}', 'internal/{*path}', config.docsPath, `${config.docsPath}/{*path}`],
   });
   await app.init();
 
@@ -47,9 +51,28 @@ async function main(): Promise<void> {
   const targetDir = join(process.cwd(), 'docs');
   mkdirSync(targetDir, { recursive: true });
   const target = join(targetDir, 'openapi.json');
-  writeFileSync(target, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
-
+  const rendered = `${JSON.stringify(document, null, 2)}\n`;
   await app.close();
+
+  if (process.argv.includes('--check')) {
+    // CI (BN-REQ-API-001): the committed contract must be what the code generates.
+    let committed = '';
+    try {
+      committed = readFileSync(target, 'utf8');
+    } catch {
+      committed = '';
+    }
+    if (committed !== rendered) {
+      process.stderr.write(
+        'docs/openapi.json is out of date with the code. Regenerate it with `npm run docs:openapi` and commit it.\n',
+      );
+      process.exit(1);
+    }
+    logger.log('docs/openapi.json is in sync with the code.');
+    return;
+  }
+
+  writeFileSync(target, rendered, 'utf8');
   logger.log(`OpenAPI document written to ${target}`);
 }
 

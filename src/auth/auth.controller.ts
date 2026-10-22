@@ -7,12 +7,24 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { Public } from '../common/decorators/public.decorator';
 import { AppConfig } from '../config/app-config.service';
 import { AdminAuthService, type SignInResult } from './admin-auth.service';
-import { RefreshTokenDto, SignInDto, TokenResponseDto } from './dto/sign-in.dto';
+import {
+  ChangePasswordDto,
+  MfaCodeDto,
+  MfaEnrollmentDto,
+  RefreshTokenDto,
+  SignInDto,
+  TokenResponseDto,
+} from './dto/sign-in.dto';
+import { Roles } from '../common/decorators/roles.decorator';
+import { AuthThrottle } from './throttling';
+import { AdminMfaService, InvalidMfaCodeException } from './admin-mfa.service';
+import { AllowMfaPending, AllowPasswordChangePending } from './admin-session-policy';
+import type { AuthenticatedRequest } from './auth.guard';
+import { AuthorizationException } from '../common/errors/app.exception';
 import { RequestContextService } from '../tenancy/request-context.service';
 import { TokenService } from './token.service';
 import { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
@@ -31,7 +43,8 @@ export const REFRESH_COOKIE = 'mtb_rt';
  *
  * Rate limiting
  * -------------
- * `@Throttle` applies a per-IP budget far tighter than the global default. A
+ * `@AuthThrottle` applies the `auth` throttler, a per-IP budget far tighter than
+ * the global default, to the credential endpoints only (BN-REQ-SEC-004). A
  * password endpoint without aggressive throttling is trivially brute-forceable
  * even with account lockout, because lockout only limits one account at a time.
  *
@@ -54,6 +67,7 @@ export class AuthController {
     private readonly requestContext: RequestContextService,
     private readonly prisma: ControlPlanePrismaService,
     private readonly config: AppConfig,
+    private readonly mfa: AdminMfaService,
   ) {}
 
   /**
@@ -65,7 +79,7 @@ export class AuthController {
    * @returns The issued token pair and profile summary.
    */
   @Public()
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @AuthThrottle()
   @Post('sign-in')
   @HttpCode(HttpStatus.OK)
   @ApiBody({ type: SignInDto })
@@ -89,7 +103,7 @@ export class AuthController {
     @Req() _unused: Request,
   ): Promise<TokenResponseDto> {
     void _unused;
-    const result = await this.auth.signIn(body.email, body.password, this.auditContext(req));
+    const result = await this.auth.signIn(body.email, body.password, this.auditContext(req), body.otp);
     return this.toResponse(result, req, this.responseOf(req));
   }
 
@@ -101,7 +115,7 @@ export class AuthController {
    * @returns The new token pair.
    */
   @Public()
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @AuthThrottle()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiBody({ type: RefreshTokenDto })
@@ -156,6 +170,8 @@ export class AuthController {
    * credentials are required without a 401 round trip.
    */
   @Public()
+  @AllowMfaPending()
+  @AllowPasswordChangePending()
   @Get('session')
   @ApiBearerAuth('bearer-jwt')
   @ApiOperation({
@@ -168,6 +184,164 @@ export class AuthController {
       principal: this.requestContext.principal,
       requestId: this.requestContext.get().requestId,
     };
+  }
+
+  /**
+   * Starts TOTP enrolment (BN-REQ-SEC-006).
+   *
+   * @param req Incoming request.
+   * @returns The shared secret and `otpauth://` URI, shown once.
+   */
+  @Roles('OWNER', 'ADMIN', 'AUDITOR')
+  @AllowMfaPending()
+  @AllowPasswordChangePending()
+  @Post('mfa/enroll')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('bearer-jwt')
+  @ApiOperation({
+    summary: 'Start TOTP enrolment',
+    description: 'Returns a new secret; confirm it with a code.',
+  })
+  @ApiOkResponse({ type: () => MfaEnrollmentDto })
+  enrollMfa(@Req() req: Request): Promise<MfaEnrollmentDto> {
+    return this.mfa.enroll(this.adminIdOf(req));
+  }
+
+  /**
+   * Confirms enrolment and returns recovery codes plus an MFA-verified session.
+   *
+   * @param body First TOTP code.
+   * @param req Incoming request.
+   * @returns Recovery codes (shown once) and a new session.
+   */
+  @Roles('OWNER', 'ADMIN', 'AUDITOR')
+  @AllowMfaPending()
+  @AllowPasswordChangePending()
+  @AuthThrottle()
+  @Post('mfa/confirm')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('bearer-jwt')
+  @ApiOperation({ summary: 'Confirm TOTP enrolment' })
+  async confirmMfa(
+    @Body() body: MfaCodeDto,
+    @Req() req: Request,
+  ): Promise<TokenResponseDto & { recoveryCodes: string[] }> {
+    const adminId = this.adminIdOf(req);
+    const { recoveryCodes } = await this.mfa.confirm(adminId, body.code);
+    const session = await this.auth.issueSession(
+      adminId,
+      this.auditContext(req),
+      Math.floor(Date.now() / 1000),
+    );
+    return { ...this.toResponse(session, req, this.responseOf(req)), recoveryCodes };
+  }
+
+  /**
+   * Verifies a TOTP or recovery code and returns an MFA-verified session. Also
+   * the step-up: a verification younger than 5 minutes unlocks payment writes.
+   *
+   * @param body Code.
+   * @param req Incoming request.
+   * @returns A new session carrying the verification time.
+   */
+  @Roles('OWNER', 'ADMIN', 'AUDITOR')
+  @AllowMfaPending()
+  @AllowPasswordChangePending()
+  @AuthThrottle()
+  @Post('mfa/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('bearer-jwt')
+  @ApiOperation({ summary: 'Verify a second factor (sign-in completion and step-up)' })
+  @ApiOkResponse({ type: () => TokenResponseDto })
+  async verifyMfa(@Body() body: MfaCodeDto, @Req() req: Request): Promise<TokenResponseDto> {
+    const adminId = this.adminIdOf(req);
+    if (!(await this.mfa.verify(adminId, body.code))) {
+      throw new InvalidMfaCodeException();
+    }
+    const session = await this.auth.issueSession(
+      adminId,
+      this.auditContext(req),
+      Math.floor(Date.now() / 1000),
+    );
+    return this.toResponse(session, req, this.responseOf(req));
+  }
+
+  /**
+   * Replaces the recovery codes.
+   *
+   * @param body Current code.
+   * @param req Incoming request.
+   * @returns New recovery codes, shown once.
+   */
+  @Roles('OWNER', 'ADMIN', 'AUDITOR')
+  @AuthThrottle()
+  @Post('mfa/recovery-codes')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('bearer-jwt')
+  @ApiOperation({ summary: 'Regenerate MFA recovery codes' })
+  regenerateRecoveryCodes(
+    @Body() body: MfaCodeDto,
+    @Req() req: Request,
+  ): Promise<{ recoveryCodes: string[] }> {
+    return this.mfa.regenerateRecoveryCodes(this.adminIdOf(req), body.code);
+  }
+
+  /**
+   * Disables MFA. When `MFA_REQUIRED_FOR_ADMINS` is on, the admin must enrol
+   * again before using anything else.
+   *
+   * @param body Current code.
+   * @param req Incoming request.
+   */
+  @Roles('OWNER', 'ADMIN', 'AUDITOR')
+  @AuthThrottle()
+  @Post('mfa/disable')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth('bearer-jwt')
+  @ApiOperation({ summary: 'Disable the second factor' })
+  async disableMfa(@Body() body: MfaCodeDto, @Req() req: Request): Promise<void> {
+    await this.mfa.disable(this.adminIdOf(req), body.code);
+  }
+
+  /**
+   * Changes the caller's password. The only endpoint reachable while
+   * `mustChangePassword` is set (BN-REQ-SEC-008).
+   *
+   * @param body Current and new password.
+   * @param req Incoming request.
+   * @returns A new session; every other session is revoked.
+   */
+  @Roles('OWNER', 'ADMIN', 'AUDITOR')
+  @AllowPasswordChangePending()
+  @AuthThrottle()
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('bearer-jwt')
+  @ApiOperation({ summary: 'Change the administrator password' })
+  @ApiOkResponse({ type: () => TokenResponseDto })
+  async changePassword(@Body() body: ChangePasswordDto, @Req() req: Request): Promise<TokenResponseDto> {
+    const result = await this.auth.changePassword(
+      this.adminIdOf(req),
+      body.currentPassword,
+      body.newPassword,
+      this.auditContext(req),
+      (req as Request & AuthenticatedRequest).adminMfaAt,
+    );
+    return this.toResponse(result, req, this.responseOf(req));
+  }
+
+  /**
+   * Reads the authenticated platform admin's id.
+   *
+   * @param req Incoming request.
+   * @returns Admin id.
+   */
+  private adminIdOf(req: Request): string {
+    const principal = (req as Request & AuthenticatedRequest).principal ?? this.requestContext.principal;
+    if (!principal || principal.kind !== 'platform-admin') {
+      throw new AuthorizationException('Only platform administrators have a second factor here.');
+    }
+    return principal.id;
   }
 
   /**
@@ -191,6 +365,7 @@ export class AuthController {
       displayName: result.displayName,
       role: result.role,
       mustChangePassword: result.mustChangePassword,
+      mfaRequired: result.mfaRequired,
     };
   }
 

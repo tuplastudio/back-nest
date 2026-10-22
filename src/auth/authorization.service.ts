@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { AppConfig } from '../config/app-config.service';
 import { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import type { Principal } from '../tenancy/tenant-context.interface';
@@ -58,8 +59,12 @@ export class AuthorizationService {
    * constructor parameters from `design:paramtypes`, and a `number` parameter
    * with a default value still produces a `Number` dependency the injector
    * cannot satisfy. Tests override these two fields directly.
+   *
+   * Capped at 5 s: per-instance caches are never invalidated across
+   * instances, so the TTL bounds how long a revoked role keeps working
+   * elsewhere (BN-REQ-SEC-012). `AUTHZ_CACHE_TTL_MS` lowers it.
    */
-  ttlMs = 30_000;
+  ttlMs = 5_000;
 
   /** Upper bound on cached authorities, evicted least-recently-used first. */
   maxEntries = 5_000;
@@ -67,7 +72,12 @@ export class AuthorizationService {
   constructor(
     private readonly controlPlane: ControlPlanePrismaService,
     private readonly tenantPlane: TenantPrismaService,
-  ) {}
+    @Optional() config?: AppConfig,
+  ) {
+    if (config?.authzCacheTtlMs !== undefined) {
+      this.ttlMs = Math.min(config.authzCacheTtlMs, 5_000);
+    }
+  }
 
   /**
    * Resolves the effective authority of a principal.

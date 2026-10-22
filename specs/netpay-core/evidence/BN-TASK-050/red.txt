@@ -1,0 +1,185 @@
+# BN-TASK-050 red (e2e before POST /t/webhooks/:id/disable existed) — 2026-10-21T21:05:28Z
+# node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --runInBand test/payments.e2e-spec.ts -t consumer disconnect --verbose --reporters=default
+FAIL test/payments.e2e-spec.ts
+  payments and outbound webhooks (e2e)
+    authentication and tenant scoping
+      ○ skipped refuses every payment route without a token
+      ○ skipped answers 400 when no tenant is addressed
+    authorization on payment routes
+      ○ skipped refuses a read-only AUDITOR from storing provider credentials
+      ○ skipped refuses a read-only tenant VIEWER from storing provider credentials
+      ○ skipped refuses a VIEWER every payment operation
+      ○ skipped lets an AUDITOR read but not write payments
+      ○ skipped refuses a VIEWER from registering an outbound destination
+      ○ skipped keeps outbound destinations away from a tenant ADMIN, who may configure payments
+      ○ skipped does not let the tenant token address another tenant by header
+    credential handling
+      ○ skipped rejects a key that is not shaped like one
+      ○ skipped rejects a live secret passed as the public key
+      ○ skipped rejects an unknown environment
+      ○ skipped stores credentials and never returns the provider secret
+      ○ skipped stores the secret encrypted rather than in the clear
+      ○ skipped keeps only a hash of the webhook token
+      ○ skipped does not hand out a second webhook token when configuration is repeated
+      ○ skipped lets an ADMIN configure payments
+      ○ skipped rotates the webhook token and revokes the old one
+      ○ skipped refuses a VIEWER and an AUDITOR from rotating the webhook token
+      ○ skipped refuses to register a non-HTTPS webhook URL with the provider
+    inbound notifications
+      ○ skipped answers 202 for an unrecognised token and stores nothing
+      ○ skipped answers the same way for a known and an unknown token
+      ○ skipped ignores X-Tenant-Id: the token alone names the tenant
+      ○ skipped records a notification for a real token without trusting it
+      ○ skipped keeps no card data from a notification
+      ○ skipped treats a notification without a transaction as ignorable
+      ○ skipped refuses the retired webhook token after rotation
+    outbound destinations
+      ○ skipped refuses a loopback destination before contacting it
+      ○ skipped refuses the cloud metadata address
+      ○ skipped refuses a private RFC1918 destination
+      ○ skipped refuses plain HTTP while HTTPS is required
+      ○ skipped refuses an event nobody emits
+      ○ skipped lists the events that can be subscribed to
+      ○ skipped shows a signing secret once and never again
+      ○ skipped rotates the secret and shows the new one once
+      ○ skipped disables and re-enables an endpoint
+      ○ skipped answers 404 for an endpoint that does not exist
+      ○ skipped refuses an AUDITOR from rotating a secret
+    members created through the API
+      ○ skipped grants the matching role, so an ADMIN can configure payments but not webhooks
+      ○ skipped grants a VIEWER read-only authority
+      ○ skipped records the assignment in the tenant schema
+    installments
+      ○ skipped lists the installment plans it supports
+    order validation and state machine
+      ○ skipped rejects an installment plan the provider does not offer
+      ○ skipped rejects an amount below the minimum for the plan
+      ○ skipped rejects the amount "-5.00"
+      ○ skipped rejects the amount "abc"
+      ○ skipped rejects the amount "10.999"
+      ○ skipped rejects the amount ""
+      ○ skipped rejects a lower-case currency and an unknown checkout mode
+      ○ skipped rejects unknown properties rather than passing them on
+      ○ skipped lists orders and reads one
+      ○ skipped lists orders with a page size given in the query string
+      ○ skipped answers 404 for an order that does not exist
+      ○ skipped refuses a refund of an order that never settled
+      ○ skipped refuses a refund for an order that does not exist
+      ○ skipped refuses a card number where a token belongs
+      ○ skipped refuses a charge with no billing data
+      ○ skipped refuses a VIEWER from charging
+    stored cards
+      ○ skipped refuses a card number where a token belongs
+      ○ skipped rejects an invalid e-mail
+      ○ skipped refuses a VIEWER and an AUDITOR from storing a card
+    tenant isolation
+      ○ skipped refuses to read an order belonging to another tenant
+      ○ skipped refuses to charge, confirm and refund an order belonging to another tenant
+      ○ skipped lists only the caller’s own orders
+      ○ skipped will not settle another tenant’s order with its own webhook token
+      ○ skipped rotating one tenant’s webhook token leaves the other tenant’s working
+      ○ skipped refuses to store a card against another tenant’s configuration
+      ○ skipped refuses to read or rotate another tenant’s webhook destination
+      ○ skipped lets two tenants use the same merchant code without colliding
+      ○ skipped still lets a platform administrator address either tenant
+    provider flow against a stand-in Netpay
+      ○ skipped creates an order whose amount is tokenised server-side (Checkout Plus)
+      ○ skipped refuses an order when the provider binds a different amount
+      ○ skipped answers 504 (outcome unknown) and keeps the order unpaid when the provider is down
+      ○ skipped rejects an installment plan that the amount does not reach
+      ○ skipped settles an order only after the provider confirms the transaction
+      ○ skipped does not settle on a notification that claims PAID while the provider says declined
+      ○ skipped never settles when the provider reports a different amount
+      ○ skipped keeps an in-process transaction pending verification
+      ○ skipped leaves the order unconfirmed when the provider cannot be asked
+      ○ skipped does not let a forged notification pin an order to a transaction the provider never saw
+      ○ skipped refuses to bind an order to a second transaction
+      ○ skipped charges a token against a customer it creates, and settles from the provider at once
+      ○ skipped does not return what Netpay echoes back from a charge
+      ○ skipped keeps the order pending while the provider has not decided
+      ○ skipped refuses a charge without an address or a phone, which Netpay needs
+      ○ skipped uses a customer the caller already holds instead of creating one
+      ○ skipped sends the cvv of a stored card and refuses a stored-card charge without it
+      ○ skipped refuses a charge without the browser data 3-D Secure 2.0 needs
+      ○ skipped does not leave a card stored after a one-time payment, but keeps it when asked
+      ○ skipped forwards the reference id and user agent the browser produced
+      ○ skipped records a declined charge as FAILED, with the reason, instead of a provider error
+      ○ skipped answers 504 when the provider fails a charge with a 5xx, leaving the order unpaid
+      ○ skipped refunds a settled order once
+      ○ skipped audits every status change and writes each event to the outbox, partial refunds included (BN-TASK-030, BN-TASK-004, BN-TASK-019)
+      ○ skipped lets only a role with payments:refund refund
+      ○ skipped reverses a settled order at most once under concurrent refunds
+      ○ skipped keeps the refund claim when the provider outcome is unknown, so a retry cannot reverse twice
+      ○ skipped frees the order for a retry when the provider fails a charge, then refuses a repeat once submitted
+      ○ skipped charges an order at most once under concurrent charges
+      ○ skipped verifies a burst of identical notifications without corrupting the order
+      ○ skipped opens a Checkout Hosted session and returns the page Netpay hosts
+      ○ skipped refuses a hosted order that is not in MXN, and a malformed return URL
+      ○ skipped settles a hosted payment from a notification that names only the session
+      ○ skipped does not settle a hosted order from a notification whose transaction the provider never saw
+      ○ skipped ignores a hosted notification for a session that belongs to no order
+      ○ skipped treats sessionLink.failed by what the provider reports, not by the event name
+      ○ skipped does not trust the amount in a hosted notification
+      ○ skipped maps the provider status WAIT_THREEDS to PENDING_VERIFICATION
+      ○ skipped maps the provider status REVIEW to PENDING_VERIFICATION
+      ○ skipped maps the provider status CHARGEABLE to PENDING_VERIFICATION
+      ○ skipped maps the provider status INSECURE to FAILED
+      ○ skipped maps the provider status CANCELED to FAILED
+      ○ skipped maps the provider status FAILED to FAILED
+      ○ skipped does not read the legacy status names as success
+      ○ skipped asks the provider for nothing when the storefront charges a token itself
+      ○ skipped forwards the fingerprint and device data the browser produced while tokenising
+      ○ skipped carries the refund motive to Netpay
+      ○ skipped stores a buyer profile with a card and keeps only the token
+      ○ skipped creates a profile without a card
+      ○ skipped answers 504 and does not leak the secret when the provider fails the profile
+      ○ skipped registers the inbound webhook URL with the provider
+      ○ skipped lets a tenant use only its own provider keys
+      ○ skipped pages 250 orders with a cursor and updatedSince, each once and in order (BN-TASK-017)
+      ○ skipped reads one order with what a consumer reconciles against (BN-TASK-017)
+      ○ skipped cancels an unpaid hosted order once, and refuses a charge afterwards (BN-TASK-018)
+      ○ skipped refuses to cancel a paid order (BN-TASK-018)
+      ○ skipped keeps a cancelled order CANCELLED when it is paid anyway, and tells the consumer (BN-TASK-018)
+      ○ skipped accepts hosted return URLs only from the tenant allowlist once it is set (BN-TASK-021)
+      ○ skipped charges only in the currencies the tenant is enabled for (BN-TASK-022)
+      ○ skipped reports drift of the webhook Netpay calls, and none once it is this deployment (BN-TASK-026)
+      ○ skipped refunds an old order with the configuration it was created with, after a key change (BN-TASK-024)
+      stored cards
+        ○ skipped reads, attaches and deletes cards, up to three
+        ○ skipped refuses a customer id or token that could change the provider URL
+        ○ skipped refuses card data and a missing cvv when attaching, and honours permissions
+      Idempotency-Key (BN-TASK-010)
+        ○ skipped runs two concurrent refunds with one key once: one Netpay call, and the stored answer on retry
+        ○ skipped replays an order creation and a charge without calling Netpay again
+        ○ skipped stores a definitive 4xx, and keeps a 5xx in progress so a retry cannot run twice
+        ○ skipped refuses a malformed key and leaves requests without one as they were
+      charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015)
+        ○ skipped leaves the order CHARGE_UNKNOWN on a charge without answer, and refuses new charges until verify resolves it
+        ○ skipped accepts another card after a decline: attempt 2 settles the order, and each event names its attempt
+        ○ skipped verifies an abandoned 3-D Secure attempt with Netpay, then accepts a new charge
+        ○ skipped answers 409 with the PAID order when the previous attempt was charged after all
+      3-D Secure
+        ○ skipped hands the challenge back to the storefront
+        ○ skipped confirms once the buyer authenticated, and settles after the provider agrees
+        ○ skipped confirms with a null processor id when the library needed no challenge
+        ○ skipped refuses to confirm a transaction that is not waiting for it
+        ○ skipped refuses to confirm an order that has no charge
+        ○ skipped confirms at most once under concurrent requests
+        ○ skipped requires the processor transaction id, and the payments:write permission
+    consumer disconnect and internal routes
+      ✕ lets a consumer disconnect: disable its endpoint and revoke its own key (BN-TASK-050) (93 ms)
+      ✓ accepts POST /internal/tick only with the scheduler’s Google ID token (BN-TASK-016) (6 ms)
+  ● payments and outbound webhooks (e2e) › consumer disconnect and internal routes › lets a consumer disconnect: disable its endpoint and revoke its own key (BN-TASK-050)
+    expect(received).toBe(expected) // Object.is equality
+    Expected: 204
+    Received: 404
+      4043 |         tenantHeader(),
+      4044 |       );
+    > 4045 |       expect(disabled.status).toBe(204);
+           |                               ^
+      4046 |       const [row] = await tenantRows<{ status: string }>(
+      4047 |         `SELECT status FROM "${tenantASchema}".webhook_endpoints WHERE id = $1`,
+      4048 |         [endpointId],
+      at Object.<anonymous> (test/payments.e2e-spec.ts:4045:31)
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 149 skipped, 1 passed, 151 total

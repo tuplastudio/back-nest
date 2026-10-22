@@ -1,5 +1,23 @@
 import { HttpStatus } from '@nestjs/common';
 
+/** Statuses a client may retry as they are, without changing the request. */
+const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([
+  HttpStatus.REQUEST_TIMEOUT,
+  HttpStatus.TOO_MANY_REQUESTS,
+  HttpStatus.SERVICE_UNAVAILABLE,
+  HttpStatus.GATEWAY_TIMEOUT,
+]);
+
+/**
+ * Reports whether a status means "try again later" rather than "this request is wrong".
+ *
+ * @param status HTTP status.
+ * @returns `true` for 408, 429, 503 and 504.
+ */
+export function isRetryableStatus(status: number): boolean {
+  return RETRYABLE_STATUSES.has(status);
+}
+
 /**
  * Base class for every error this application raises deliberately.
  *
@@ -14,12 +32,15 @@ export class AppException extends Error {
    * @param code Stable machine-readable error code.
    * @param status HTTP status to respond with.
    * @param details Optional structured, non-sensitive context.
+   * @param retryable Whether repeating the same request may succeed. Defaults
+   *   from the status: 408, 429, 503 and 504 are retryable, everything else is not.
    */
   constructor(
     message: string,
     readonly code: string,
     readonly status: HttpStatus = HttpStatus.BAD_REQUEST,
     readonly details?: Record<string, unknown>,
+    readonly retryable: boolean = isRetryableStatus(status),
   ) {
     super(message);
     this.name = new.target.name;
@@ -65,6 +86,72 @@ export class NotFoundException extends AppException {
 export class ConflictException extends AppException {
   constructor(message = 'The request conflicts with the current state.', details?: Record<string, unknown>) {
     super(message, 'CONFLICT', HttpStatus.CONFLICT, details);
+  }
+}
+
+/**
+ * The order is in a state that does not allow the operation (BN-REQ-PAY-003).
+ *
+ * Distinct from the generic `CONFLICT`: the order itself, not a concurrent
+ * request, is what refuses. `details.status` carries the status; when a previous
+ * charge turned out to be paid, `details.order` carries the order.
+ */
+export class OrderStateConflictException extends AppException {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, 'ORDER_STATE_CONFLICT', HttpStatus.CONFLICT, details);
+  }
+}
+
+/**
+ * An `Idempotency-Key` was reused with a different request body (BN-REQ-IDM-001).
+ *
+ * The key names one request; reusing it for another is a client defect, so
+ * this is a 422 and repeating it as is never succeeds.
+ */
+export class IdempotencyKeyReusedException extends AppException {
+  constructor() {
+    super(
+      'This Idempotency-Key was already used with a different request body.',
+      'IDEMPOTENCY_KEY_REUSED',
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
+ * The first request with this `Idempotency-Key` has not finished (BN-REQ-IDM-003).
+ *
+ * Retryable: once the first one finishes, the same request gets its stored
+ * response. The filter sends `Retry-After` from {@link retryAfterSeconds}.
+ */
+export class IdempotencyInProgressException extends AppException {
+  constructor(readonly retryAfterSeconds = 2) {
+    super(
+      'A request with this Idempotency-Key is still in progress.',
+      'IDEMPOTENCY_IN_PROGRESS',
+      HttpStatus.CONFLICT,
+      { retryAfterSeconds },
+      true,
+    );
+  }
+}
+
+/**
+ * Netpay carried the operation out but recording it locally failed (BN-REQ-IDM-004).
+ *
+ * The result is kept as a pending provider result and the order keeps its claim;
+ * reconciliation applies it. Not retryable: repeating the operation could move
+ * the money twice. Read the order later instead.
+ */
+export class ProviderResultPendingException extends AppException {
+  constructor(operation: string) {
+    super(
+      'The provider carried out the operation, but recording it failed; it will be applied by reconciliation. Read the order later instead of retrying.',
+      'PROVIDER_RESULT_PENDING',
+      HttpStatus.INTERNAL_SERVER_ERROR,
+      { operation },
+      false,
+    );
   }
 }
 
@@ -181,19 +268,116 @@ export class UnsafeSqlException extends AppException {
  * not at fault, so this is a gateway failure rather than a server defect.
  */
 export class UpstreamProviderException extends AppException {
+  /**
+   * @param provider Provider name, e.g. `Netpay`.
+   * @param message Safe explanation for the caller.
+   * @param details Non-sensitive context.
+   * @param code Stable code; see the subclasses.
+   * @param status HTTP status.
+   */
+  constructor(
+    provider: string,
+    message?: string,
+    details: Record<string, unknown> = {},
+    code = 'UPSTREAM_PROVIDER_ERROR',
+    status: HttpStatus = HttpStatus.BAD_GATEWAY,
+  ) {
+    super(message ?? `The ${provider} provider could not be reached.`, code, status, {
+      provider,
+      ...details,
+    });
+  }
+}
+
+/**
+ * The provider gave no definitive answer: a timeout, a dropped connection, a 5xx or
+ * an unreadable body (BN-REQ-PAY-011).
+ *
+ * The operation may or may not have happened at the provider, so this is a **504**
+ * and `retryable`, and whoever holds an operation claim must keep it: the order is
+ * left for reconciliation, never reopened for a second attempt that could charge or
+ * refund twice.
+ */
+export class ProviderOutcomeUnknownException extends UpstreamProviderException {
   constructor(provider: string, message?: string, details: Record<string, unknown> = {}) {
     super(
-      message ?? `The ${provider} provider could not be reached.`,
-      'UPSTREAM_PROVIDER_ERROR',
-      HttpStatus.BAD_GATEWAY,
-      { provider, ...details },
+      provider,
+      message ?? `The ${provider} provider did not give a definitive answer; the outcome is unknown.`,
+      details,
+      'PROVIDER_OUTCOME_UNKNOWN',
+      HttpStatus.GATEWAY_TIMEOUT,
     );
   }
+}
+
+/**
+ * The provider explicitly refused the request (a 4xx). Nothing happened there, so
+ * this is a **502**, not retryable as is, and an operation claim may be released.
+ */
+export class ProviderDeclinedException extends UpstreamProviderException {
+  constructor(provider: string, message?: string, details: Record<string, unknown> = {}) {
+    super(
+      provider,
+      message ?? `The ${provider} provider refused the request.`,
+      details,
+      'PROVIDER_DECLINED',
+      HttpStatus.BAD_GATEWAY,
+    );
+  }
+}
+
+/**
+ * Reports whether an error means the provider outcome is unknown.
+ *
+ * Structural on the code so it also recognises subclasses defined next to a client.
+ *
+ * @param error Caught value.
+ * @returns `true` for `PROVIDER_OUTCOME_UNKNOWN`.
+ */
+export function isProviderOutcomeUnknown(error: unknown): boolean {
+  return error instanceof AppException && error.code === 'PROVIDER_OUTCOME_UNKNOWN';
 }
 
 /** A domain invariant was violated, e.g. deleting the last owner. */
 export class DomainException extends AppException {
   constructor(message: string, code = 'DOMAIN_VIOLATION', details?: Record<string, unknown>) {
     super(message, code, HttpStatus.UNPROCESSABLE_ENTITY, details);
+  }
+}
+
+/**
+ * Provider credentials failed the check against the provider (BN-TASK-025).
+ *
+ * `CREDENTIALS_ENVIRONMENT_MISMATCH` when the key works in the other environment
+ * (a live key saved as sandbox, or the reverse), `CREDENTIALS_INVALID` otherwise.
+ */
+export class CredentialsRejectedException extends AppException {
+  constructor(code: 'CREDENTIALS_ENVIRONMENT_MISMATCH' | 'CREDENTIALS_INVALID', message: string) {
+    super(message, code, HttpStatus.UNPROCESSABLE_ENTITY);
+  }
+}
+
+/**
+ * The order's currency is not one the tenant is enabled for (BN-REQ-PAY-008).
+ * `details`: `{ currency, allowed }`.
+ */
+export class CurrencyNotEnabledException extends AppException {
+  constructor(currency: string, allowed: readonly string[]) {
+    super(
+      `This tenant is not enabled to charge in ${currency}.`,
+      'CURRENCY_NOT_ENABLED',
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      { currency, allowed: [...allowed] },
+    );
+  }
+}
+
+/**
+ * A hosted return URL is not `https`, or its origin is not in the tenant's
+ * `allowedReturnOrigins` (BN-REQ-PAY-007). `details`: `{ field, origin }`.
+ */
+export class ReturnUrlNotAllowedException extends AppException {
+  constructor(field: string, origin: string | null, message: string) {
+    super(message, 'RETURN_URL_NOT_ALLOWED', HttpStatus.UNPROCESSABLE_ENTITY, { field, origin });
   }
 }

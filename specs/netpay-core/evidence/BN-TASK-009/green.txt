@@ -1,0 +1,16 @@
+# BN-TASK-009 green (docs/events schemas in sync, real payloads validate, OpenAPI x-webhooks + error envelope) — 2026-10-21T19:19:13Z
+# npm test -- src/payments/event-contract.spec.ts src/docs/openapi-contract.spec.ts
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/event-contract.spec.ts src/docs/openapi-contract.spec.ts
+
+(node:49653) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:49654) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Test Suites: 2 passed, 2 total
+Tests:       16 passed, 16 total
+Snapshots:   0 total
+Time:        2.183 s, estimated 4 s
+Ran all test suites matching src/payments/event-contract.spec.ts|src/docs/openapi-contract.spec.ts.

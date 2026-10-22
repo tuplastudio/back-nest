@@ -1,0 +1,62 @@
+# BN-TASK-023 red — 2026-10-21T18:14:10Z
+# jest src/payments/netpay.client.spec.ts -t "provider-echoed"
+[Nest] 5354  - 10/21/2026, 11:14:11 AM    WARN [NetpayClient] Netpay GET /v3/transactions/tx returned status 400
+(node:5354) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/netpay.client.spec.ts
+  ● NetpayClient — provider-echoed values never leave the client (BN-TASK-023) › keeps field names only: no PAN, CVV or e-mail in the error, its details or the log
+
+    expect(received).not.toContain(expected) // indexOf
+
+    Expected substring: not "4111111111111111"
+    Received string:        "{\"message\":\"The payment provider refused the request (status 400).\",\"providerMessage\":\"Argument not valid (source: 4111111111111111; cvv: 987; email: ana.lopez@example.mx)\",\"details\":{\"provider\":\"Netpay\",\"providerStatus\":400,\"providerMessage\":\"Argument not valid (source: 4111111111111111; cvv: 987; email: ana.lopez@example.mx)\"},\"logged\":[\"Netpay POST /v3.5/charges/ returned status 400\"]}"
+
+      387 |       logged,
+      388 |     });
+    > 389 |     expect(everything).not.toContain(PAN);
+          |                            ^
+      390 |     expect(everything).not.toContain('1111');
+      391 |     expect(everything).not.toContain(CVV);
+      392 |     expect(everything).not.toContain(EMAIL);
+
+      at Object.<anonymous> (src/payments/netpay.client.spec.ts:389:28)
+
+  ● NetpayClient — provider-echoed values never leave the client (BN-TASK-023) › drops digit runs that look like a card number from the provider message itself
+
+    expect(received).not.toContain(expected) // indexOf
+
+    Expected substring: not "4111111111111111"
+    Received string:        "Card 4111111111111111 rejected"
+
+      397 |     const { client } = clientAnswering({ status: 400, body: { message: `Card ${PAN} rejected` } });
+      398 |     const error = (await client.getTransaction('SANDBOX', SK, 'tx').catch((e: unknown) => e)) as NetpayRequestError;
+    > 399 |     expect(error.providerMessage).not.toContain(PAN);
+          |                                       ^
+      400 |   });
+      401 |
+      402 |   it('keeps a declined charge free of the echoed values too', async () => {
+
+      at Object.<anonymous> (src/payments/netpay.client.spec.ts:399:39)
+
+  ● NetpayClient — provider-echoed values never leave the client (BN-TASK-023) › keeps a declined charge free of the echoed values too
+
+    expect(received).not.toContain(expected) // indexOf
+
+    Expected substring: not "4111111111111111"
+    Received string:        "{\"transactionTokenId\":\"tx-d\",\"status\":\"failed\",\"error\":\"Rejected\",\"subErrors\":[{\"object\":\"charge\",\"field\":\"source\",\"rejectedValue\":\"4111111111111111\",\"value\":\"4111111111111111\",\"message\":\"Invalid card\"},{\"object\":\"charge\",\"field\":\"cvv\",\"value\":\"987\",\"message\":\"cvv 987 is invalid\"},{\"object\":\"billing\",\"field\":\"email\",\"value\":\"ana.lopez@example.mx\"}],\"declineReason\":\"Rejected (source: 4111111111111111; cvv: 987; email: ana.lopez@example.mx)\"}"
+
+      406 |     });
+      407 |     const tx = await client.createCharge('SANDBOX', SK, { source: 'token_x' } as never);
+    > 408 |     expect(JSON.stringify(tx)).not.toContain(PAN);
+          |                                    ^
+      409 |     expect(JSON.stringify(tx)).not.toContain(EMAIL);
+      410 |   });
+      411 | });
+
+      at Object.<anonymous> (src/payments/netpay.client.spec.ts:408:36)
+
+Test Suites: 1 failed, 1 total
+Tests:       3 failed, 39 skipped, 42 total
+Snapshots:   0 total
+Time:        1.267 s, estimated 2 s
+Ran all test suites matching src/payments/netpay.client.spec.ts with tests matching "provider-echoed".

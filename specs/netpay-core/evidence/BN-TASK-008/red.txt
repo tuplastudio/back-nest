@@ -1,0 +1,154 @@
+# BN-TASK-008 red (replay keeps history, window from replay, audited) — 2026-10-21T19:03:07Z
+# npm test -- src/payments/outbound/outbound-webhook.service.spec.ts src/payments/outbound/outbound-dispatcher.service.spec.ts -t replay
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/outbound/outbound-webhook.service.spec.ts src/payments/outbound/outbound-dispatcher.service.spec.ts -t replay
+
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+(node:41885) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/outbound/outbound-webhook.service.spec.ts
+  ● OutboundWebhookService › deliveries and replay › keeps the attempt history and restarts the retry window at the replay (BN-REQ-EVT-010)
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 30
+    Received: 0
+
+      348 |       const row = deliveries.get('d1')!;
+      349 |       // Not reset: the next attempt is the 30th, and the header says so.
+    > 350 |       expect(row.attempt).toBe(30);
+          |                           ^
+      351 |       // Attempts already made; the cap counts only those after the replay.
+      352 |       expect(row.attemptsBeforeReplay).toBe(29);
+      353 |       expect(row.replayedAt).toBeInstanceOf(Date);
+
+      at Object.<anonymous> (src/payments/outbound/outbound-webhook.service.spec.ts:350:27)
+
+  ● OutboundWebhookService › deliveries and replay › audits the replay with the actor, the tenant and the transition
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 18
+    + Received  +  1
+
+    - Array [
+    -   ObjectContaining {
+    -     "action": "webhook.delivery_replayed",
+    -     "actorId": "member-7",
+    -     "actorType": "TENANT_USER",
+    -     "metadata": ObjectContaining {
+    -       "attempt": 12,
+    -       "endpointId": "e41d8094-40ff-4be3-9d31-cc5674aef3ef",
+    -       "eventId": "evt_1",
+    -       "from": "DEAD",
+    -       "orderId": "order-9",
+    -       "to": "PENDING",
+    -     },
+    -     "resourceId": "d1",
+    -     "resourceType": "webhook_delivery",
+    -     "tenantId": "11111111-1111-4111-8111-111111111111",
+    -   },
+    - ]
+    + Array []
+
+      372 |       audits.length = 0;
+      373 |       await service.replay('d1');
+    > 374 |       expect(audits).toEqual([
+          |                      ^
+      375 |         expect.objectContaining({
+      376 |           tenantId: TENANT,
+      377 |           actorType: 'TENANT_USER',
+
+      at Object.<anonymous> (src/payments/outbound/outbound-webhook.service.spec.ts:374:22)
+
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+  event: 'outbound_delivery_result',
+  message: 'delivery d1 attempt 1: retry',
+  deliveryId: 'd1',
+  result: 'retry',
+  attempt: 1,
+  httpStatus: 500,
+  latencyMs: 2
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery d1 attempt 2: failed',
+  deliveryId: 'd1',
+  result: 'failed',
+  attempt: 2,
+  httpStatus: 500,
+  latencyMs: 2
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery d1 attempt 3: retry',
+  deliveryId: 'd1',
+  result: 'retry',
+  attempt: 3,
+  httpStatus: 500,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery d1 attempt 4: failed',
+  deliveryId: 'd1',
+  result: 'failed',
+  attempt: 4,
+  httpStatus: 500,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery d1 attempt 1: failed',
+  deliveryId: 'd1',
+  result: 'failed',
+  attempt: 1,
+  httpStatus: 500,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery d1 attempt 2: failed',
+  deliveryId: 'd1',
+  result: 'failed',
+  attempt: 2,
+  httpStatus: 500,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery d1 attempt 1: retry',
+  deliveryId: 'd1',
+  result: 'retry',
+  attempt: 1,
+  httpStatus: 500,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery d1 attempt 2: failed',
+  deliveryId: 'd1',
+  result: 'failed',
+  attempt: 2,
+  httpStatus: 500,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery d1 attempt 3: retry',
+  deliveryId: 'd1',
+  result: 'retry',
+  attempt: 3,
+  httpStatus: 500,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery d1 attempt 4: failed',
+  deliveryId: 'd1',
+  result: 'failed',
+  attempt: 4,
+  httpStatus: 500,
+  latencyMs: 0
+}
+(node:41886) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       2 failed, 40 skipped, 6 passed, 48 total
+Snapshots:   0 total
+Time:        3.661 s, estimated 7 s
+Ran all test suites matching src/payments/outbound/outbound-webhook.service.spec.ts|src/payments/outbound/outbound-dispatcher.service.spec.ts with tests matching "replay".

@@ -119,7 +119,8 @@ export class CreateUserDto {
    * Initial password.
    *
    * Omit for SSO-only accounts; the member is then created as `INVITED` with
-   * no password hash.
+   * no password hash and an invitation token. API keys must omit it: a key
+   * sending a password is refused with 422 (BN-REQ-SEC-002).
    */
   @ApiPropertyOptional({ format: 'password', minLength: 8 })
   @IsOptional()
@@ -175,6 +176,41 @@ export class UserDto {
   /** Creation timestamp. */
   @ApiProperty({ type: String, format: 'date-time' })
   createdAt!: Date;
+}
+
+/**
+ * A member as returned by `POST /t/users`.
+ *
+ * Carries the invitation token when the member was created `INVITED` (always the
+ * case for API keys). The token is shown only in this response.
+ */
+export class CreatedUserDto extends UserDto {
+  /** One-time invitation token; `null` when the member was created active. */
+  @ApiProperty({ type: String, nullable: true })
+  invitationToken!: string | null;
+
+  /** Invitation expiry; `null` when there is no invitation. */
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  invitationExpiresAt!: Date | null;
+}
+
+/**
+ * Payload for accepting a member invitation.
+ */
+export class AcceptInvitationDto {
+  /** Invitation token returned when the member was created. */
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  token!: string;
+
+  /** Password the invited member chooses. */
+  @ApiProperty({ format: 'password', minLength: 8 })
+  @IsString()
+  @MinLength(8)
+  @MaxLength(200)
+  password!: string;
 }
 
 /**

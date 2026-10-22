@@ -1,0 +1,132 @@
+# BN-TASK-035 green — 2026-10-21T18:19:20Z
+# npm test -- src/pii src/payments/payment-crypto.spec.ts
+PASS src/pii/keyring.spec.ts
+  Keyring (BN-REQ-SEC-007)
+    ✓ prefixes ciphertext with the version of the key that wrote it (2 ms)
+    ✓ with v2 active, reads what v1 wrote and writes with v2 (1 ms)
+    ✓ reads legacy unprefixed ciphertext with the legacy key (1 ms)
+    ✓ refuses a version it does not hold, a wrong AAD and tampering (8 ms)
+    ✓ validates the JSON shape (1 ms)
+    ✓ single() is the backward-compatible keyring: v1 = the existing key, legacy = the same key
+  services on the keyring
+    ✓ PiiCryptoService writes v-prefixed ciphertext and still reads legacy rows
+    ✓ PiiCryptoService accepts a rotated keyring (1 ms)
+    ✓ PaymentSecretBox writes v-prefixed ciphertext and still reads legacy rows
+  re-encryption job
+    ✓ leaves zero rows on v1 or legacy once it has run (1 ms)
+    ✓ dry-run counts without writing
+
+PASS src/pii/pii-crypto.service.spec.ts
+  PiiCryptoService
+    constructor
+      ✓ rejects an encryption key that is not exactly 32 bytes (3 ms)
+    encrypt/decrypt
+      ✓ round-trips a value (1 ms)
+      ✓ produces a different ciphertext every time (non-deterministic)
+      ✓ binds ciphertext to the additional authenticated data (1 ms)
+      ✓ rejects a tampered ciphertext
+      ✓ rejects a ciphertext produced with a different key
+      ✓ rejects malformed input
+      ✓ does not leak the failure reason when authentication fails (1 ms)
+    blindIndex
+      ✓ is deterministic for the same input
+      ✓ is case and whitespace insensitive
+      ✓ produces distinct indexes for distinct values (1 ms)
+      ✓ differs when the root secret differs
+      ✓ returns a 64 character hex string that fits the column width
+      ✓ never reveals the input
+    hashIp
+      ✓ is keyed and deterministic (1 ms)
+      ✓ returns null when no address is available
+      ✓ does not reveal the address
+    sha256
+      ✓ matches the known digest of an empty string (1 ms)
+    safeEquals
+      ✓ compares equal and unequal values
+      ✓ handles different lengths without throwing
+    normalize
+      ✓ trims and lower-cases
+
+PASS src/pii/pii-redaction.service.spec.ts
+  PiiRedactionService
+    when redaction is enabled
+      ✓ redacts credential-shaped keys regardless of case (1 ms)
+      ✓ keeps harmless fields readable (1 ms)
+      ✓ does not redact allow-listed metadata fields
+      ✓ recurses into nested objects and arrays (1 ms)
+      ✓ breaks cyclic references instead of overflowing the stack
+      ✓ summarises buffers instead of dumping their contents
+      ✓ renders errors without their stack
+      ✓ handles Map and Set
+      ✓ masks e-mail addresses inside free text
+      ✓ serialises to JSON safely
+      ✓ survives unserialisable values (1 ms)
+    when redaction is disabled
+      ✓ passes values through untouched
+
+PASS src/pii/pii-mask.service.spec.ts
+  PiiMaskService
+    maskEmail
+      ✓ keeps the first and last character of the local part (1 ms)
+      ✓ hides the whole local part when it is very short
+      ✓ caps the number of asterisks for very long local parts
+      ✓ is case insensitive
+      ✓ never returns the original address (1 ms)
+      ✓ degrades gracefully on malformed input
+    maskPhone
+      ✓ keeps the country prefix and the last two digits
+      ✓ hides very short numbers entirely
+    maskIp
+      ✓ reduces an IPv4 address to its network
+      ✓ reduces an IPv6 address to a /32 prefix
+      ✓ degrades gracefully on malformed input
+    maskName
+      ✓ keeps only the first letter
+    redact
+      ✓ replaces the value with a fixed placeholder
+
+PASS src/payments/payment-crypto.spec.ts
+  PaymentSecretBox
+    ✓ round-trips a secret (1 ms)
+    ✓ produces a different ciphertext each time
+    ✓ refuses a wrong AAD, which is what binds a key to its tenant (2 ms)
+    ✓ refuses a tampered ciphertext (1 ms)
+    ✓ refuses a key of the wrong length
+    ✓ hashes tokens rather than storing them, and compares in constant time (1 ms)
+    ✓ generates unguessable tokens of a usable length
+    ✓ prefixes signing secrets so a leaked one is recognisable
+  buildOrderReference
+    ✓ produces a reference carrying the tenant prefix
+    ✓ strips characters that have no place in a merchant reference
+    ✓ caps the prefix length
+    ✓ is unique per call
+  netpay endpoints
+    ✓ builds URLs against the two documented environments
+    ✓ refuses a path that could escape the base (1 ms)
+    ✓ refuses an unknown environment
+    ✓ exposes exactly the two documented bases
+  netpay response parsing
+    ✓ recognises the documented statuses
+    ✓ returns null for anything it does not know, rather than guessing
+    ✓ converts an amount without float drift
+    ✓ rejects an unusable amount instead of coercing it to zero
+
+Test Suites: 5 passed, 5 total
+Tests:       77 passed, 77 total
+Snapshots:   0 total
+Time:        3.011 s
+Ran all test suites matching src/pii|src/payments/payment-crypto.spec.ts.
+
+# BN-TASK-035 re-encryption job against the e2e database (bn-e2e-b:55432), keyrings rotated to v2
+## dry run
+{"target":"platform_admins.emailCiphertext","scanned":1,"rewritten":1,"failed":0,"dryRun":true}
+{"target":"tenant_acme_45fd71af.users.emailCiphertext","scanned":1,"rewritten":1,"failed":0,"dryRun":true}
+{"summary":true,"piiCurrent":"2","netpayCurrent":"2","rewritten":2,"failed":0,"dryRun":true}
+## run
+{"target":"platform_admins.emailCiphertext","scanned":1,"rewritten":1,"failed":0,"dryRun":false}
+{"target":"tenant_acme_45fd71af.users.emailCiphertext","scanned":1,"rewritten":1,"failed":0,"dryRun":false}
+{"summary":true,"piiCurrent":"2","netpayCurrent":"2","rewritten":2,"failed":0,"dryRun":false}
+## dry run again: nothing left on v1/legacy
+{"summary":true,"piiCurrent":"2","netpayCurrent":"2","rewritten":0,"failed":0,"dryRun":true}
+## rows still not on v2 (SQL)
+0

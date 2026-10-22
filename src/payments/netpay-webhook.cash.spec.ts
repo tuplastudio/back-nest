@@ -3,6 +3,7 @@ import { NetpayWebhookService } from './netpay-webhook.service';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import type { PaymentConfigService } from './payment-config.service';
 import type { PaymentOrdersService } from './payment-orders.service';
+import type { NetpayClient } from './netpay.client';
 
 /**
  * Cash notifications from Netpay (`oxxopay.*`, `cep.*`). Netpay does not sign them,
@@ -12,7 +13,7 @@ import type { PaymentOrdersService } from './payment-orders.service';
 
 const SCHEMA = 'tenant_acme_00000001';
 
-function fixture(found: { id: string } | null) {
+function fixture(found: { id: string; orderReference?: string } | null) {
   const created: Record<string, unknown>[] = [];
   const lookups: unknown[] = [];
   const client = {
@@ -23,10 +24,14 @@ function fixture(found: { id: string } | null) {
       }),
       updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
     },
+    inboundEventSeen: {
+      deleteMany: jest.fn(() => Promise.resolve({ count: 0 })),
+      create: jest.fn(() => Promise.resolve({})),
+    },
     paymentOrder: {
       findFirst: jest.fn((args: { where: { OR: unknown[] } }) => {
         lookups.push(args.where.OR);
-        return Promise.resolve(found);
+        return Promise.resolve(found === null ? null : { orderReference: 'acme_orderref', ...found });
       }),
     },
   };
@@ -36,12 +41,17 @@ function fixture(found: { id: string } | null) {
   } as unknown as TenantPrismaService;
   const config = {
     resolveByWebhookToken: () => Promise.resolve({ tenantId: 't1', schemaName: SCHEMA }),
+    getUsableInSchema: () => Promise.resolve({ environment: 'SANDBOX', secretKey: 'sk_netpay_y' }),
   } as unknown as PaymentConfigService;
+  // Netpay confirms that the transaction a cash notification names is this order's.
+  const netpay = {
+    getTransaction: () => Promise.resolve({ merchantReferenceCode: 'acme_orderref', status: 'IN_PROCESS' }),
+  } as unknown as NetpayClient;
   const verifyOrderInSchema = jest.fn((..._a: unknown[]) => Promise.resolve({ status: 'PAID' }));
   const attachCashReferenceInSchema = jest.fn((..._a: unknown[]) => Promise.resolve());
   const orders = { verifyOrderInSchema, attachCashReferenceInSchema } as unknown as PaymentOrdersService;
   return {
-    service: new NetpayWebhookService(tenantPrisma, config, orders),
+    service: new NetpayWebhookService(tenantPrisma, config, orders, netpay),
     verifyOrderInSchema,
     attachCashReferenceInSchema,
     lookups,
@@ -72,13 +82,13 @@ describe('Netpay cash notifications', () => {
     expect(f.verifyOrderInSchema).not.toHaveBeenCalled();
   });
 
-  it('oxxopay.new (no transaction yet) records the reference and stops', async () => {
+  it('oxxopay.new (no transaction yet) cannot be confirmed, so the reference waits and nothing is verified', async () => {
     const f = fixture({ id: 'order-1' });
     await f.service.receive('token', {
       event: 'oxxopay.new',
       data: { reference: '9201170000000001', merchantReferenceCode: 'acme_orderref', amount: 88 },
     });
-    expect(f.attachCashReferenceInSchema).toHaveBeenCalled();
+    expect(f.attachCashReferenceInSchema).not.toHaveBeenCalled();
     expect(f.verifyOrderInSchema).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { UpstreamProviderException } from '../common/errors/app.exception';
+import { logNetpayRequest } from '../common/logging/payment-log-events';
+import { HttpStatus } from '@nestjs/common';
+import { ProviderOutcomeUnknownException, UpstreamProviderException } from '../common/errors/app.exception';
+import { classifyDecline } from './decline-codes';
 import {
   FAILED_STATUSES,
   NETPAY_PATHS,
@@ -49,11 +52,14 @@ export interface HttpTransport {
 }
 
 /**
- * Raised when Netpay answers with a non-2xx status, or cannot be reached.
+ * Raised when Netpay answers with a non-2xx status.
  *
- * A 502 rather than a generic 500: the request was well formed, the caller is
- * not at fault, and an order that never got a checkout session must not look
- * like a server bug to the client.
+ * Two different statements, told apart by the provider status (BN-REQ-PAY-011):
+ *
+ *  * a **4xx** is an explicit refusal: nothing happened at Netpay, so it is a 502
+ *    `PROVIDER_DECLINED` and an operation claim may be released;
+ *  * a **5xx** is not an answer: the operation may have been carried out, so it is a
+ *    504 `PROVIDER_OUTCOME_UNKNOWN`, retryable, and the claim must be kept.
  */
 export class NetpayRequestError extends UpstreamProviderException {
   constructor(
@@ -63,23 +69,38 @@ export class NetpayRequestError extends UpstreamProviderException {
     /** What Netpay said, when it said something; it is what makes a refusal diagnosable. */
     readonly providerMessage: string | null = null,
   ) {
-    super('Netpay', `The payment provider refused the request (status ${providerStatus}).`, {
-      providerStatus,
-      ...(providerMessage === null ? {} : { providerMessage }),
-    });
+    const unknown = providerStatus >= 500;
+    super(
+      'Netpay',
+      unknown
+        ? `The payment provider gave no definitive answer (status ${providerStatus}); the outcome is unknown.`
+        : `The payment provider refused the request (status ${providerStatus}).`,
+      {
+        providerStatus,
+        ...(providerMessage === null ? {} : { providerMessage }),
+      },
+      unknown ? 'PROVIDER_OUTCOME_UNKNOWN' : 'PROVIDER_DECLINED',
+      unknown ? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY,
+    );
   }
 }
 
-/** Raised when the transport itself fails (timeout, DNS, TLS). */
-export class NetpayTransportError extends UpstreamProviderException {
+/**
+ * Raised when the transport itself fails (timeout, DNS, TLS) or a 2xx body cannot be
+ * read: Netpay may have acted on the request, so the outcome is unknown (504).
+ */
+export class NetpayTransportError extends ProviderOutcomeUnknownException {
   constructor(
     readonly path: string,
     // `cause` is declared on `Error`, so it overrides rather than adds.
     override readonly cause: unknown = undefined,
   ) {
-    super('Netpay', 'The payment provider could not be reached.');
+    super('Netpay', 'The payment provider could not be reached; the outcome is unknown.');
   }
 }
+
+/** Result of {@link NetpayClient.checkCredentials}. */
+export type NetpayCredentialCheck = 'VALID' | 'INVALID';
 
 /**
  * Talks to Netpay.
@@ -193,7 +214,24 @@ export class NetpayClient {
         this.logger.warn(`Netpay POST ${path} returned status ${response.status}`);
         throw new NetpayRequestError(response.status, path, providerMessageOf(response.body));
       }
-      return { ...declined, declineReason: providerMessageOf(response.body) };
+      const declineReason = providerMessageOf(response.body);
+      const { failureCode, providerCode } = classifyDecline({
+        code: declined.responseCode,
+        message: declineReason,
+      });
+      return {
+        // Only the fields a transaction carries: the body also echoes the request.
+        transactionTokenId: declined.transactionTokenId,
+        status: declined.status,
+        ...(declined.amount === undefined ? {} : { amount: declined.amount }),
+        ...(declined.currency === undefined ? {} : { currency: declined.currency }),
+        ...(declined.merchantReferenceCode === undefined
+          ? {}
+          : { merchantReferenceCode: declined.merchantReferenceCode }),
+        declineReason,
+        failureCode,
+        providerFailureCode: providerCode,
+      };
     }
     return this.parse<NetpayTransaction>(response, path);
   }
@@ -473,6 +511,34 @@ export class NetpayClient {
   }
 
   /**
+   * Proves a secret key against one environment without changing anything.
+   *
+   * `GET /v3/webhooks/` is the one documented call that authenticates with the
+   * secret key and is read-only: it reads the webhook registration and creates,
+   * charges or registers nothing. A 401/403 means the environment refuses the key;
+   * any other 4xx (e.g. 404 when nothing is registered yet) means the key was
+   * accepted. A 5xx or a transport failure is not an answer and raises
+   * `PROVIDER_OUTCOME_UNKNOWN` rather than guessing.
+   *
+   * @param environment Sandbox or Live.
+   * @param secretKey The key to prove.
+   * @returns `VALID` or `INVALID`.
+   */
+  async checkCredentials(environment: NetpayEnvironment, secretKey: string): Promise<NetpayCredentialCheck> {
+    const response = await this.send(
+      environment,
+      secretKey,
+      NETPAY_PATHS.WEBHOOKS,
+      'GET',
+      undefined,
+      {},
+      'gateway',
+      true,
+    );
+    return response.status === 401 || response.status === 403 ? 'INVALID' : 'VALID';
+  }
+
+  /**
    * Registers the inbound webhook URL for a key set.
    *
    * Registration is per key set, which is what makes the per-tenant isolation
@@ -514,6 +580,8 @@ export class NetpayClient {
     passClientErrors = false,
   ): Promise<HttpResponseLike> {
     let response: HttpResponseLike;
+    const operation = netpayOperation(method, path);
+    const started = performance.now();
     try {
       // Netpay authenticates with the secret key as a bare header value. The
       // gateway reads it from `Authorization`, the reports service from
@@ -537,8 +605,21 @@ export class NetpayClient {
       // The transport error is logged by type only: a Node TLS message can embed
       // the host, and this path must never carry a secret.
       this.logger.error(`Netpay ${method} ${path} failed: ${errorName(error)}`);
+      logNetpayRequest(this.logger, {
+        operation,
+        outcome: isTimeout(error) ? 'timeout' : 'error',
+        latencyMs: performance.now() - started,
+      });
       throw new NetpayTransportError(path, error);
     }
+    // The `netpay_latency_ms` metric (BN-REQ-OPS-005). A 4xx is an answer, not a
+    // fault of the call, but it is still not `ok`.
+    logNetpayRequest(this.logger, {
+      operation,
+      outcome: response.status >= 200 && response.status < 300 ? 'ok' : 'error',
+      latencyMs: performance.now() - started,
+      httpStatus: response.status,
+    });
     if (passClientErrors && response.status >= 400 && response.status < 500) {
       return response;
     }
@@ -584,42 +665,98 @@ function isSafeUserAgent(value: string): boolean {
  *
  * Netpay answers with `{ message }` or `{ error }`. The text is shortened and
  * control characters are dropped, because it is shown to a caller and written to
- * logs. Nothing else from the body is kept: some endpoints echo the request.
+ * logs. Nothing else from the body is kept: some endpoints echo the request
+ * (BN-REQ-PAY-009).
+ *
+ * `subErrors` contributes field **names** only. Its `value` / `rejectedValue` and its
+ * per-field message are what the provider echoes back (a PAN, a CVV, an e-mail), so
+ * they never leave this function. The top-level text is scrubbed too, in case the
+ * provider embeds a value in it: long digit runs and e-mail addresses are masked.
  *
  * @param body Raw response body.
  * @returns The message, or `null` when there is none.
  */
-function providerMessageOf(body: string): string | null {
+export function providerMessageOf(body: string): string | null {
   try {
     const parsed = JSON.parse(body) as Record<string, unknown>;
     const text = [parsed['message'], parsed['error']].find((v) => typeof v === 'string' && v.trim() !== '');
     if (typeof text !== 'string') {
       return null;
     }
-    // Netpay says which field failed in `subErrors` ("name: Name is invalid"); without
-    // it "Argument not valid" cannot be diagnosed. Field and reason only: the value
-    // sent may be personal data and is not kept.
+    // Netpay says which field failed in `subErrors`; without it "Argument not valid"
+    // cannot be diagnosed. The field name only: never the value sent.
     const sub = Array.isArray(parsed['subErrors'])
       ? (parsed['subErrors'] as Record<string, unknown>[])
-          .map((e) =>
-            typeof e?.['field'] === 'string'
-              ? `${e['field']}${typeof e['value'] === 'string' ? `: ${e['value']}` : ''}`
-              : '',
-          )
+          .map((e) => {
+            const field = e?.['field'];
+            return typeof field === 'string' && /^[A-Za-z0-9_.[\]]{1,64}$/.test(field) ? field : '';
+          })
           .filter((v) => v !== '')
           .slice(0, 3)
           .join('; ')
       : '';
-    return (
-      `${text}${sub === '' ? '' : ` (${sub})`}`
-        // eslint-disable-next-line no-control-regex
-        .replace(/[\u0000-\u001f\u007f]/g, ' ')
-        .trim()
-        .slice(0, 200)
-    );
+    return scrubProviderText(`${text}${sub === '' ? '' : ` (${sub})`}`);
   } catch {
     return null;
   }
+}
+
+/**
+ * Masks values a provider may embed in free text, and bounds it.
+ *
+ * @param text Provider text.
+ * @returns Text safe to return, log and persist.
+ */
+function scrubProviderText(text: string): string {
+  return (
+    text
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      // A card number, or any long digit run: masked whole.
+      .replace(/\d(?:[ -]?\d){5,}/g, '[REDACTED]')
+      .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[REDACTED]')
+      .trim()
+      .slice(0, 200)
+  );
+}
+
+/** Path segments that are part of an endpoint's name; anything else is an id. */
+const STATIC_SEGMENTS = new Set(
+  [
+    ...Object.values(NETPAY_PATHS).flatMap((path) => path.split('/')),
+    'refund',
+    'confirm',
+    'token',
+    'transactionId',
+    'transactions',
+  ].filter((segment) => segment !== ''),
+);
+
+/**
+ * Names a call for the latency metric: method plus the path with every id
+ * replaced by `:id`, so the label has one value per endpoint rather than one per
+ * transaction, and never carries a customer or card token.
+ *
+ * @param method HTTP method.
+ * @param path Request path, possibly with a query string.
+ * @returns E.g. `GET /v3/transactions/:id`.
+ */
+export function netpayOperation(method: string, path: string): string {
+  const [bare = ''] = path.split('?');
+  const segments = bare
+    .split('/')
+    .map((segment) => (segment === '' || STATIC_SEGMENTS.has(segment) ? segment : ':id'));
+  return `${method.toUpperCase()} ${segments.join('/').replace(/\/$/, '')}`;
+}
+
+/**
+ * Whether a transport failure was the request deadline.
+ *
+ * @param error Caught value.
+ * @returns `true` for a timeout.
+ */
+function isTimeout(error: unknown): boolean {
+  return error instanceof Error && (/timed? ?out/i.test(error.message) || error.name === 'TimeoutError');
 }
 
 /**

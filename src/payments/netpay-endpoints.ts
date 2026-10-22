@@ -1,3 +1,6 @@
+import { testOnlyOverride } from '../config/test-overrides';
+import type { DeclineCode } from './decline-codes';
+
 /**
  * Netpay endpoints, checked against the v1.2.1 documentation and the Sandbox gateway.
  *
@@ -92,8 +95,8 @@ function baseUrlFor(environment: NetpayEnvironment): string {
  * @returns The override when allowed, otherwise the published URL.
  */
 function overridable(environment: NetpayEnvironment, variable: string, fallback: string): string {
-  const override = process.env[variable];
-  if (environment === 'SANDBOX' && process.env['NODE_ENV'] === 'test' && override) {
+  const override = testOnlyOverride(variable);
+  if (environment === 'SANDBOX' && override) {
     return override.replace(/\/+$/, '');
   }
   return fallback;
@@ -216,6 +219,10 @@ export interface NetpayTransaction {
    * shortened and stripped of control characters. Set by the client, never sent.
    */
   declineReason?: string | null;
+  /** Stable decline code (BN-REQ-PAY-006). Set by the client, never sent. */
+  failureCode?: DeclineCode;
+  /** Netpay's own decline code, kept internally for diagnosis. Set by the client. */
+  providerFailureCode?: string | null;
 }
 
 /** One line of a Checkout Hosted session. Amounts travel as strings. */
@@ -338,6 +345,8 @@ export interface NetpayStoredCard {
   readonly source: string;
   readonly type: string;
   readonly defaultCard?: number;
+  /** Present when Netpay includes the card summary in the answer. */
+  readonly card?: { readonly lastFourDigits?: string };
 }
 
 /**

@@ -441,8 +441,7 @@ describe('Multitenant API (e2e)', () => {
 
     // Identical responses: the endpoint must not be usable to enumerate accounts.
     expect(wrongPassword.status).toBe(unknownAccount.status);
-    expect(wrongPassword.body['message']).toBe(unknownAccount.body['message']);
-    expect(wrongPassword.body['error']).toBe(unknownAccount.body['error']);
+    expect(wrongPassword.body['error']).toEqual(unknownAccount.body['error']);
   });
 
   it('provisions two tenants, each in its own schema', async () => {
@@ -585,7 +584,7 @@ describe('Multitenant API (e2e)', () => {
     });
 
     expect(response.status).toBe(403);
-    expect(response.body['error']).toBe('MISSING_SCOPE');
+    expect((response.body['error'] as { code: string }).code).toBe('MISSING_SCOPE');
   });
 
   it('rejects an unsupported scope at creation time', async () => {
@@ -712,7 +711,7 @@ describe('Multitenant API (e2e)', () => {
     // Replaying a rotated token is treated as theft.
     const replayed = await api('POST', '/auth/refresh', { body: { refreshToken: originalRefresh } });
     expect(replayed.status).toBe(401);
-    expect(replayed.body['error']).toBe('TOKEN_REUSE_DETECTED');
+    expect((replayed.body['error'] as { code: string }).code).toBe('TOKEN_REUSE_DETECTED');
 
     // The replacement died with the family.
     const afterRevocation = await api('POST', '/auth/refresh', {

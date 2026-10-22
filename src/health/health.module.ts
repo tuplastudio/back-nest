@@ -1,8 +1,12 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { readBuildInfo } from '../config/build-info';
 import { HealthController } from './health.controller';
 import { HealthService } from './health.service';
 import { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service';
+import { PaymentsModule } from '../payments/payments.module';
+import { WebhookDriftService } from '../payments/webhook-drift.service';
 
 /**
  * Liveness and readiness probes.
@@ -16,13 +20,24 @@ import { TenantPrismaService } from '../prisma/tenant-prisma.service';
  * receiving traffic).
  */
 @Module({
+  // For the cached webhook drift summary of the authenticated report (BN-REQ-CFG-004).
+  imports: [PaymentsModule],
   controllers: [HealthController],
   providers: [
     {
       provide: HealthService,
-      useFactory: (controlPlane: ControlPlanePrismaService, tenantPlane: TenantPrismaService) =>
-        new HealthService(controlPlane, tenantPlane, '1.0.0'),
-      inject: [ControlPlanePrismaService, TenantPrismaService],
+      useFactory: (
+        controlPlane: ControlPlanePrismaService,
+        tenantPlane: TenantPrismaService,
+        config: ConfigService,
+        drift: WebhookDriftService,
+      ) =>
+        new HealthService(controlPlane, tenantPlane, {
+          ...readBuildInfo(),
+          outboundEnabled: config.getOrThrow<boolean>('outboundWebhooks.enabled'),
+          webhookDrift: drift,
+        }),
+      inject: [ControlPlanePrismaService, TenantPrismaService, ConfigService, WebhookDriftService],
     },
   ],
   exports: [HealthService],

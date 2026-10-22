@@ -1,0 +1,13 @@
+# BN-TASK-025 green — 2026-10-21T18:18:42Z
+# jest src/payments/payment-config.credentials.spec.ts src/payments/netpay.client.spec.ts -t "credential"
+[Nest] 11821  - 10/21/2026, 11:18:44 AM    WARN [NetpayClient] Netpay GET /v3/webhooks/ returned status 500
+(node:11821) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:11820) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Test Suites: 2 passed, 2 total
+Tests:       36 skipped, 10 passed, 46 total
+Snapshots:   0 total
+Time:        1.721 s, estimated 6 s
+Ran all test suites matching src/payments/payment-config.credentials.spec.ts|src/payments/netpay.client.spec.ts with tests matching "credential".

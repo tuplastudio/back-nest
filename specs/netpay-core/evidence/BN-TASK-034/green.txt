@@ -1,0 +1,99 @@
+# BN-TASK-034 green — 2026-10-21T18:32:29Z
+# npm test -- src/auth/totp.spec.ts src/auth/auth.guard.spec.ts src/config/env.validation.spec.ts
+PASS src/auth/totp.spec.ts
+  TOTP (RFC 6238)
+    ✓ matches the RFC test vector at t=59 (3 ms)
+    ✓ matches the RFC test vector at t=1111111109
+    ✓ matches the RFC test vector at t=1234567890
+    ✓ matches the RFC test vector at t=2000000000 (1 ms)
+    ✓ round-trips base32
+    ✓ accepts the current and adjacent steps, refuses replay and stale codes
+    ✓ builds an otpauth URL authenticator apps understand (1 ms)
+    ✓ issues distinct recovery codes and hashes them case/format-insensitively
+  platform admin session policy (BN-REQ-SEC-006 / SEC-008)
+    ✓ allows a verified session (1 ms)
+    ✓ refuses an admin without MFA with 403 MFA_REQUIRED (1 ms)
+    ✓ lets an unverified session reach the MFA endpoints
+    ✓ does not require MFA when disabled and not enrolled
+    ✓ restricts a mustChangePassword admin to the password change endpoint
+    ✓ requires a recent MFA (<= 5 min) for step-up routes
+
+PASS src/config/env.validation.spec.ts
+  env validation (regression: NODE_ENV must not silently default to development)
+    ✓ rejects an absent NODE_ENV instead of assuming development (9 ms)
+    ✓ accepts an explicit NODE_ENV=development (2 ms)
+    ✓ accepts an explicit NODE_ENV=test (1 ms)
+    ✓ accepts an explicit NODE_ENV=production (5 ms)
+    ✓ rejects an unknown NODE_ENV (1 ms)
+    ✓ does not report development as the resolved profile when NODE_ENV is missing
+  env validation (regression: docs credential is required whenever docs are served)
+    ✓ rejects DOCS_ENABLED=true with no password (1 ms)
+    ✓ rejects the published .env.example placeholder in every environment (2 ms)
+    ✓ rejects the values prisma/seed.ts used to commit (regression) (1 ms)
+    ✓ rejects a short password (1 ms)
+    ✓ accepts a real password
+    ✓ does not require a password when docs are disabled
+  env validation (regression: the payments key is fail-fast too)
+    ✓ applies the same fail-fast rules to the payments key (2 ms)
+  env validation (pre-existing controls must survive)
+    ✓ still refuses identical access and refresh secrets
+    ✓ still refuses the example JWT secret (1 ms)
+    ✓ still refuses a wildcard CORS origin in production
+    ✓ still refuses a PII key that is not exactly 32 bytes (1 ms)
+  env validation (regression: production must carry a data-plane credential)
+    ✓ refuses to boot in production without TENANT_PLANE_DATABASE_URL
+    ✓ rejects an empty TENANT_PLANE_DATABASE_URL (1 ms)
+    ✓ still boots outside production without it, so local development works
+  env validation: security settings (BN-TASK-032/034/035/040)
+    ✓ requires admin MFA by default in production (staging runs as production) and not elsewhere (1 ms)
+    ✓ caps the authorization cache TTL at 5 s (1 ms)
+    ✓ validates keyring JSON (1 ms)
+    ✓ accepts only redis:// or rediss:// for the shared throttler storage
+
+PASS src/auth/auth.guard.spec.ts
+  AuthGuard.assertRole (regression: platform @Roles must reject tenant principals)
+    ✓ refuses a tenant-user whose tenant role is OWNER (6 ms)
+    ✓ refuses a tenant-user whose tenant role is ADMIN (1 ms)
+    ✓ refuses a tenant-user whose tenant role is MEMBER (1 ms)
+    ✓ refuses a tenant-user whose tenant role is VIEWER
+    ✓ refuses tenant role OWNER on @Roles("OWNER") (1 ms)
+    ✓ refuses tenant role ADMIN on @Roles("OWNER") (1 ms)
+    ✓ refuses tenant role MEMBER on @Roles("OWNER")
+    ✓ refuses tenant role VIEWER on @Roles("OWNER") (1 ms)
+    ✓ refuses a tenant-user ADMIN on @Roles("OWNER") too
+    ✓ still admits a genuine platform OWNER
+    ✓ still refuses a platform administrator whose role is not permitted (1 ms)
+    ✓ refuses an api-key principal on a @Roles route
+    ✓ leaves routes without @Roles metadata unaffected
+    ✓ refuses an empty @Roles() instead of stripping authorization from the route (10 ms)
+    ✓ cannot be steered by addressing a different tenant (1 ms)
+
+Test Suites: 3 passed, 3 total
+Tests:       53 passed, 53 total
+Snapshots:   0 total
+Time:        4.657 s, estimated 17 s
+Ran all test suites matching src/auth/totp.spec.ts|src/auth/auth.guard.spec.ts|src/config/env.validation.spec.ts.
+
+================ e2e ================
+# BN-TASK-029/031/032/034/038/039 e2e — test/security.e2e-spec.ts against compiled app (Postgres bn-e2e-b:55432)
+PASS test/security.e2e-spec.ts
+  Security hardening (e2e)
+    ✓ never answers 429 to 30 readiness probes a minute, and does not count them (52 ms)
+    ✓ refuses an admin without MFA with 403 MFA_REQUIRED (86 ms)
+    ✓ enrols TOTP, confirms it and unlocks the control plane (61 ms)
+    ✓ requires the second factor at sign-in once enrolled (62 ms)
+    ✓ provisions the tenant used below (113 ms)
+    ✓ requires a step-up (MFA within 5 min) for a cross-tenant payment write (41 ms)
+    ✓ refuses /t/webhooks to a key holding only payments:read, and admits webhooks:* keys (143 ms)
+    ✓ caps API-key member creation at MEMBER, refuses a password and invites instead (217 ms)
+    ✓ refuses POST /t/users to a VIEWER (method-level users:write) (101 ms)
+    ✓ restricts an admin with mustChangePassword to the password change endpoint (70 ms)
+    ✓ answers an allowed preflight with 204 and a disallowed one with 403 (1 ms)
+    ✓ sends no X-Powered-By header (12 ms)
+    ✓ answers 429 on the 11th sign-in within a minute (242 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       13 passed, 13 total
+Snapshots:   0 total
+Time:        5.093 s, estimated 6 s
+Ran all test suites matching test/security.e2e-spec.ts.

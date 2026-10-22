@@ -1,0 +1,14 @@
+# BN-TASK-035 red — 2026-10-21T18:18:13Z
+# npm test -- src/pii/keyring.spec.ts
+FAIL src/pii/keyring.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './keyring' from 'src/pii/keyring.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        3.675 s
+Ran all test suites matching src/pii/keyring.spec.ts.

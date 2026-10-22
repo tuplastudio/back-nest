@@ -71,10 +71,20 @@ describe('UrlGuard', () => {
   it('accepts a public HTTPS destination and pins it to the validated address', async () => {
     const guard = new UrlGuard(resolverOver({ 'hooks.example.com': [PUBLIC] }));
     const validated = await guard.validate('https://hooks.example.com/payments');
-    // Pinned, so the connection cannot be re-pointed between check and connect.
-    expect(validated.url).toBe('https://93.184.216.34/payments');
+    // The URL is the subscribed one; the pin is the address list, which the
+    // transport connects to instead of resolving the name again.
+    expect(validated.url).toBe('https://hooks.example.com/payments');
+    expect(validated.hostname).toBe('hooks.example.com');
     expect(validated.hostHeader).toBe('hooks.example.com');
     expect(validated.address).toBe('93.184.216.34');
+    expect(validated.addresses).toEqual([PUBLIC]);
+  });
+
+  it('keeps the scheme, port, path and query of the subscribed URL', async () => {
+    const guard = new UrlGuard(resolverOver({ 'hooks.example.com': [PUBLIC] }));
+    const validated = await guard.validate('https://hooks.example.com:8443/x/y?a=1&b=two');
+    expect(validated.url).toBe('https://hooks.example.com:8443/x/y?a=1&b=two');
+    expect(validated.hostHeader).toBe('hooks.example.com:8443');
   });
 
   it('refuses a non-HTTPS destination when HTTPS is required', async () => {
@@ -109,14 +119,94 @@ describe('UrlGuard', () => {
     });
   });
 
-  it('refuses a name resolving to several addresses, which is the rebinding shape', async () => {
+  it('refuses a name when any of its addresses is private, which is the rebinding shape', async () => {
     const guard = new UrlGuard(
       resolverOver({
         'rebind.example.com': [PUBLIC, { address: '127.0.0.1', family: 4 }],
       }),
     );
     await expect(guard.validate('https://rebind.example.com/')).rejects.toMatchObject({
-      reason: 'AMBIGUOUS_ADDRESS',
+      reason: 'PRIVATE_ADDRESS',
+    });
+  });
+
+  describe('a name with several public addresses (PaaS, CDN)', () => {
+    const v4 = Array.from({ length: 8 }, (_, i): DnsAnswer => ({
+      address: `93.184.216.${30 + i}`,
+      family: 4,
+    }));
+    const v6 = Array.from({ length: 8 }, (_, i): DnsAnswer => ({
+      address: `2606:2800:220:1::${i + 1}`,
+      family: 6,
+    }));
+
+    it('accepts 8 A + 8 AAAA public answers and offers every one of them, IPv4 first', async () => {
+      // AAAA first on purpose: the guard, not the resolver, decides the order.
+      const guard = new UrlGuard(resolverOver({ 'hooks.example': [...v6, ...v4] }));
+      const validated = await guard.validate('https://hooks.example/payments');
+      expect(validated.addresses).toHaveLength(16);
+      expect(validated.addresses.slice(0, 8).every((a) => a.family === 4)).toBe(true);
+      expect(validated.addresses.slice(8).every((a) => a.family === 6)).toBe(true);
+      expect(validated.address).toBe('93.184.216.30');
+      expect(validated.family).toBe(4);
+    });
+
+    it('collapses duplicate answers', async () => {
+      const guard = new UrlGuard(resolverOver({ 'hooks.example': [PUBLIC, PUBLIC, PUBLIC] }));
+      await expect(guard.validate('https://hooks.example/')).resolves.toMatchObject({
+        addresses: [PUBLIC],
+      });
+    });
+
+    it('refuses the whole name with 422 BLOCKED_ADDRESS when one answer is 10.0.0.1', async () => {
+      const guard = new UrlGuard(
+        resolverOver({ 'hooks.example': [...v4, { address: '10.0.0.1', family: 4 }, ...v6] }),
+      );
+      const error = await guard.validate('https://hooks.example/').then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(UrlRejectedError);
+      expect(error).toMatchObject({ reason: 'PRIVATE_ADDRESS', code: 'BLOCKED_ADDRESS', status: 422 });
+    });
+
+    it('names the metadata address even when it hides among public ones', async () => {
+      const guard = new UrlGuard(
+        resolverOver({ 'hooks.example': [...v4, { address: '169.254.169.254', family: 4 }] }),
+      );
+      await expect(guard.validate('https://hooks.example/')).rejects.toMatchObject({
+        reason: 'METADATA_ADDRESS',
+        code: 'BLOCKED_ADDRESS',
+      });
+    });
+
+    it('refuses an IPv6 unique-local answer hidden among public ones', async () => {
+      const guard = new UrlGuard(
+        resolverOver({ 'hooks.example': [...v4, ...v6, { address: 'fd00::1', family: 6 }] }),
+      );
+      await expect(guard.validate('https://hooks.example/')).rejects.toMatchObject({
+        reason: 'PRIVATE_ADDRESS',
+      });
+    });
+
+    it('applies the egress allow-list to every answer, not just the first', async () => {
+      const guard = new UrlGuard(
+        resolverOver({ 'hooks.example': [PUBLIC, { address: '8.8.8.8', family: 4 }] }),
+        true,
+        ['93.184.0.0/16'],
+      );
+      await expect(guard.validate('https://hooks.example/')).rejects.toMatchObject({
+        reason: 'NOT_ALLOWED_BY_POLICY',
+        code: 'BLOCKED_ADDRESS',
+      });
+    });
+  });
+
+  it('reports a malformed URL as a 400 validation error, not a blocked address', async () => {
+    const guard = new UrlGuard(resolverOver({}));
+    await expect(guard.validate('not a url')).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      status: 400,
     });
   });
 

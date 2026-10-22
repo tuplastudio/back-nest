@@ -1,0 +1,47 @@
+# BN-TASK-040 green — 2026-10-21T18:25:08Z
+# npm test -- src/tenancy/tenant-resolver.service.spec.ts src/auth/permissions.guard.spec.ts
+[95m[Nest] 20063  - [39m10/21/2026, 11:25:11 AM [95m  DEBUG[39m [38;5;3m[TenantResolverService] [39m[95mRejected tenant id during resolution: not a UUID.[39m
+[95m[Nest] 20063  - [39m10/21/2026, 11:25:11 AM [95m  DEBUG[39m [38;5;3m[TenantResolverService] [39m[95mRejected tenant id during resolution: not a UUID.[39m
+[95m[Nest] 20063  - [39m10/21/2026, 11:25:11 AM [95m  DEBUG[39m [38;5;3m[TenantResolverService] [39m[95mRejected tenant id during resolution: not a UUID.[39m
+[95m[Nest] 20063  - [39m10/21/2026, 11:25:11 AM [95m  DEBUG[39m [38;5;3m[TenantResolverService] [39m[95mRejected tenant id during resolution: not a UUID.[39m
+[95m[Nest] 20063  - [39m10/21/2026, 11:25:11 AM [95m  DEBUG[39m [38;5;3m[TenantResolverService] [39m[95mRejected tenant slug "NOT A SLUG" during resolution.[39m
+PASS src/tenancy/tenant-resolver.service.spec.ts
+  TenantResolverService.byId (regression: pre-validate and remember misses)
+    ✓ never queries the database for a value that cannot be a UUID (3 ms)
+    ✓ queries once for a well-formed id, then serves the result from cache (1 ms)
+    ✓ remembers a miss so an unknown id does not query on every request (1 ms)
+    ✓ accepts an uppercase UUID, which the column does
+  TenantResolverService.bySlug
+    ✓ still rejects a malformed slug before querying (1 ms)
+    ✓ remembers a miss for an unknown but well-formed slug
+  TenantResolverService cache TTL (BN-REQ-SEC-012: suspension visible in <= 5 s)
+    ✓ re-reads the registry once the default TTL (5 s) has passed (1 ms)
+    ✓ honours AUTHZ_CACHE_TTL_MS
+
+PASS src/auth/permissions.guard.spec.ts
+  PermissionCatalog
+    ✓ groups every permission under a declared module (4 ms)
+    ✓ rejects an unknown permission instead of silently granting a dead name (8 ms)
+    ✓ returns a map whose keys are exactly the declared modules (1 ms)
+  RequirePermissions decorators
+    ✓ refuse an empty permission list rather than removing authorization (1 ms)
+  PermissionsGuard
+    ✓ leaves routes that declare nothing to the coarse controls (1 ms)
+    ✓ refuses a principal holding none of the accepted permissions (1 ms)
+    ✓ admits a principal holding any one of the accepted permissions
+    ✓ requires every permission when all-of is declared (1 ms)
+    ✓ reads class-level declarations too
+    ✓ defers API-key principals to the scope guard
+    ✓ exposes the metadata keys it reads
+  AuthorizationService
+    ✓ unions the permissions of every role a principal holds
+    ✓ caches per principal and per tenant
+    ✓ re-reads roles within 5 s by default, so a revocation propagates (BN-REQ-SEC-012)
+    ✓ takes its TTL from AUTHZ_CACHE_TTL_MS when configured
+    ✓ returns no authority for an API key
+
+Test Suites: 2 passed, 2 total
+Tests:       24 passed, 24 total
+Snapshots:   0 total
+Time:        2.856 s, estimated 3 s
+Ran all test suites matching src/tenancy/tenant-resolver.service.spec.ts|src/auth/permissions.guard.spec.ts.

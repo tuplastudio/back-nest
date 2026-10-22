@@ -1,0 +1,26 @@
+$ jest scripts/ci/workflow-policy --verbose
+Test Suites: 1 passed, 1 total
+Tests:       14 passed, 14 total
+Snapshots:   0 total
+Time:        2.295 s, estimated 9 s
+Ran all test suites matching scripts/ci/workflow-policy.
+
+$ jest --coverage (full suite; coverageThreshold ./src/payments/ lines 80)
+Lines        : 64.36% ( 2610/4055 )
+Test Suites: 51 passed, 51 total
+Tests:       755 passed, 755 total
+exit=0 (threshold met)
+
+src/payments only:
+=============================== Coverage summary ===============================
+Statements   : 83.24% ( 1123/1349 )
+Branches     : 76.87% ( 688/895 )
+Functions    : 76.25% ( 228/299 )
+Lines        : 83.17% ( 1083/1302 )
+================================================================================
+
+Test Suites: 16 passed, 16 total
+Tests:       361 passed, 361 total
+Snapshots:   0 total
+Time:        16.634 s
+Ran all test suites matching src/payments.

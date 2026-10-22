@@ -1,0 +1,8 @@
+# BN-TASK-001 payments e2e (422 BLOCKED_ADDRESS contract) — 2026-10-21T18:37:30Z
+(node:31420) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Test Suites: 1 passed, 1 total
+Tests:       131 passed, 131 total
+Snapshots:   0 total
+Time:        25.609 s, estimated 27 s
+Ran all test suites matching test/payments.e2e-spec.ts.

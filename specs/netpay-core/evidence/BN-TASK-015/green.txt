@@ -1,0 +1,24 @@
+# BN-TASK-015 green — 2026-10-21T20:25:56Z
+
+# e2e: test/payments.e2e-spec.ts (attempts block; pre-existing charge tests still pass, see BN-TASK-010 count)
+# numPassedTests=140 numFailedTests=0 numTotalTests=140
+PASS  payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › leaves the order CHARGE_UNKNOWN on a charge without answer, and refuses new charges until verify resolves it
+PASS  payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › accepts another card after a decline: attempt 2 settles the order, and each event names its attempt
+PASS  payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › verifies an abandoned 3-D Secure attempt with Netpay, then accepts a new charge
+PASS  payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › answers 409 with the PAID order when the previous attempt was charged after all
+
+# integration: test/payment-recovery.int-spec.ts
+# numPassedTests=6 numFailedTests=0 numTotalTests=6
+PASS  payment recovery paths (BN-TASK-010/011/014/015, integration) › CHARGE_UNKNOWN and attempts (BN-TASK-014, BN-TASK-015) › leaves a charge that timed out CHARGE_UNKNOWN, refuses new charges, and resolves on verify
+PASS  payment recovery paths (BN-TASK-010/011/014/015, integration) › CHARGE_UNKNOWN and attempts (BN-TASK-014, BN-TASK-015) › accepts a new attempt once verify finds the unknown charge declined
+
+# unit: src/payments/payment-orders.service.spec.ts
+# numPassedTests=120 numFailedTests=0 numTotalTests=120
+PASS  PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TASK-015) › turns the order CHARGE_UNKNOWN with an UNKNOWN attempt when the charge gets no answer
+PASS  PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TASK-015) › refuses a new charge with 409 ORDER_STATE_CONFLICT while the order is CHARGE_UNKNOWN
+PASS  PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TASK-015) › accepts a new card on a FAILED order, as attempt 2 of the transaction it had
+PASS  PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TASK-015) › marks an abandoned 3-D Secure attempt and accepts the new charge
+PASS  PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TASK-015) › refuses with the PAID order when the previous attempt was charged after all
+PASS  PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TASK-015) › refuses while the previous attempt is still undecided at Netpay
+PASS  PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TASK-015) › announces a decline of a second attempt although the order was already FAILED
+PASS  PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TASK-015) › settles the attempt that verification concludes

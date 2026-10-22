@@ -1,0 +1,179 @@
+# BN-TASK-024 red (append-only PaymentConfig versions; new webhook token on environment/secret change) — 2026-10-21T20:47:35Z
+# npm test -- src/payments/payment-config.versions.spec.ts
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/payment-config.versions.spec.ts
+
+FAIL src/payments/payment-config.versions.spec.ts
+  ● versioned payment configuration (BN-TASK-024) › writes version 1, active, with MXN only and no return-origin allowlist
+
+    expect(received).toMatchObject(expected)
+
+    - Expected  - 5
+    + Received  + 9
+
+      Object {
+    -   "allowedCurrencies": Array [
+    -     "MXN",
+    -   ],
+    -   "allowedReturnOrigins": Array [],
+    -   "version": 1,
+    +   "createdAt": 2026-10-21T20:47:38.953Z,
+    +   "environment": "SANDBOX",
+    +   "id": "cfg-1",
+    +   "orderReferencePrefix": "11111111",
+    +   "publicKey": "pk_netpay_one",
+    +   "secretKeyCiphertext": "v1:RM7vnHavlilhiNPwNvu6DjImGlJie6aW9BEHhRYXfsnS24aT0TC43bk",
+    +   "tenantId": "11111111-1111-4111-8111-111111111111",
+    +   "updatedAt": 2026-10-21T20:47:38.953Z,
+    +   "webhookTokenHash": "<redacted>",
+      }
+
+      80 |     const f = fixture();
+      81 |     const { config, webhookToken } = await f.service.save(KEYS);
+    > 82 |     expect(config).toMatchObject({ version: 1, allowedCurrencies: ['MXN'], allowedReturnOrigins: [] });
+         |                    ^
+      83 |     expect(webhookToken).toEqual(expect.any(String));
+      84 |     expect(f.table).toHaveLength(1);
+      85 |     expect(f.table[0]).toMatchObject({ version: 1, active: true });
+
+      at Object.<anonymous> (src/payments/payment-config.versions.spec.ts:82:20)
+
+  ● versioned payment configuration (BN-TASK-024) › appends a new version on change and keeps the old one, inactive, for its orders
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 7
+    + Received  + 2
+
+      Array [
+        Array [
+    -     1,
+    -     false,
+    -     "SANDBOX",
+    -   ],
+    -   Array [
+    -     2,
+    -     true,
+    +     undefined,
+    +     undefined,
+          "LIVE",
+        ],
+      ]
+
+      91 |     const second = await f.service.save({ ...KEYS, environment: 'LIVE' });
+      92 |
+    > 93 |     expect(f.table.map((r) => [r.version, r.active, r['environment']])).toEqual([
+         |                                                                         ^
+      94 |       [1, false, 'SANDBOX'],
+      95 |       [2, true, 'LIVE'],
+      96 |     ]);
+
+      at Object.<anonymous> (src/payments/payment-config.versions.spec.ts:93:73)
+
+  ● versioned payment configuration (BN-TASK-024) › issues a new webhook token and clears webhookRegisteredAt when the environment changes (BN-REQ-CFG-003)
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: Any<String>
+    Received: null
+
+      122 |       const second = await f.service.save({ ...KEYS, ...change });
+      123 |
+    > 124 |       expect(second.webhookToken).toEqual(expect.any(String));
+          |                                   ^
+      125 |       expect(second.webhookToken).not.toBe(first.webhookToken);
+      126 |       expect(f.table[1]['webhookRegisteredAt']).toBeNull();
+      127 |       expect(f.table[1]['webhookTokenHash']).toBe(PaymentSecretBox.hashToken(second.webhookToken as string));
+
+      at src/payments/payment-config.versions.spec.ts:124:35
+
+  ● versioned payment configuration (BN-TASK-024) › issues a new webhook token and clears webhookRegisteredAt when the secret key changes (BN-REQ-CFG-003)
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: Any<String>
+    Received: null
+
+      122 |       const second = await f.service.save({ ...KEYS, ...change });
+      123 |
+    > 124 |       expect(second.webhookToken).toEqual(expect.any(String));
+          |                                   ^
+      125 |       expect(second.webhookToken).not.toBe(first.webhookToken);
+      126 |       expect(f.table[1]['webhookRegisteredAt']).toBeNull();
+      127 |       expect(f.table[1]['webhookTokenHash']).toBe(PaymentSecretBox.hashToken(second.webhookToken as string));
+
+      at src/payments/payment-config.versions.spec.ts:124:35
+
+  ● versioned payment configuration (BN-TASK-024) › keeps the webhook token and its registration when only the public key changes
+
+    expect(received).toMatchObject(expected)
+
+    Matcher error: received value must be a non-null object
+
+    Received has value: undefined
+
+      146 |
+      147 |     expect(second.webhookToken).toBeNull();
+    > 148 |     expect(f.table[1]).toMatchObject({
+          |                        ^
+      149 |       version: 2,
+      150 |       webhookTokenHash: f.table[0]['webhookTokenHash'],
+      151 |       webhookRegisteredAt: registeredAt,
+
+      at Object.<anonymous> (src/payments/payment-config.versions.spec.ts:148:24)
+
+  ● allowlists in the configuration (BN-TASK-021/022) › stores return origins normalised, and currencies upper-case
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: ["https://shop.example.com", "https://pay.example.com:8443"]
+    Received: undefined
+
+      162 |       allowedCurrencies: ['MXN', 'USD'],
+      163 |     });
+    > 164 |     expect(config.allowedReturnOrigins).toEqual(['https://shop.example.com', 'https://pay.example.com:8443']);
+          |                                         ^
+      165 |     expect(config.allowedCurrencies).toEqual(['MXN', 'USD']);
+      166 |   });
+      167 |
+
+      at Object.<anonymous> (src/payments/payment-config.versions.spec.ts:164:41)
+
+  ● allowlists in the configuration (BN-TASK-021/022) › refuses an origin that is not https or carries a path
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"config": {"createdAt": 2026-10-21T20:47:38.968Z, "environment": "SANDBOX", "id": "cfg-1", "orderReferencePrefix": "11111111", "publicKey": "pk_netpay_one", "secretKeyCiphertext": "v1:nl3ofX7T61QJv1WGDIrbTeTsP0gntoHrE3Uq75Z3_DqQM7rsG7XMWCc", "tenantId": "11111111-1111-4111-8111-111111111111", "updatedAt": 2026-10-21T20:47:38.968Z, "webhookTokenHash": "<redacted>"}, "webhookToken": "<redacted>"}
+
+      169 |     for (const origin of ['http://shop.example.com', 'https://shop.example.com/return', 'shop.example.com']) {
+      170 |       const f = fixture();
+    > 171 |       await expect(f.service.save({ ...KEYS, allowedReturnOrigins: [origin] })).rejects.toMatchObject({
+          |             ^
+      172 |         code: 'VALIDATION_ERROR',
+      173 |       });
+      174 |     }
+
+      at expect (node_modules/expect/build/index.js:2116:15)
+      at Object.<anonymous> (src/payments/payment-config.versions.spec.ts:171:13)
+
+  ● allowlists in the configuration (BN-TASK-021/022) › changes the allowlists alone as a new version that keeps the keys
+
+    TypeError: f.service.updateSettings is not a function
+
+      178 |     const f = fixture();
+      179 |     await f.service.save(KEYS);
+    > 180 |     const { config } = await f.service.updateSettings({ allowedReturnOrigins: ['https://shop.example.com'] });
+          |                                        ^
+      181 |     expect(config).toMatchObject({ version: 2, allowedReturnOrigins: ['https://shop.example.com'] });
+      182 |     expect(f.table[1]['secretKeyCiphertext']).toBe(f.table[0]['secretKeyCiphertext']);
+      183 |     expect(f.table[1]['webhookTokenHash']).toBe(f.table[0]['webhookTokenHash']);
+
+      at Object.<anonymous> (src/payments/payment-config.versions.spec.ts:180:40)
+
+Test Suites: 1 failed, 1 total
+Tests:       8 failed, 1 passed, 9 total
+Snapshots:   0 total
+Time:        2.645 s
+Ran all test suites matching src/payments/payment-config.versions.spec.ts.

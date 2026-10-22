@@ -1,0 +1,16 @@
+# BN-TASK-001 green — 2026-10-21T18:17:44Z
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/outbound/url-guard.spec.ts src/payments/outbound/outbound-dispatcher.service.spec.ts src/payments/http.transport.spec.ts --verbose
+
+(node:10406) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:10405) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:10404) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Test Suites: 3 passed, 3 total
+Tests:       66 passed, 66 total
+Snapshots:   0 total
+Time:        4.072 s
+Ran all test suites matching src/payments/outbound/url-guard.spec.ts|src/payments/outbound/outbound-dispatcher.service.spec.ts|src/payments/http.transport.spec.ts.

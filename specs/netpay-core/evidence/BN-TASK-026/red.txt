@@ -1,0 +1,59 @@
+# BN-TASK-026 red (webhook drift vs PUBLIC_BASE_URL, cached summary in /health/ready, netpay_webhook_drift event) — 2026-10-21T20:55:52Z
+# npm test -- src/payments/webhook-drift.service.spec.ts src/health/health.service.spec.ts -t "drift|Drift"
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/webhook-drift.service.spec.ts src/health/health.service.spec.ts -t drift|Drift
+
+
+ReferenceError: You are trying to `require` a file after the Jest environment has been torn down. From src/payments/webhook-drift.service.spec.ts.
+
+ReferenceError: You are trying to `import` a file after the Jest environment has been torn down. From src/payments/webhook-drift.service.spec.ts.
+FAIL src/payments/webhook-drift.service.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './webhook-drift.service' from 'src/payments/webhook-drift.service.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+FAIL src/health/health.service.spec.ts
+  ● netpayWebhookDrift in /health/ready (BN-TASK-026) › adds the cached drift summary to the verified report, never to the public one
+
+    expect(received).toMatchObject(expected)
+
+    Matcher error: received value must be a non-null object
+
+    Received has value: undefined
+
+      248 |     const report = await service.readiness();
+      249 |
+    > 250 |     expect(report.netpayWebhookDrift).toMatchObject({ status: 'drift', tenantsDrifted: 1 });
+          |                                       ^
+      251 |     // Drift is reported and alerted on, but it does not take the instance out of rotation.
+      252 |     expect(report.status).toBe('ok');
+      253 |     expect(readinessFor(report, false)).not.toHaveProperty('netpayWebhookDrift');
+
+      at Object.<anonymous> (src/health/health.service.spec.ts:250:39)
+
+  ● netpayWebhookDrift in /health/ready (BN-TASK-026) › reports the drift as unknown when the summary cannot be read
+
+    expect(received).toMatchObject(expected)
+
+    Matcher error: received value must be a non-null object
+
+    Received has value: undefined
+
+      258 |       webhookDrift: { summary: () => Promise.reject(new Error('db down')) },
+      259 |     });
+    > 260 |     expect((await service.readiness()).netpayWebhookDrift).toMatchObject({ status: 'unknown' });
+          |                                                            ^
+      261 |   });
+      262 | });
+      263 |
+
+      at Object.<anonymous> (src/health/health.service.spec.ts:260:60)
+
+Test Suites: 2 failed, 2 total
+Tests:       2 failed, 19 skipped, 21 total
+Snapshots:   0 total
+Time:        2.707 s
+Ran all test suites matching src/payments/webhook-drift.service.spec.ts|src/health/health.service.spec.ts with tests matching "drift|Drift".

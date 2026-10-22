@@ -1,0 +1,90 @@
+# BN-TASK-006 red — 2026-10-21T18:23:45Z
+# Run against the pre-change dispatcher behaviour (one page of tenants per tick, no rotation, sequential deliveries), reconstructed in place for this run and then restored.
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/outbound/outbound-dispatcher.fairness.spec.ts --testTimeout=10000
+
+(node:17473) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/outbound/outbound-dispatcher.fairness.spec.ts (12.777 s)
+  ● OutboundDispatcher fairness (BN-TASK-006) › drains all 300 tenants in one cycle while an 8 s endpoint is still answering
+
+    expect(received).toHaveLength(expected)
+
+    Expected length: 299
+    Received length: 0
+    Received array:  []
+
+      230 |     // its requests open.
+      231 |     const delivered = h.tenants.slice(1).filter((t) => t.rows.every((r) => r.status === 'DELIVERED'));
+    > 232 |     expect(delivered).toHaveLength(299);
+          |                       ^
+      233 |     expect(h.stats().slowWaiting).toBeGreaterThan(0);
+      234 |
+      235 |     for (let i = 0; i < 10; i += 1) {
+
+      at Object.<anonymous> (src/payments/outbound/outbound-dispatcher.fairness.spec.ts:232:23)
+
+  ● OutboundDispatcher fairness (BN-TASK-006) › enumerates tenants in pages instead of stopping at the first page
+
+    expect(received).resolves.toBe(expected) // Object.is equality
+
+    Expected: 120
+    Received: 50
+
+      247 |     await runUntilIdle();
+      248 |     h.releaseSlow();
+    > 249 |     await expect(cycle).resolves.toBe(120);
+          |                                  ^
+      250 |     expect(h.pageSizes).toEqual([50, 50, 50]);
+      251 |   });
+      252 |
+
+      at Object.toBe (node_modules/expect/build/index.js:2140:20)
+      at Object.<anonymous> (src/payments/outbound/outbound-dispatcher.fairness.spec.ts:249:34)
+
+  ● OutboundDispatcher fairness (BN-TASK-006) › never has more than 8 deliveries in flight, nor more than a quarter for one endpoint
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 1
+    Received:   1
+
+      260 |     await cycle;
+      261 |     expect(h.stats().maxInFlight).toBeLessThanOrEqual(8);
+    > 262 |     expect(h.stats().maxInFlight).toBeGreaterThan(1);
+          |                                   ^
+      263 |     expect(h.stats().maxSlowInFlight).toBeLessThanOrEqual(2);
+      264 |   });
+      265 |
+
+      at Object.<anonymous> (src/payments/outbound/outbound-dispatcher.fairness.spec.ts:262:35)
+
+  ● OutboundDispatcher fairness (BN-TASK-006) › hands back the slow backlog when the cycle runs out of time, instead of holding everyone up
+
+    thrown: "Exceeded timeout of 10000 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
+
+      at _getError (node_modules/jest-circus/build/jestAdapterInit.js:1985:12)
+          at Array.map (<anonymous>)
+
+    Cause:
+        thrown: "Exceeded timeout of 10000 ms for a test.
+        Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
+
+          297 |   });
+          298 |
+        > 299 |   it('hands back the slow backlog when the cycle runs out of time, instead of holding everyone up', async () => {
+              |   ^
+          300 |     const h = harness(3, 1, 20, { concurrency: 4, timeoutMs: 8000 });
+          301 |     const cycle = h.dispatcher.drainOnce();
+          302 |     await runUntilIdle();
+
+          at src/payments/outbound/outbound-dispatcher.fairness.spec.ts:299:3
+          at src/payments/outbound/outbound-dispatcher.fairness.spec.ts:223:1
+
+Test Suites: 1 failed, 1 total
+Tests:       4 failed, 2 passed, 6 total
+Snapshots:   0 total
+Time:        12.902 s
+Ran all test suites matching src/payments/outbound/outbound-dispatcher.fairness.spec.ts.

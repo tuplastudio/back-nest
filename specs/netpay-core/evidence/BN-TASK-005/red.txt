@@ -1,0 +1,19 @@
+# BN-TASK-002/005 red — 2026-10-21T18:19:33Z
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/outbound/outbound-dispatcher.service.spec.ts
+
+FAIL src/payments/outbound/outbound-dispatcher.service.spec.ts
+  ● Test suite failed to run
+
+    SyntaxError: The requested module './outbound-dispatcher.service' does not provide an export named 'retryDelayMs'
+
+      at EsmLoader.linkAndEvaluateModule (node_modules/jest-runtime/build/index.js:1989:7)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        10.003 s
+Ran all test suites matching src/payments/outbound/outbound-dispatcher.service.spec.ts.
+(node:12858) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

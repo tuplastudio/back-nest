@@ -1,0 +1,16 @@
+# BN-TASK-009 red (npm run openapi:check against the committed, stale docs/openapi.json) — 2026-10-21T19:13:08Z
+# bash -c npm run openapi:check; echo "exit code: $?"
+
+> netpay-api@1.0.0 openapi:check
+> npm run build && API_BASE_DOMAIN=api.example.com node dist/docs/generate-openapi.js --check
+
+
+> netpay-api@1.0.0 prebuild
+> rimraf dist
+
+
+> netpay-api@1.0.0 build
+> tsc -p tsconfig.build.json
+
+docs/openapi.json is out of date with the code. Regenerate it with `npm run docs:openapi` and commit it.
+exit code: 1

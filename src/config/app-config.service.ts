@@ -56,6 +56,40 @@ export class AppConfig {
     return this.config.getOrThrow<number>('app.trustProxyHops');
   }
 
+  /**
+   * This deployment's public origin (`PUBLIC_BASE_URL`), or `null` when unset. The
+   * inbound webhook URL Netpay should call is built from it (BN-REQ-CFG-004).
+   */
+  get publicBaseUrl(): string | null {
+    return this.config.get<string | null>('app.publicBaseUrl') ?? null;
+  }
+
+  /** Reconciliation worker tuning (`RECONCILE_*`, BN-REQ-REC-001…004). */
+  get reconciliation(): {
+    enabled: boolean;
+    intervalMs: number;
+    minAgeMs: number;
+    batchSize: number;
+    threeDsTimeoutMs: number;
+    chargeUnknownGraceMs: number;
+    providerRatePerSecond: number;
+  } {
+    return this.config.getOrThrow('reconciliation');
+  }
+
+  /**
+   * Who may call `POST /internal/tick`: the Cloud Scheduler service account and
+   * the audience its OIDC token must carry. `null` fields refuse every call.
+   */
+  get internalTick(): { serviceAccountEmail: string | null; audience: string | null } {
+    return this.config.getOrThrow('internalTick');
+  }
+
+  /** GCP project owning request traces, when configured (`GCP_PROJECT_ID`). */
+  get gcpProjectId(): string | undefined {
+    return this.config.get<string>('app.gcpProjectId');
+  }
+
   /** Explicitly allowed CORS origins. */
   get corsOrigins(): string[] {
     return this.config.getOrThrow<string[]>('app.corsOrigins');
@@ -190,6 +224,34 @@ export class AppConfig {
     return this.durationToMs(this.config.getOrThrow<string>('auth.throttleTtl'));
   }
 
+  /**
+   * Redis URL for the shared throttler storage, or `null` for per-instance
+   * memory (BN-REQ-SEC-004).
+   */
+  get throttlerRedisUrl(): string | null {
+    return this.config.get<string | null>('throttle.redisUrl') ?? null;
+  }
+
+  /** Whether platform administrators must use TOTP (BN-REQ-SEC-006). */
+  get mfaRequiredForAdmins(): boolean {
+    return this.config.get<boolean>('auth.mfaRequiredForAdmins') ?? false;
+  }
+
+  /** TTL of the tenant status and role caches, at most 5 s (BN-REQ-SEC-012). */
+  get authzCacheTtlMs(): number {
+    return this.config.get<number>('auth.authzCacheTtlMs') ?? 5_000;
+  }
+
+  /** `PII_KEYS_JSON`, or `null` for a one-key ring of `PII_ENCRYPTION_KEY`. */
+  get piiKeysJson(): string | null {
+    return this.config.get<string | null>('auth.piiKeysJson') ?? null;
+  }
+
+  /** `NETPAY_KEYS_JSON`, or `null` for a one-key ring of `NETPAY_ENCRYPTION_KEY`. */
+  get paymentsKeysJson(): string | null {
+    return this.config.get<string | null>('payments.keysJson') ?? null;
+  }
+
   /** Global per-IP request budget. */
   get throttleLimit(): number {
     return this.config.getOrThrow<number>('throttle.limit');
@@ -252,9 +314,9 @@ export class AppConfig {
     return this.config.getOrThrow<boolean>('pii.logRedaction');
   }
 
-  /** Nest logger level. */
-  get logLevel(): string {
-    return this.config.getOrThrow<string>('pii.logLevel');
+  /** Nest logger level (`LOG_LEVEL`). */
+  get logLevel(): 'error' | 'warn' | 'log' | 'debug' | 'verbose' {
+    return this.config.getOrThrow<'error' | 'warn' | 'log' | 'debug' | 'verbose'>('pii.logLevel');
   }
 
   // ---------------------------------------------------------------------------

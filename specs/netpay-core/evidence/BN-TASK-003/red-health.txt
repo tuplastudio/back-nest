@@ -1,0 +1,35 @@
+# BN-TASK-003/037 health red — 2026-10-21T18:25:19Z
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/health
+
+
+ReferenceError: You are trying to `import` a file after the Jest environment has been torn down. From src/health/health.controller.spec.ts.
+FAIL src/health/health.controller.spec.ts
+  ● Test suite failed to run
+
+    Must use import to load ES Module: /Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/node_modules/@nestjs/common/index.js
+
+    The file contains ESM syntax (import/export) that could not be executed as CommonJS. Either:
+      - Configure a transform (e.g. babel-jest) that compiles this file to CommonJS (see https://jestjs.io/docs/code-transformation)
+      - If the file is in "node_modules", allow it to be transformed by adjusting "transformIgnorePatterns" (see https://jestjs.io/docs/configuration#transformignorepatterns-arraystring)
+      - Use Node v24.9+ where Jest supports require(esm) natively (see https://jestjs.io/docs/ecmascript-modules#require-of-esm)
+
+      at createRequireEsmError (node_modules/jest-runtime/build/index.js:452:17)
+      at Object.<anonymous> (node_modules/@nestjs/throttler/src/throttler.decorator.ts:1:1)
+      at Object.<anonymous> (node_modules/@nestjs/throttler/src/index.ts:4:1)
+
+FAIL src/health/health.service.spec.ts
+  ● Test suite failed to run
+
+    SyntaxError: The requested module './health.service' does not provide an export named 'hasVerifiedPrincipal'
+
+      at EsmLoader.linkAndEvaluateModule (node_modules/jest-runtime/build/index.js:1989:7)
+
+Test Suites: 2 failed, 2 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        2.379 s
+Ran all test suites matching src/health.
+(node:20209) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

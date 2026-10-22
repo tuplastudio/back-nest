@@ -1,12 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHash,
-  createHmac,
-  randomBytes,
-  timingSafeEqual,
-} from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { Keyring } from './keyring';
 
 /**
  * Raised when a cryptographic operation cannot be completed.
@@ -60,8 +54,10 @@ export interface EncryptOptions {
  *
  * Storage layout
  * --------------
- * The stored value is base64url of `nonce || authTag || ciphertext`, which is
- * safe in a single `TEXT` column:
+ * The stored value is `v<n>:` followed by base64url of
+ * `nonce || authTag || ciphertext`, where `n` is the {@link Keyring} version
+ * that wrote it (BN-REQ-SEC-007). Values written before the keyring carry no
+ * prefix and are read with the original `PII_ENCRYPTION_KEY`:
  *
  * ```text
  * +--------+-----------+------------+
@@ -72,35 +68,31 @@ export interface EncryptOptions {
  */
 @Injectable()
 export class PiiCryptoService {
-  private static readonly ALGORITHM = 'aes-256-gcm';
-  private static readonly NONCE_BYTES = 12;
-  private static readonly AUTH_TAG_BYTES = 16;
-  private static readonly KEY_BYTES = 32;
-
   /** Domain-separation labels. Changing one invalidates existing values. */
   private static readonly INFO_BLIND_INDEX = 'pii:blind-index:v1';
   private static readonly INFO_IP = 'pii:ip:v1';
 
-  private readonly encryptionKey: Buffer;
+  /** Versioned data keys. */
+  readonly keyring: Keyring;
   private readonly blindIndexKey: Buffer;
   private readonly ipHashKey: Buffer;
 
   /**
    * @param rootSecret Secret from which purpose-specific keys are derived.
-   * @param encodingKey Base64 encoded 32-byte key for AES-256-GCM.
-   * @throws {PiiCryptoError} When `encodingKey` is not exactly 32 bytes.
+   * @param encryption Base64 encoded 32-byte key (a one-key ring, backward
+   * compatible) or a versioned {@link Keyring} built from `PII_KEYS_JSON`.
+   * @throws {PiiCryptoError} When the key is not exactly 32 bytes.
    */
-  constructor(rootSecret: string, encodingKey: string) {
+  constructor(rootSecret: string, encryption: string | Keyring) {
     this.blindIndexKey = this.deriveKey(rootSecret, PiiCryptoService.INFO_BLIND_INDEX);
     this.ipHashKey = this.deriveKey(rootSecret, PiiCryptoService.INFO_IP);
-
-    const decoded = Buffer.from(encodingKey, 'base64');
-    if (decoded.length !== PiiCryptoService.KEY_BYTES) {
+    try {
+      this.keyring = typeof encryption === 'string' ? Keyring.single(encryption) : encryption;
+    } catch (error) {
       throw new PiiCryptoError(
-        `PII_ENCRYPTION_KEY must decode to ${PiiCryptoService.KEY_BYTES} bytes, received ${decoded.length}.`,
+        `PII_ENCRYPTION_KEY is invalid: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    this.encryptionKey = decoded;
   }
 
   /**
@@ -132,7 +124,7 @@ export class PiiCryptoService {
    *
    * @param plaintext Value to protect.
    * @param options Optional additional authenticated data.
-   * @returns Base64url encoded `nonce || authTag || ciphertext`.
+   * @returns `v<n>:` + base64url encoded `nonce || authTag || ciphertext`.
    * @throws {PiiCryptoError} When the value is empty or not a string.
    */
   encrypt(plaintext: string, options: EncryptOptions = {}): string {
@@ -140,19 +132,7 @@ export class PiiCryptoService {
       throw new PiiCryptoError('Cannot encrypt an empty or non-string value.');
     }
 
-    const nonce = randomBytes(PiiCryptoService.NONCE_BYTES);
-    const cipher = createCipheriv(PiiCryptoService.ALGORITHM, this.encryptionKey, nonce, {
-      authTagLength: PiiCryptoService.AUTH_TAG_BYTES,
-    });
-
-    if (options.aad) {
-      cipher.setAAD(Buffer.from(options.aad, 'utf8'));
-    }
-
-    const body = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-    const tag = cipher.getAuthTag();
-
-    return Buffer.concat([nonce, tag, body]).toString('base64url');
+    return this.keyring.encrypt(plaintext, options.aad);
   }
 
   /**
@@ -169,27 +149,8 @@ export class PiiCryptoService {
       throw new PiiCryptoError('Cannot decrypt an empty or non-string payload.');
     }
 
-    const raw = Buffer.from(payload, 'base64url');
-    const headerLength = PiiCryptoService.NONCE_BYTES + PiiCryptoService.AUTH_TAG_BYTES;
-    if (raw.length < headerLength) {
-      throw new PiiCryptoError('Ciphertext is too short to be valid.');
-    }
-
-    const nonce = raw.subarray(0, PiiCryptoService.NONCE_BYTES);
-    const tag = raw.subarray(PiiCryptoService.NONCE_BYTES, headerLength);
-    const body = raw.subarray(headerLength);
-
-    const decipher = createDecipheriv(PiiCryptoService.ALGORITHM, this.encryptionKey, nonce, {
-      authTagLength: PiiCryptoService.AUTH_TAG_BYTES,
-    });
-    decipher.setAuthTag(tag);
-
-    if (options.aad) {
-      decipher.setAAD(Buffer.from(options.aad, 'utf8'));
-    }
-
     try {
-      return Buffer.concat([decipher.update(body), decipher.final()]).toString('utf8');
+      return this.keyring.decrypt(payload, options.aad);
     } catch {
       // Never surface the crypto reason: it would leak whether the payload
       // existed or which key was used.

@@ -28,6 +28,11 @@ export const GRANTABLE_SCOPES = [
   'payments:read',
   'payments:write',
   'payments:refund',
+  // Outbound webhook endpoints (BN-REQ-SEC-001). Every `/t/webhooks*` route
+  // declares one of these, so a key without them is refused there. Secret
+  // rotation and replay are mutations and require `webhooks:write`.
+  'webhooks:read',
+  'webhooks:write',
   'admin:*',
 ] as const;
 

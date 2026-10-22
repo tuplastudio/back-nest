@@ -1,0 +1,1 @@
+Estado previo (reconstruido): no existía scripts/gcp/monitoring/; DEPLOY-GCP.md §14.3 solo tenía un comando suelto de uptime check sobre /health/ready, sin canal de notificación ni SLO.

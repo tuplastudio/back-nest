@@ -1,0 +1,17 @@
+# BN-TASK-012 green — 2026-10-21T18:18:37Z
+# jest src/payments/netpay-webhook.spec.ts src/payments/netpay-webhook.cash.spec.ts -t "dedupe|Cash reference|cash"
+[Nest] 11584  - 10/21/2026, 11:18:39 AM    WARN [NetpayWebhookService] Ignored an unconfirmed cash reference on a oxxopay.new notification.
+[Nest] 11583  - 10/21/2026, 11:18:39 AM   ERROR [NetpayWebhookService] Verification failed for a sessionLink.paid notification.
+(node:11584) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[Nest] 11583  - 10/21/2026, 11:18:39 AM    WARN [NetpayWebhookService] Ignored an unconfirmed cash reference on a oxxopay.new notification.
+[Nest] 11583  - 10/21/2026, 11:18:39 AM    WARN [NetpayWebhookService] Ignored an unconfirmed cash reference on a cep.created notification.
+[Nest] 11583  - 10/21/2026, 11:18:39 AM    WARN [NetpayWebhookService] Ignored an unconfirmed cash reference on a cep.created notification.
+(node:11583) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Test Suites: 2 passed, 2 total
+Tests:       14 passed, 14 total
+Snapshots:   0 total
+Time:        1.854 s, estimated 11 s
+Ran all test suites matching src/payments/netpay-webhook.spec.ts|src/payments/netpay-webhook.cash.spec.ts with tests matching "dedupe|Cash reference|cash".

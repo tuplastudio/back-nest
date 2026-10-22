@@ -1,0 +1,40 @@
+{
+  "description": "Outbound payment events. Each body is signed (X-MTBPay-Signature) and delivered at least once; deduplicate on eventId and order by sequence per order.",
+  "events": [
+    {
+      "eventType": "payment.paid",
+      "description": "The order was verified as paid against Netpay (PENDING* or CHARGE_UNKNOWN → PAID).",
+      "schema": "payment.paid.schema.json"
+    },
+    {
+      "eventType": "payment.failed",
+      "description": "Netpay reported the charge as declined or failed (→ FAILED); emitted again for each declined attempt. data.netpayTransactionId is the attempt's transaction.",
+      "schema": "payment.failed.schema.json"
+    },
+    {
+      "eventType": "payment.mismatch",
+      "description": "Netpay reported an amount different from the order; the order is not paid (→ AMOUNT_MISMATCH).",
+      "schema": "payment.mismatch.schema.json"
+    },
+    {
+      "eventType": "payment.refunded",
+      "description": "Money went back to the buyer: emitted for every refund, partial (→ PARTIALLY_REFUNDED) or total (→ REFUNDED).",
+      "schema": "payment.refunded.schema.json"
+    },
+    {
+      "eventType": "payment.cancelled",
+      "description": "The merchant cancelled an unpaid order (PENDING, PENDING_VERIFICATION or FAILED → CANCELLED). Netpay cannot expire a hosted session or a cash reference, so a later payment is still possible: it arrives as payment.paid_after_cancel.",
+      "schema": "payment.cancelled.schema.json"
+    },
+    {
+      "eventType": "payment.expired",
+      "description": "Reconciliation found the order never paid in time: 3-D Secure not completed within 30 min, or a cash reference past its expiry (→ EXPIRED).",
+      "schema": "payment.expired.schema.json"
+    },
+    {
+      "eventType": "payment.paid_after_cancel",
+      "description": "Netpay reported a payment for an order already CANCELLED or EXPIRED. The status does not change (data.status is still CANCELLED or EXPIRED); data.netpayTransactionId is the payment. Refund it.",
+      "schema": "payment.paid_after_cancel.schema.json"
+    }
+  ]
+}

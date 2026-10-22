@@ -1,0 +1,66 @@
+Test Suites: 1 passed, 1 total
+Tests:       4 passed, 4 total
+Snapshots:   0 total
+Time:        1.439 s, estimated 6 s
+Ran all test suites matching src/common/logging/payment-log-events.
+
+$ PROJECT_ID=demo-proj scripts/gcp/monitoring/log-metrics.sh   # dry-run
+[dry-run] gcloud logging metrics create payment_status_change --project=demo-proj --config-from-file=/var/folders/jx/q_24s9793_sc5c4710sk65ph0000gn/T/tmp.t3mKjGB2uI/payment_status_change.yaml
+    description: Cambios de estado de órdenes de pago (payment-log-events.ts).
+    filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="netpay-api" AND jsonPayload.event="payment_status_change"'
+    metricDescriptor:
+      metricKind: DELTA
+      valueType: INT64
+      unit: '1'
+      labels:
+        - key: to
+          valueType: STRING
+        - key: from
+          valueType: STRING
+    labelExtractors:
+      to: EXTRACT(jsonPayload.to)
+      from: EXTRACT(jsonPayload.from)
+[dry-run] gcloud logging metrics create netpay_latency_ms --project=demo-proj --config-from-file=/var/folders/jx/q_24s9793_sc5c4710sk65ph0000gn/T/tmp.t3mKjGB2uI/netpay_latency_ms.yaml
+    description: Latencia de cada llamada HTTP a NetPay, en ms (evento netpay_request).
+    filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="netpay-api" AND jsonPayload.event="netpay_request"'
+    metricDescriptor:
+      metricKind: DELTA
+      valueType: DISTRIBUTION
+      unit: ms
+      labels:
+        - key: operation
+          valueType: STRING
+        - key: outcome
+          valueType: STRING
+    valueExtractor: EXTRACT(jsonPayload.latencyMs)
+    labelExtractors:
+      operation: EXTRACT(jsonPayload.operation)
+      outcome: EXTRACT(jsonPayload.outcome)
+    bucketOptions:
+      exponentialBuckets:
+        numFiniteBuckets: 32
+        growthFactor: 1.4
+        scale: 10
+[dry-run] gcloud logging metrics create outbound_delivery_result --project=demo-proj --config-from-file=/var/folders/jx/q_24s9793_sc5c4710sk65ph0000gn/T/tmp.t3mKjGB2uI/outbound_delivery_result.yaml
+    description: Resultado de cada intento de entrega de webhook saliente.
+    filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="netpay-api" AND jsonPayload.event="outbound_delivery_result"'
+    metricDescriptor:
+      metricKind: DELTA
+      valueType: INT64
+      unit: '1'
+      labels:
+        - key: result
+          valueType: STRING
+    labelExtractors:
+      result: EXTRACT(jsonPayload.result)
+[dry-run] gcloud logging metrics create charge_latency_ms --project=demo-proj --config-from-file=/var/folders/jx/q_24s9793_sc5c4710sk65ph0000gn/T/tmp.t3mKjGB2uI/charge_latency_ms.yaml
+    description: Latencia de POST /t/payments/orders/:id/charge (log de acceso), en ms.
+    filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="netpay-api" AND jsonPayload.type="access" AND jsonPayload.method="POST" AND jsonPayload.route=~"/orders/:id/charge$"'
+    metricDescriptor:
+      metricKind: DELTA
+      valueType: DISTRIBUTION
+      unit: ms
+    valueExtractor: EXTRACT(jsonPayload.latencyMs)
+    bucketOptions:
+      explicitBuckets:
+        bounds: [100, 250, 500, 750, 1000, 1500, 2000, 3000, 5000, 10000, 20000]

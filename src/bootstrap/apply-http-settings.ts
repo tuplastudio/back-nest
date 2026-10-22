@@ -10,6 +10,20 @@ import { type PiiRedactionService } from '../pii/pii-redaction.service';
 interface ExpressLike {
   /** Sets an Express application setting, e.g. `'trust proxy'`. */
   set(key: string, value: unknown): unknown;
+  /** Turns an Express setting off, e.g. `'x-powered-by'`. */
+  disable(key: string): unknown;
+}
+
+/** The request fields the preflight gate reads. */
+interface PreflightRequest {
+  method: string;
+  headers: Record<string, string | string[] | undefined>;
+  id?: string;
+}
+
+/** The response surface the preflight gate writes. */
+interface PreflightResponse {
+  status(code: number): { json(body: unknown): unknown };
 }
 
 /**
@@ -23,6 +37,17 @@ export type CorsOriginValidator = (
   origin: string | undefined,
   callback: (err: Error | null, allow?: boolean) => void,
 ) => void;
+
+/**
+ * Exact-match origin check against the configured allow-list.
+ *
+ * @param origin Request `Origin` header.
+ * @param allowed `CORS_ORIGINS`.
+ * @returns `true` when the origin may call the API from a browser.
+ */
+export function isOriginAllowed(origin: string, allowed: readonly string[]): boolean {
+  return allowed.includes('*') || allowed.includes(origin);
+}
 
 /**
  * Applies the cross-cutting HTTP configuration to a Nest application.
@@ -48,6 +73,9 @@ export function applyHttpSettings(
   // letting an `any` leak into the rest of the file.
   const express = app.getHttpAdapter().getInstance() as unknown as ExpressLike;
   express.set('trust proxy', config.trustProxyHops);
+  // No `X-Powered-By` at all (BN-REQ-SEC-011): Express adds `X-Powered-By:
+  // Express` by default, and advertising the stack only helps fingerprinting.
+  express.disable('x-powered-by');
 
   app.use(
     helmet({
@@ -83,13 +111,35 @@ export function applyHttpSettings(
       callback(null, true);
       return;
     }
-    if (config.corsOrigins.includes('*') || config.corsOrigins.includes(origin)) {
+    if (isOriginAllowed(origin, config.corsOrigins)) {
       callback(null, true);
       return;
     }
     logger.warn(`Blocked CORS request from disallowed origin "${origin}".`);
     callback(null, false);
   };
+
+  // A preflight from an origin outside CORS_ORIGINS is answered 403 here
+  // (BN-REQ-SEC-010). Without this the `cors` middleware merely omits its
+  // headers and passes the OPTIONS request on to a router that has no OPTIONS
+  // routes, so the browser saw a misleading 404. Staging lists its real
+  // front-end origins (e.g. https://vondi.tupla.dev) in CORS_ORIGINS.
+  app.use((request: PreflightRequest, response: PreflightResponse, next: () => void) => {
+    const origin = request.headers['origin'];
+    const isPreflight =
+      request.method === 'OPTIONS' && request.headers['access-control-request-method'] !== undefined;
+    if (isPreflight && typeof origin === 'string' && !isOriginAllowed(origin, config.corsOrigins)) {
+      logger.warn(`Refused CORS preflight from disallowed origin "${origin}".`);
+      response.status(403).json({
+        error: 'CORS_ORIGIN_NOT_ALLOWED',
+        message: 'This origin is not allowed to call the API from a browser.',
+        requestId: request.id ?? 'unknown',
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+    next();
+  });
 
   app.enableCors({
     origin: originValidator,

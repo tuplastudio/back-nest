@@ -1,0 +1,191 @@
+# BN-TASK-009 red (no docs/events schemas yet) — 2026-10-21T19:10:41Z
+# npm test -- src/payments/event-contract.spec.ts
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/event-contract.spec.ts
+
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+(node:45180) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/event-contract.spec.ts
+  ● event schemas in docs/events (BN-TASK-009) › publishes one schema per event of the catalog, and nothing else
+
+    ENOENT: no such file or directory, scandir '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events'
+
+      144 | describe('event schemas in docs/events (BN-TASK-009)', () => {
+      145 |   it('publishes one schema per event of the catalog, and nothing else', () => {
+    > 146 |     const files = readdirSync(EVENTS_DIR)
+          |                   ^
+      147 |       .filter((name) => name.endsWith('.schema.json'))
+      148 |       .sort();
+      149 |     expect(files).toEqual([...ALL_PAYMENT_EVENTS].map((e) => `${e}.schema.json`).sort());
+
+      at Object.<anonymous> (src/payments/event-contract.spec.ts:146:19)
+
+  ● event schemas in docs/events (BN-TASK-009) › payment.paid.schema.json is in sync with event-contract.ts
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.paid.schema.json'
+
+      152 |
+      153 |   it.each([...PUBLISHED_EVENTS])('%s.schema.json is in sync with event-contract.ts', (eventType) => {
+    > 154 |     const onDisk = JSON.parse(readFileSync(join(EVENTS_DIR, eventSchemaFile(eventType)), 'utf8')) as unknown;
+          |                               ^
+      155 |     expect(onDisk).toEqual(eventJsonSchema(eventType));
+      156 |   });
+      157 | });
+
+      at src/payments/event-contract.spec.ts:154:31
+
+  ● event schemas in docs/events (BN-TASK-009) › payment.failed.schema.json is in sync with event-contract.ts
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.failed.schema.json'
+
+      152 |
+      153 |   it.each([...PUBLISHED_EVENTS])('%s.schema.json is in sync with event-contract.ts', (eventType) => {
+    > 154 |     const onDisk = JSON.parse(readFileSync(join(EVENTS_DIR, eventSchemaFile(eventType)), 'utf8')) as unknown;
+          |                               ^
+      155 |     expect(onDisk).toEqual(eventJsonSchema(eventType));
+      156 |   });
+      157 | });
+
+      at src/payments/event-contract.spec.ts:154:31
+
+  ● event schemas in docs/events (BN-TASK-009) › payment.mismatch.schema.json is in sync with event-contract.ts
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.mismatch.schema.json'
+
+      152 |
+      153 |   it.each([...PUBLISHED_EVENTS])('%s.schema.json is in sync with event-contract.ts', (eventType) => {
+    > 154 |     const onDisk = JSON.parse(readFileSync(join(EVENTS_DIR, eventSchemaFile(eventType)), 'utf8')) as unknown;
+          |                               ^
+      155 |     expect(onDisk).toEqual(eventJsonSchema(eventType));
+      156 |   });
+      157 | });
+
+      at src/payments/event-contract.spec.ts:154:31
+
+  ● event schemas in docs/events (BN-TASK-009) › payment.refunded.schema.json is in sync with event-contract.ts
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.refunded.schema.json'
+
+      152 |
+      153 |   it.each([...PUBLISHED_EVENTS])('%s.schema.json is in sync with event-contract.ts', (eventType) => {
+    > 154 |     const onDisk = JSON.parse(readFileSync(join(EVENTS_DIR, eventSchemaFile(eventType)), 'utf8')) as unknown;
+          |                               ^
+      155 |     expect(onDisk).toEqual(eventJsonSchema(eventType));
+      156 |   });
+      157 | });
+
+      at src/payments/event-contract.spec.ts:154:31
+
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › payment.paid by card validates
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.paid.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at src/payments/event-contract.spec.ts:162:20
+
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › payment.paid in cash (OXXO) validates
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.paid.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at src/payments/event-contract.spec.ts:162:20
+
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › payment.failed with a decline code validates
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.failed.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at src/payments/event-contract.spec.ts:162:20
+
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › payment.mismatch validates
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.mismatch.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at src/payments/event-contract.spec.ts:162:20
+
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › payment.refunded, partial validates
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.refunded.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at src/payments/event-contract.spec.ts:162:20
+
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › payment.refunded, the rest validates
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.refunded.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at src/payments/event-contract.spec.ts:162:20
+
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › rejects a payload without its sequence or with a float amount
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/payment.paid.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at Object.<anonymous> (src/payments/event-contract.spec.ts:172:20)
+
+Test Suites: 1 failed, 1 total
+Tests:       12 failed, 12 total
+Snapshots:   0 total
+Time:        2.928 s
+Ran all test suites matching src/payments/event-contract.spec.ts.

@@ -1,7 +1,15 @@
-import { ExecutionContext, Injectable, Scope, UnauthorizedException, UseGuards } from '@nestjs/common';
+import {
+  ExecutionContext,
+  Injectable,
+  Optional,
+  Scope,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ApiKeyScopesGuard } from './api-key-scopes.guard';
 import { IS_PUBLIC_KEY } from '../common/decorators/public.decorator';
+import { INTERNAL_ROUTE_KEY } from '../common/decorators/internal-route.decorator';
 import { API_KEY_ONLY_KEY, ROLES_KEY } from '../common/decorators/roles.decorator';
 import { ApiKeyService } from '../api-keys/api-key.service';
 import { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
@@ -11,6 +19,28 @@ import { RequestContextService } from '../tenancy/request-context.service';
 import type { Principal } from '../tenancy/tenant-context.interface';
 import { ApiKeyStatus } from '../generated/control-plane/enums';
 import { AuthorizationException, InvalidApiKeyException } from '../common/errors/app.exception';
+import { AppConfig } from '../config/app-config.service';
+import {
+  ALLOW_MFA_PENDING_KEY,
+  ALLOW_PASSWORD_CHANGE_KEY,
+  evaluateAdminSession,
+  routeFlag,
+  routeRequiresStepUp,
+} from './admin-session-policy';
+
+/** Session facts of a platform admin, read alongside the principal. */
+interface AdminSessionState {
+  readonly mustChangePassword: boolean;
+  readonly mfaEnrolled: boolean;
+  readonly mfaAt: number | undefined;
+}
+
+/** Request fields the guard attaches for downstream handlers. */
+export interface AuthenticatedRequest {
+  principal?: Principal;
+  /** MFA verification time carried by a platform admin's access token. */
+  adminMfaAt?: number;
+}
 
 /** Shape of an API key bearer token. */
 export const API_KEY_PATTERN = /^([a-z0-9]{2,12})_([A-Za-z0-9]{8,32})_([A-Za-z0-9_-]{43})$/;
@@ -57,7 +87,11 @@ export class AuthGuard {
     private readonly tenantPrisma: TenantPrismaService,
     private readonly apiKeys: ApiKeyService,
     private readonly tokens: TokenService,
+    @Optional() private readonly config?: AppConfig,
   ) {}
+
+  /** Admin session facts of the current request, set while authenticating. */
+  private adminSession: AdminSessionState | null = null;
 
   /**
    * @param context Execution context.
@@ -68,6 +102,13 @@ export class AuthGuard {
    */
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const targets = [context.getHandler(), context.getClass()];
+    if (this.reflector.getAllAndOverride<boolean>(INTERNAL_ROUTE_KEY, targets) === true) {
+      // An internal route (POST /internal/tick) is called by the platform with a
+      // Google OIDC ID token, not an API key or a session, and authenticates it
+      // with its own guard; RbacAuditService refuses to boot when that guard is
+      // missing. No principal is attached here.
+      return true;
+    }
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, targets) === true;
     const apiKeyOnly = this.reflector.getAllAndOverride<boolean>(API_KEY_ONLY_KEY, targets) === true;
     const requiredRoles = this.reflector.getAllAndOverride<PlatformRole[]>(ROLES_KEY, targets);
@@ -88,14 +129,38 @@ export class AuthGuard {
     }
 
     this.assertRole(principal, requiredRoles);
+    if (principal.kind === 'platform-admin' && this.adminSession !== null) {
+      // MFA, forced password rotation and step-up (BN-REQ-SEC-006/008).
+      const denial = evaluateAdminSession({
+        ...this.adminSession,
+        mfaRequired: this.config?.mfaRequiredForAdmins ?? false,
+        nowSeconds: Math.floor(Date.now() / 1000),
+        allowMfaPending: routeFlag(context, ALLOW_MFA_PENDING_KEY),
+        allowPasswordChange: routeFlag(context, ALLOW_PASSWORD_CHANGE_KEY),
+        stepUpRequired: routeRequiresStepUp(context),
+      });
+      if (denial !== null) {
+        if (isPublic) {
+          // The policy protects the protected surface. A public route (health,
+          // inbound webhooks, docs) answers anyone, so a restricted session must
+          // not turn it into a 403; it is served as anonymous instead, which also
+          // keeps the restricted session from gaining anything there.
+          return true;
+        }
+        throw denial;
+      }
+    }
     this.requestContext.patch({ principal });
     // Also attached to the request itself. Guards share one AsyncLocalStorage,
     // but depending on its propagation between sibling guard invocations is the
     // kind of implicit coupling that lets an authorization check silently see no
     // principal; the request travels with the pipeline.
-    const request = context.switchToHttp().getRequest<{ principal?: Principal }>();
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     if (request !== undefined && request !== null) {
       request.principal = principal;
+      if (this.adminSession?.mfaAt !== undefined) {
+        request.adminMfaAt = this.adminSession.mfaAt;
+      }
     }
 
     return true;
@@ -209,11 +274,23 @@ export class AuthGuard {
     if (payload.kind === 'platform-admin') {
       const admin = await this.prisma.client.platformAdmin.findUnique({
         where: { id: payload.sub },
-        select: { id: true, displayName: true, role: true, status: true },
+        select: {
+          id: true,
+          displayName: true,
+          role: true,
+          status: true,
+          mustChangePassword: true,
+          mfaEnabledAt: true,
+        },
       });
       if (!admin || admin.status !== 'ACTIVE') {
         return null;
       }
+      this.adminSession = {
+        mustChangePassword: admin.mustChangePassword === true,
+        mfaEnrolled: admin.mfaEnabledAt !== null && admin.mfaEnabledAt !== undefined,
+        mfaAt: typeof payload.mfa === 'number' ? payload.mfa : undefined,
+      };
       return {
         kind: 'platform-admin',
         id: admin.id,

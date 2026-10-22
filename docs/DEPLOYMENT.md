@@ -415,8 +415,8 @@ psql "postgresql://user:password@project-id.neon.tech/database"
 # Run migrations manually to see detailed errors
 NEON_PROJECT_ID=xxx ./scripts/run-migrations-neon.sh
 
-# Or with Prisma directly
-DATABASE_URL="postgresql://..." npx prisma migrate deploy
+# Or the same entrypoint the migrate Job runs (direct, non-pooler URL)
+CONTROL_PLANE_DATABASE_URL_UNPOOLED="postgresql://..." npm run db:migrate:deploy
 ```
 
 ### CORS errors

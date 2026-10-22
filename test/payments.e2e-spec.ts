@@ -94,10 +94,17 @@ const provider = {
   threeDS: false,
   /** When set, the next charge is declined the way the sandbox does it: 409 with the transaction. */
   declineNext: false,
+  /** Status to answer the next CHARGE with (not the customer creation before it), then cleared. */
+  failChargeNext: 0,
+  /** Requests whose path matches are answered only after `delayMs` (to make requests overlap). */
+  delayPath: null as RegExp | null,
+  delayMs: 0,
   /** Customers the stand-in has created, with the card tokens attached to each. */
   clients: new Map<string, string[]>(),
   /** Hosted sessions the stand-in has issued, keyed by session id. */
   sessions: new Map<string, { merchantRefCode: string; amount: string }>(),
+  /** The webhook URL registered with `PUT /v3/webhooks/`, answered by `GET` (drift, BN-TASK-026). */
+  registeredWebhook: null as string | null,
   counter: 0,
 };
 
@@ -126,9 +133,12 @@ async function startProvider(): Promise<void> {
         apiKey: headers['x-netpay-apikey'] as string | undefined,
         body,
       });
+      const delay = provider.delayPath !== null && provider.delayPath.test(path) ? provider.delayMs : 0;
       const reply = (status: number, payload: unknown): void => {
-        res.writeHead(status, { 'content-type': 'application/json' });
-        res.end(JSON.stringify(payload));
+        setTimeout(() => {
+          res.writeHead(status, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(payload));
+        }, delay);
       };
       if (provider.failNext !== 0) {
         const status = provider.failNext;
@@ -213,6 +223,13 @@ async function startProvider(): Promise<void> {
           hostedCheckoutUrl: `https://gateway-154.netpaydev.com/hosted-checkout/session/${sessionId}/pk_netpay_x`,
           paidOut: false,
         });
+        return;
+      }
+      if (method === 'POST' && path === '/v3.5/charges/' && provider.failChargeNext !== 0) {
+        // The charge itself fails without a definitive answer: Netpay may or may not have charged.
+        const status = provider.failChargeNext;
+        provider.failChargeNext = 0;
+        reply(status, { message: 'provider failure' });
         return;
       }
       if (method === 'POST' && path === '/v3.5/charges/') {
@@ -307,7 +324,14 @@ async function startProvider(): Promise<void> {
         return;
       }
       if (method === 'PUT' && path === '/v3/webhooks/') {
+        provider.registeredWebhook = typeof body['webhook'] === 'string' ? body['webhook'] : null;
         reply(200, {});
+        return;
+      }
+      if (method === 'GET' && path === '/v3/webhooks/') {
+        // The read-only call that proves a key before it is stored, and what the
+        // drift check reads.
+        reply(headers['authorization'] === undefined ? 401 : 200, { webhook: provider.registeredWebhook });
         return;
       }
       reply(404, { message: 'No message available' });
@@ -342,6 +366,7 @@ const TENANT_ROLE: Record<TenantMember, string> = {
 interface Reply {
   status: number;
   body: Record<string, unknown>;
+  headers: Record<string, string | string[] | undefined>;
 }
 
 /**
@@ -386,7 +411,7 @@ async function call(
           } catch {
             parsed = { raw };
           }
-          resolve({ status: res.statusCode ?? 0, body: parsed });
+          resolve({ status: res.statusCode ?? 0, body: parsed, headers: res.headers });
         });
       },
     );
@@ -424,7 +449,7 @@ async function root(path: string): Promise<Reply> {
           } catch {
             parsed = { raw };
           }
-          resolve({ status: res.statusCode ?? 0, body: parsed });
+          resolve({ status: res.statusCode ?? 0, body: parsed, headers: res.headers });
         });
       },
     );
@@ -438,7 +463,7 @@ async function root(path: string): Promise<Reply> {
  * Starts the built server with a hermetic environment.
  */
 async function startServer(): Promise<void> {
-  server = spawn('node', ['dist/main.js'], {
+  server = spawn('node', [process.env['PAYMENTS_E2E_ENTRY'] ?? 'dist/main.js'], {
     env: {
       ...process.env,
       NODE_ENV: 'test',
@@ -459,6 +484,13 @@ async function startServer(): Promise<void> {
       NETPAY_SANDBOX_BASE_URL: providerUrl,
       NETPAY_SANDBOX_REPORTS_BASE_URL: providerUrl.replace('/gateway-ecommerce', '/reports-sandbox'),
       NETPAY_ENCRYPTION_KEY: process.env['NETPAY_ENCRYPTION_KEY'] ?? randomBytes(32).toString('base64'),
+      // The drift check compares Netpay's registration against this (BN-TASK-026).
+      PUBLIC_BASE_URL: 'https://api.example.com',
+      // The worker is exercised by test/reconciliation.int-spec.ts; here it would
+      // only race the assertions. POST /internal/tick still answers.
+      RECONCILE_ENABLED: 'false',
+      INTERNAL_TICK_SA_EMAIL: 'netpay-tick@example-project.iam.gserviceaccount.com',
+      INTERNAL_TICK_AUDIENCE: 'https://api.example.com',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -1147,6 +1179,12 @@ describe('payments and outbound webhooks (e2e)', () => {
   });
 
   describe('outbound destinations', () => {
+    /** Reads `error.code` and `error.details.reason` from the error envelope (BN-REQ-API-002). */
+    const blockedReason = (body: Record<string, unknown>) => {
+      const error = body['error'] as { code?: unknown; details?: { reason?: unknown } } | undefined;
+      return { code: error?.code, reason: error?.details?.reason };
+    };
+
     it('refuses a loopback destination before contacting it', async () => {
       const res = await call(
         'POST',
@@ -1155,8 +1193,10 @@ describe('payments and outbound webhooks (e2e)', () => {
         { url: 'https://127.0.0.1/steal', events: ['payment.paid'] },
         tenantHeader(),
       );
-      expect(res.status).toBe(400);
-      expect(String((res.body['details'] as Record<string, unknown>)['reason'])).toBe('PRIVATE_ADDRESS');
+      // A well-formed URL pointing somewhere off limits: 422 BLOCKED_ADDRESS
+      // (BN-REQ-EVT-001), not a 400 validation error.
+      expect(res.status).toBe(422);
+      expect(blockedReason(res.body)).toEqual({ code: 'BLOCKED_ADDRESS', reason: 'PRIVATE_ADDRESS' });
     });
 
     it('refuses the cloud metadata address', async () => {
@@ -1167,8 +1207,10 @@ describe('payments and outbound webhooks (e2e)', () => {
         { url: 'https://169.254.169.254/latest/meta-data/', events: ['payment.paid'] },
         tenantHeader(),
       );
-      expect(res.status).toBe(400);
-      expect(String((res.body['details'] as Record<string, unknown>)['reason'])).toBe('METADATA_ADDRESS');
+      // A well-formed URL pointing somewhere off limits: 422 BLOCKED_ADDRESS
+      // (BN-REQ-EVT-001), not a 400 validation error.
+      expect(res.status).toBe(422);
+      expect(blockedReason(res.body)).toEqual({ code: 'BLOCKED_ADDRESS', reason: 'METADATA_ADDRESS' });
     });
 
     it('refuses a private RFC1918 destination', async () => {
@@ -1179,7 +1221,8 @@ describe('payments and outbound webhooks (e2e)', () => {
         { url: 'https://10.0.0.5/hook', events: ['payment.paid'] },
         tenantHeader(),
       );
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(422);
+      expect(blockedReason(res.body)).toEqual({ code: 'BLOCKED_ADDRESS', reason: 'PRIVATE_ADDRESS' });
     });
 
     it('refuses plain HTTP while HTTPS is required', async () => {
@@ -1997,6 +2040,9 @@ describe('payments and outbound webhooks (e2e)', () => {
     beforeEach(() => {
       provider.calls.length = 0;
       provider.failNext = 0;
+      provider.failChargeNext = 0;
+      provider.delayPath = null;
+      provider.delayMs = 0;
       provider.tokenAmountOverride = null;
       provider.chargeStatus = 'DONE';
       provider.threeDS = false;
@@ -2035,7 +2081,7 @@ describe('payments and outbound webhooks (e2e)', () => {
       expect(rows[0].failureReason).not.toBeNull();
     });
 
-    it('answers 502 and keeps the order unpaid when the provider is down', async () => {
+    it('answers 504 (outcome unknown) and keeps the order unpaid when the provider is down', async () => {
       provider.failNext = 500;
       const res = await call(
         'POST',
@@ -2044,7 +2090,11 @@ describe('payments and outbound webhooks (e2e)', () => {
         { merchantReferenceCode: `E2E-DOWN-${RUN_ID}`, amount: '650.00' },
         tenantHeader(),
       );
-      expect(res.status).toBe(502);
+      // A provider 5xx is not an answer (BN-REQ-PAY-011).
+      expect(res.status).toBe(504);
+      expect((res.body['error'] as { code: string; retryable: boolean }).code).toBe(
+        'PROVIDER_OUTCOME_UNKNOWN',
+      );
       expect(JSON.stringify(res.body)).not.toContain(VALID_CONFIG.secretKey);
       const rows = await tenantRows<OrderRow>(
         `SELECT status, "failureReason" FROM "${tenantASchema}".payment_orders WHERE "merchantReferenceCode" = $1`,
@@ -2572,7 +2622,7 @@ describe('payments and outbound webhooks (e2e)', () => {
       expect(row.netpayTransactionId).toBe(res.body['transactionTokenId']);
     });
 
-    it('answers 502 to a charge the provider refuses, leaving the order unpaid', async () => {
+    it('answers 504 when the provider fails a charge with a 5xx, leaving the order unpaid', async () => {
       const { id } = await createOrder(`E2E-CHARGEFAIL-${RUN_ID}`);
       provider.failNext = 500;
       const res = await call(
@@ -2582,7 +2632,7 @@ describe('payments and outbound webhooks (e2e)', () => {
         { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE },
         tenantHeader(),
       );
-      expect(res.status).toBe(502);
+      expect(res.status).toBe(504);
       expect(JSON.stringify(res.body)).not.toContain(VALID_CONFIG.secretKey);
       expect((await orderRow(id)).status).not.toBe('PAID');
     });
@@ -2628,6 +2678,79 @@ describe('payments and outbound webhooks (e2e)', () => {
       expect(second.status).toBe(409);
     });
 
+    it('audits every status change and writes each event to the outbox, partial refunds included (BN-TASK-030, BN-TASK-004, BN-TASK-019)', async () => {
+      const { id, row } = await createOrder(`E2E-AUDIT-${RUN_ID}`);
+      const tx = `txn_audit_${RUN_ID}`;
+      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      await notify(row.orderReference, tx);
+      await waitForStatus(id, ['PAID']);
+
+      const partial = await call(
+        'POST',
+        `/t/payments/orders/${id}/refund`,
+        ownerToken,
+        { amount: '100.00' },
+        tenantHeader(),
+      );
+      expect(partial.status).toBe(200);
+      expect(partial.body['status']).toBe('PARTIALLY_REFUNDED');
+      const rest = await call(
+        'POST',
+        `/t/payments/orders/${id}/refund`,
+        ownerToken,
+        undefined,
+        tenantHeader(),
+      );
+      expect(rest.status).toBe(200);
+      expect(rest.body['status']).toBe('REFUNDED');
+
+      // Audit: actor, tenant, order and from → to for every change (BN-REQ-OPS-011).
+      const audits = await adminPool.query<{
+        actorType: string;
+        actorId: string | null;
+        tenantId: string;
+        metadata: { from: string | null; to: string; event: string | null };
+      }>(
+        `SELECT "actorType", "actorId", "tenantId", "metadata" FROM "audit_logs"
+         WHERE "action" = 'payment.status_changed' AND "resourceId" = $1 ORDER BY "createdAt", "id"`,
+        [id],
+      );
+      expect(audits.rows.map((a) => [a.metadata.from, a.metadata.to])).toEqual([
+        [null, 'PENDING'],
+        ['PENDING', 'PAID'],
+        ['PAID', 'PARTIALLY_REFUNDED'],
+        ['PARTIALLY_REFUNDED', 'REFUNDED'],
+      ]);
+      expect(audits.rows.every((a) => a.tenantId === tenantAId)).toBe(true);
+      // The unsigned notification has no principal: the system settled it.
+      expect(audits.rows[1]).toMatchObject({ actorType: 'SYSTEM', actorId: null });
+      expect(audits.rows[2].actorType).toBe('TENANT_USER');
+      expect(audits.rows[2].actorId).not.toBeNull();
+
+      // Outbox: one snapshot per change, in the same transaction, sequence per order.
+      const events = await tenantRows<{
+        sequence: number;
+        eventType: string;
+        payload: { sequence: number; data: Record<string, unknown> };
+      }>(
+        `SELECT "sequence", "eventType", "payload" FROM "${tenantASchema}"."payment_event_outbox"
+         WHERE "orderId" = $1 ORDER BY "sequence"`,
+        [id],
+      );
+      expect(events.map((e) => [e.sequence, e.eventType])).toEqual([
+        [1, 'payment.paid'],
+        [2, 'payment.refunded'],
+        [3, 'payment.refunded'],
+      ]);
+      expect(events[1].payload.data).toMatchObject({
+        status: 'PARTIALLY_REFUNDED',
+        refundedAmount: '100.00',
+        refunded: '100.00',
+        fullyRefunded: false,
+      });
+      expect(events[2].payload.data).toMatchObject({ status: 'REFUNDED', fullyRefunded: true });
+    });
+
     it('lets only a role with payments:refund refund', async () => {
       const { id, row } = await createOrder(`E2E-REFUND-RBAC-${RUN_ID}`);
       const tx = `txn_refund_rbac_${RUN_ID}`;
@@ -2661,7 +2784,7 @@ describe('payments and outbound webhooks (e2e)', () => {
       expect((await orderRow(id)).status).toBe('REFUNDED');
     });
 
-    it('frees the order for a retry when the provider fails a refund', async () => {
+    it('keeps the refund claim when the provider outcome is unknown, so a retry cannot reverse twice', async () => {
       const { id, row } = await createOrder(`E2E-RETRY-REFUND-${RUN_ID}`);
       const tx = `txn_retry_refund_${RUN_ID}`;
       provider.transactions.set(tx, { status: 'DONE', amount: 650 });
@@ -2675,8 +2798,10 @@ describe('payments and outbound webhooks (e2e)', () => {
         undefined,
         tenantHeader(),
       );
-      expect(failed.status).toBe(502);
+      expect(failed.status).toBe(504);
+      expect(failed.body['error']).toMatchObject({ code: 'PROVIDER_OUTCOME_UNKNOWN', retryable: true });
       expect((await orderRow(id)).status).toBe('PAID');
+      // The cancellation may have been carried out: the claim stays for reconciliation.
       const retry = await call(
         'POST',
         `/t/payments/orders/${id}/refund`,
@@ -2684,16 +2809,18 @@ describe('payments and outbound webhooks (e2e)', () => {
         undefined,
         tenantHeader(),
       );
-      expect(retry.status).toBe(200);
-      expect((await orderRow(id)).status).toBe('REFUNDED');
+      expect(retry.status).toBe(409);
+      expect((await orderRow(id)).status).toBe('PAID');
     });
 
     it('frees the order for a retry when the provider fails a charge, then refuses a repeat once submitted', async () => {
       const { id } = await createOrder(`E2E-RETRY-CHARGE-${RUN_ID}`);
       const body = { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE };
       provider.failNext = 500;
+      // The 5xx hits the customer creation, before any charge was sent: nobody was
+      // charged, so the claim is released and the retry may proceed.
       const failed = await call('POST', `/t/payments/orders/${id}/charge`, ownerToken, body, tenantHeader());
-      expect(failed.status).toBe(502);
+      expect(failed.status).toBe(504);
       const retry = await call('POST', `/t/payments/orders/${id}/charge`, ownerToken, body, tenantHeader());
       expect(retry.status).toBe(200);
       // Submitted and not yet reported unsuccessful: a third attempt would bill twice.
@@ -2728,6 +2855,337 @@ describe('payments and outbound webhooks (e2e)', () => {
       expect(settled.status).toBe('PAID');
       await new Promise((r) => setTimeout(r, 1_500));
       expect((await orderRow(id)).status).toBe('PAID');
+    });
+
+    describe('Idempotency-Key (BN-TASK-010)', () => {
+      const keyed = (key: string): Record<string, string> => ({ ...tenantHeader(), 'idempotency-key': key });
+      const reversalsOf = (tx: string) =>
+        provider.calls.filter(
+          (c) => c.method === 'PUT' && c.path === `/v2/transactions/refundable_${tx}/refund`,
+        );
+
+      const paidOrder = async (code: string) => {
+        const { id, row } = await createOrder(code);
+        const tx = `txn_${code.toLowerCase()}`;
+        provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+        await notify(row.orderReference, tx);
+        await waitForStatus(id, ['PAID']);
+        return { id, tx };
+      };
+
+      it('runs two concurrent refunds with one key once: one Netpay call, and the stored answer on retry', async () => {
+        const { id, tx } = await paidOrder(`E2E-IDM-RACE-${RUN_ID}`);
+        const key = `idm-race-${RUN_ID}`;
+        provider.calls.length = 0;
+        // The reversal answers slowly, so the second request arrives while the first runs.
+        provider.delayPath = /\/refund$/;
+        provider.delayMs = 1_000;
+        const results = await Promise.all([
+          call('POST', `/t/payments/orders/${id}/refund`, ownerToken, { motive: 'dup' }, keyed(key)),
+          call('POST', `/t/payments/orders/${id}/refund`, ownerToken, { motive: 'dup' }, keyed(key)),
+        ]);
+        provider.delayPath = null;
+        expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+        const busy = results.find((r) => r.status === 409) as Reply;
+        expect(busy.body['error']).toMatchObject({ code: 'IDEMPOTENCY_IN_PROGRESS', retryable: true });
+        expect(busy.headers['retry-after']).toBe('2');
+        expect(reversalsOf(tx)).toHaveLength(1);
+
+        const first = results.find((r) => r.status === 200) as Reply;
+        const retry = await call(
+          'POST',
+          `/t/payments/orders/${id}/refund`,
+          ownerToken,
+          { motive: 'dup' },
+          keyed(key),
+        );
+        expect(retry.status).toBe(200);
+        expect(retry.body).toEqual(first.body);
+        expect(retry.headers['idempotency-replayed']).toBe('true');
+        expect(reversalsOf(tx)).toHaveLength(1);
+
+        // The same key with another body is a client defect, not a repeat.
+        const reused = await call(
+          'POST',
+          `/t/payments/orders/${id}/refund`,
+          ownerToken,
+          { motive: 'other' },
+          keyed(key),
+        );
+        expect(reused.status).toBe(422);
+        expect(reused.body['error']).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED', retryable: false });
+        expect(reversalsOf(tx)).toHaveLength(1);
+      });
+
+      it('replays an order creation and a charge without calling Netpay again', async () => {
+        const body = { merchantReferenceCode: `E2E-IDM-CREATE-${RUN_ID}`, amount: '650.00' };
+        provider.calls.length = 0;
+        const created = await call(
+          'POST',
+          '/t/payments/orders',
+          ownerToken,
+          body,
+          keyed(`idm-create-${RUN_ID}`),
+        );
+        expect(created.status).toBe(201);
+        // Key order in the body does not make it another request.
+        const again = await call(
+          'POST',
+          '/t/payments/orders',
+          ownerToken,
+          { amount: '650.00', merchantReferenceCode: body.merchantReferenceCode },
+          keyed(`idm-create-${RUN_ID}`),
+        );
+        expect(again.status).toBe(201);
+        expect(again.body['id']).toBe(created.body['id']);
+        expect(provider.calls.filter((c) => c.path === '/v3.2/checkout/session/')).toHaveLength(1);
+        const orders = await tenantRows<{ n: string }>(
+          `SELECT count(*)::text AS n FROM "${tenantASchema}".payment_orders WHERE "merchantReferenceCode" = $1`,
+          [body.merchantReferenceCode],
+        );
+        expect(orders[0].n).toBe('1');
+
+        const { id } = await createOrder(`E2E-IDM-CHARGE-${RUN_ID}`, '650.00', { checkoutMode: 'custom' });
+        const charge = { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE };
+        provider.calls.length = 0;
+        const charged = await call(
+          'POST',
+          `/t/payments/orders/${id}/charge`,
+          ownerToken,
+          charge,
+          keyed(`idm-charge-${RUN_ID}`),
+        );
+        expect(charged.status).toBe(200);
+        const replayed = await call(
+          'POST',
+          `/t/payments/orders/${id}/charge`,
+          ownerToken,
+          charge,
+          keyed(`idm-charge-${RUN_ID}`),
+        );
+        expect(replayed.status).toBe(200);
+        expect(replayed.body).toEqual(charged.body);
+        expect(provider.calls.filter((c) => c.path === '/v3.5/charges/')).toHaveLength(1);
+      });
+
+      it('stores a definitive 4xx, and keeps a 5xx in progress so a retry cannot run twice', async () => {
+        const { id } = await createOrder(`E2E-IDM-4XX-${RUN_ID}`);
+        const refused = await call(
+          'POST',
+          `/t/payments/orders/${id}/refund`,
+          ownerToken,
+          undefined,
+          keyed(`idm-4xx-${RUN_ID}`),
+        );
+        expect(refused.status).toBe(409);
+        const replayed = await call(
+          'POST',
+          `/t/payments/orders/${id}/refund`,
+          ownerToken,
+          undefined,
+          keyed(`idm-4xx-${RUN_ID}`),
+        );
+        expect(replayed.status).toBe(409);
+        expect(replayed.body['error']).toEqual(refused.body['error']);
+        expect(replayed.headers['idempotency-replayed']).toBe('true');
+
+        const custom = await createOrder(`E2E-IDM-5XX-${RUN_ID}`, '650.00', { checkoutMode: 'custom' });
+        const charge = { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE };
+        provider.failChargeNext = 500;
+        const unknown = await call(
+          'POST',
+          `/t/payments/orders/${custom.id}/charge`,
+          ownerToken,
+          charge,
+          keyed(`idm-5xx-${RUN_ID}`),
+        );
+        expect(unknown.status).toBe(504);
+        const retry = await call(
+          'POST',
+          `/t/payments/orders/${custom.id}/charge`,
+          ownerToken,
+          charge,
+          keyed(`idm-5xx-${RUN_ID}`),
+        );
+        expect(retry.status).toBe(409);
+        expect(retry.body['error']).toMatchObject({ code: 'IDEMPOTENCY_IN_PROGRESS' });
+        const rows = await tenantRows<{ status: string; responseStatus: number; ttl: number }>(
+          `SELECT status, "responseStatus", extract(epoch FROM ("expiresAt" - now()))::int AS ttl
+           FROM "${tenantASchema}".idempotency_record WHERE key = $1`,
+          [`idm-5xx-${RUN_ID}`],
+        );
+        expect(rows[0]).toMatchObject({ status: 'IN_PROGRESS', responseStatus: 504 });
+        expect(rows[0].ttl).toBeGreaterThan(9 * 60);
+        expect(rows[0].ttl).toBeLessThanOrEqual(10 * 60);
+      });
+
+      it('refuses a malformed key and leaves requests without one as they were', async () => {
+        const { id } = await createOrder(`E2E-IDM-BAD-${RUN_ID}`);
+        const bad = await call(
+          'POST',
+          `/t/payments/orders/${id}/refund`,
+          ownerToken,
+          undefined,
+          keyed('has space'),
+        );
+        expect(bad.status).toBe(400);
+        const plain = await call(
+          'POST',
+          `/t/payments/orders/${id}/refund`,
+          ownerToken,
+          undefined,
+          tenantHeader(),
+        );
+        expect(plain.status).toBe(409);
+        expect(plain.headers['idempotency-replayed']).toBeUndefined();
+      });
+    });
+
+    describe('charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015)', () => {
+      const charge = { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE };
+      const chargeOf = (id: string) =>
+        call('POST', `/t/payments/orders/${id}/charge`, ownerToken, charge, tenantHeader());
+      const chargesSent = () =>
+        provider.calls.filter((c) => c.method === 'POST' && c.path === '/v3.5/charges/');
+
+      const attemptsOf = (id: string) =>
+        tenantRows<{
+          attemptNo: number;
+          netpayTransactionId: string | null;
+          status: string;
+          declineCode: string | null;
+        }>(
+          `SELECT "attemptNo", "netpayTransactionId", status, "declineCode"
+           FROM "${tenantASchema}".payment_attempt WHERE "orderId" = $1 ORDER BY "attemptNo"`,
+          [id],
+        );
+      const eventsOf = (id: string) =>
+        tenantRows<{ eventType: string; payload: { data: Record<string, unknown> } }>(
+          `SELECT "eventType", payload FROM "${tenantASchema}".payment_event_outbox WHERE "orderId" = $1 ORDER BY sequence`,
+          [id],
+        );
+
+      it('leaves the order CHARGE_UNKNOWN on a charge without answer, and refuses new charges until verify resolves it', async () => {
+        const { id } = await createOrder(`E2E-UNKNOWN-${RUN_ID}`, '650.00', { checkoutMode: 'custom' });
+        provider.failChargeNext = 504;
+        const first = await chargeOf(id);
+        expect(first.status).toBe(504);
+        expect(first.body['error']).toMatchObject({ code: 'PROVIDER_OUTCOME_UNKNOWN' });
+        expect((await orderRow(id)).status).toBe('CHARGE_UNKNOWN');
+        expect(await attemptsOf(id)).toEqual([
+          { attemptNo: 1, netpayTransactionId: null, status: 'UNKNOWN', declineCode: null },
+        ]);
+
+        provider.calls.length = 0;
+        const again = await chargeOf(id);
+        expect(again.status).toBe(409);
+        expect(again.body['error']).toMatchObject({
+          code: 'ORDER_STATE_CONFLICT',
+          details: { status: 'CHARGE_UNKNOWN' },
+        });
+        expect(chargesSent()).toHaveLength(0);
+
+        // Netpay cannot be searched by reference: the transaction id (Netpay Manager,
+        // or the inbound notification) is what resolves it.
+        const blind = await call('POST', `/t/payments/orders/${id}/verify`, ownerToken, {}, tenantHeader());
+        expect(blind.status).toBe(400);
+        const tx = `txn_unknown_${RUN_ID}`;
+        provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+        const verified = await call(
+          'POST',
+          `/t/payments/orders/${id}/verify`,
+          ownerToken,
+          { transactionId: tx },
+          tenantHeader(),
+        );
+        expect(verified.status).toBe(200);
+        expect(verified.body['status']).toBe('PAID');
+        expect((await orderRow(id)).netpayTransactionId).toBe(tx);
+        expect(await attemptsOf(id)).toEqual([
+          { attemptNo: 1, netpayTransactionId: tx, status: 'PAID', declineCode: null },
+        ]);
+        const events = await eventsOf(id);
+        expect(
+          events.map((e) => [
+            e.eventType,
+            e.payload.data['previousStatus'],
+            e.payload.data['netpayTransactionId'],
+          ]),
+        ).toEqual([['payment.paid', 'CHARGE_UNKNOWN', tx]]);
+      });
+
+      it('accepts another card after a decline: attempt 2 settles the order, and each event names its attempt', async () => {
+        const { id } = await createOrder(`E2E-ATTEMPT-${RUN_ID}`, '650.00', { checkoutMode: 'custom' });
+        provider.declineNext = true;
+        const declined = await chargeOf(id);
+        expect(declined.status).toBe(200);
+        expect(declined.body['orderStatus']).toBe('FAILED');
+        const tx1 = String(declined.body['transactionTokenId']);
+
+        const second = await chargeOf(id);
+        expect(second.status).toBe(200);
+        expect(second.body['orderStatus']).toBe('PAID');
+        const tx2 = String(second.body['transactionTokenId']);
+        expect(tx2).not.toBe(tx1);
+        expect((await orderRow(id)).netpayTransactionId).toBe(tx2);
+
+        const attempts = await attemptsOf(id);
+        expect(attempts.map((a) => [a.attemptNo, a.netpayTransactionId, a.status])).toEqual([
+          [1, tx1, 'FAILED'],
+          [2, tx2, 'PAID'],
+        ]);
+        expect(attempts[0].declineCode).not.toBeNull();
+        const events = await eventsOf(id);
+        expect(events.map((e) => [e.eventType, e.payload.data['netpayTransactionId']])).toEqual([
+          ['payment.failed', tx1],
+          ['payment.paid', tx2],
+        ]);
+      });
+
+      it('verifies an abandoned 3-D Secure attempt with Netpay, then accepts a new charge', async () => {
+        provider.threeDS = true;
+        const { id } = await createOrder(`E2E-3DS-ABANDON-${RUN_ID}`, '650.00', { checkoutMode: 'custom' });
+        const challenged = await chargeOf(id);
+        provider.threeDS = false;
+        expect(challenged.status).toBe(200);
+        const tx1 = String(challenged.body['transactionTokenId']);
+
+        provider.calls.length = 0;
+        const retry = await chargeOf(id);
+        expect(retry.status).toBe(200);
+        expect(retry.body['orderStatus']).toBe('PAID');
+        // The previous attempt was asked about before the new charge was sent.
+        const askedFirst = provider.calls.findIndex(
+          (c) => c.method === 'GET' && c.path === `/v3/transactions/${tx1}`,
+        );
+        const charged = provider.calls.findIndex((c) => c.method === 'POST' && c.path === '/v3.5/charges/');
+        expect(askedFirst).toBeGreaterThanOrEqual(0);
+        expect(askedFirst).toBeLessThan(charged);
+        const attempts = await attemptsOf(id);
+        expect(attempts.map((a) => [a.attemptNo, a.status])).toEqual([
+          [1, 'ABANDONED'],
+          [2, 'PAID'],
+        ]);
+      });
+
+      it('answers 409 with the PAID order when the previous attempt was charged after all', async () => {
+        provider.threeDS = true;
+        const { id } = await createOrder(`E2E-3DS-PAID-${RUN_ID}`, '650.00', { checkoutMode: 'custom' });
+        const challenged = await chargeOf(id);
+        provider.threeDS = false;
+        const tx1 = String(challenged.body['transactionTokenId']);
+        // The buyer finished 3-D Secure elsewhere and Netpay charged the card.
+        provider.transactions.set(tx1, { status: 'DONE', amount: 650 });
+
+        provider.calls.length = 0;
+        const retry = await chargeOf(id);
+        expect(retry.status).toBe(409);
+        expect(retry.body['error']).toMatchObject({ code: 'ORDER_STATE_CONFLICT' });
+        const details = (retry.body['error'] as { details: { order: Record<string, unknown> } }).details;
+        expect(details.order).toMatchObject({ id, status: 'PAID', netpayTransactionId: tx1 });
+        expect(chargesSent()).toHaveLength(0);
+        expect((await orderRow(id)).status).toBe('PAID');
+      });
     });
 
     /** Delivers a Checkout Hosted notification the way Netpay shapes it: by session, with no order reference. */
@@ -3099,7 +3557,8 @@ describe('payments and outbound webhooks (e2e)', () => {
       expect(res.status).toBe(201);
       expect(String(res.body['netpayCustomerId'])).toMatch(/^cus_/);
       expect(res.body['cardToken']).toBe('token_abcdefghijklmnop');
-      expect(res.body['lastFourDigits']).toBe('mnop');
+      // The real digits, as Netpay reports them, never the token's tail.
+      expect(res.body['lastFourDigits']).toBe('4242');
       const rows = await tenantRows<{ defaultTokenId: string | null }>(
         `SELECT "defaultTokenId" FROM "${tenantASchema}".payment_customers WHERE "netpayCustomerId" = $1`,
         [res.body['netpayCustomerId']],
@@ -3127,7 +3586,7 @@ describe('payments and outbound webhooks (e2e)', () => {
       expect(res.body['lastFourDigits']).toBeNull();
     });
 
-    it('answers 502 and does not leak the secret when the provider rejects the profile', async () => {
+    it('answers 504 and does not leak the secret when the provider fails the profile', async () => {
       provider.failNext = 500;
       const res = await call(
         'POST',
@@ -3143,7 +3602,7 @@ describe('payments and outbound webhooks (e2e)', () => {
         },
         tenantHeader(),
       );
-      expect(res.status).toBe(502);
+      expect(res.status).toBe(504);
       expect(JSON.stringify(res.body)).not.toContain(VALID_CONFIG.secretKey);
     });
 
@@ -3162,7 +3621,7 @@ describe('payments and outbound webhooks (e2e)', () => {
       expect(put?.body['webhook']).toBe(url);
       expect(put?.authorization).toBe(VALID_CONFIG.secretKey);
       const rows = await tenantRows<{ webhookRegisteredAt: Date | null }>(
-        `SELECT "webhookRegisteredAt" FROM "${tenantASchema}".payment_provider_config`,
+        `SELECT "webhookRegisteredAt" FROM "${tenantASchema}".payment_provider_config WHERE active`,
       );
       expect(rows[0].webhookRegisteredAt).not.toBeNull();
     });
@@ -3172,6 +3631,470 @@ describe('payments and outbound webhooks (e2e)', () => {
       const auths = provider.calls.map((c) => c.authorization);
       expect(auths.length).toBeGreaterThan(0);
       expect(new Set(auths)).toEqual(new Set([VALID_CONFIG.secretKey]));
+    });
+
+    // -------------------------------------------------------------------------
+    // Last wave: listing, cancellation, versioned config, drift, allowlists,
+    // consumer revocation and the internal tick.
+    // -------------------------------------------------------------------------
+
+    /** Error code of the envelope (BN-REQ-API-002). */
+    const errorCode = (body: Record<string, unknown>): unknown =>
+      (body['error'] as { code?: unknown } | undefined)?.code;
+
+    /** Event types written to the outbox for an order, in sequence order. */
+    const outboxOf = async (id: string): Promise<string[]> =>
+      (
+        await tenantRows<{ eventType: string }>(
+          `SELECT "eventType" FROM "${tenantASchema}".payment_event_outbox WHERE "orderId" = $1 ORDER BY sequence`,
+          [id],
+        )
+      ).map((r) => r.eventType);
+
+    it('pages 250 orders with a cursor and updatedSince, each once and in order (BN-TASK-017)', async () => {
+      const code = `E2E-PAGE250-${RUN_ID}`;
+      // Groups of three share an updatedAt, so the id tie-breaker is exercised too.
+      await tenantRows(
+        `INSERT INTO "${tenantASchema}".payment_orders
+           (id,"tenantId","orderReference","merchantReferenceCode",amount,status,"createdAt","updatedAt")
+         SELECT gen_random_uuid(), $1, $2 || '-' || i, $2, 10.00, 'PENDING', now(),
+                date_trunc('second', now()) - interval '10 minutes' + (i / 3) * interval '1 second'
+           FROM generate_series(1, 250) AS i`,
+        [tenantAId, code],
+      );
+      const since = new Date(Date.now() - 60 * 60_000).toISOString();
+      const seen: { id: string; updatedAt: string }[] = [];
+      let cursor: string | null = null;
+      let pages = 0;
+      do {
+        const query: string = `limit=100&merchantReferenceCode=${encodeURIComponent(code)}&updatedSince=${encodeURIComponent(since)}${cursor === null ? '' : `&cursor=${cursor}`}`;
+        const page = await call('GET', `/t/payments/orders?${query}`, ownerToken, undefined, tenantHeader());
+        expect(page.status).toBe(200);
+        const items = page.body['items'] as {
+          id: string;
+          updatedAt: string;
+          merchantReferenceCode: string;
+        }[];
+        expect(items.length).toBeLessThanOrEqual(100);
+        seen.push(...items.map((o) => ({ id: o.id, updatedAt: o.updatedAt })));
+        cursor = page.body['nextCursor'] as string | null;
+        pages += 1;
+      } while (cursor !== null && pages < 10);
+      expect(pages).toBe(3);
+      expect(seen).toHaveLength(250);
+      expect(new Set(seen.map((o) => o.id)).size).toBe(250);
+      // Oldest change first: what an incremental sync stores as its watermark.
+      const times = seen.map((o) => o.updatedAt);
+      expect([...times].sort()).toEqual(times);
+
+      const paidOnly = await call(
+        'GET',
+        `/t/payments/orders?status=PAID&merchantReferenceCode=${encodeURIComponent(code)}`,
+        ownerToken,
+        undefined,
+        tenantHeader(),
+      );
+      expect(paidOnly.body['items']).toEqual([]);
+      for (const bad of ['cursor=forged', 'status=PAYED', 'updatedSince=yesterday']) {
+        const res = await call('GET', `/t/payments/orders?${bad}`, ownerToken, undefined, tenantHeader());
+        expect(res.status).toBe(400);
+      }
+    });
+
+    it('reads one order with what a consumer reconciles against (BN-TASK-017)', async () => {
+      const { id } = await createOrder(`E2E-FIELDS-${RUN_ID}`, '650.00', { checkoutMode: 'custom' });
+      provider.declineNext = true;
+      const declined = await call(
+        'POST',
+        `/t/payments/orders/${id}/charge`,
+        ownerToken,
+        { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE },
+        tenantHeader(),
+      );
+      expect(declined.status).toBe(200);
+      const paid = await call(
+        'POST',
+        `/t/payments/orders/${id}/charge`,
+        ownerToken,
+        { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE },
+        tenantHeader(),
+      );
+      expect(paid.body['orderStatus']).toBe('PAID');
+
+      const one = await call('GET', `/t/payments/orders/${id}`, ownerToken, undefined, tenantHeader());
+
+      expect(one.status).toBe(200);
+      expect(one.body).toMatchObject({
+        status: 'PAID',
+        verifiedAmount: '650.00',
+        netpayTransactionId: paid.body['transactionTokenId'],
+        refundedAmount: '0.00',
+        failureCode: null,
+        paidAfterCancelAt: null,
+        attempts: {
+          count: 2,
+          items: [
+            expect.objectContaining({ attemptNo: 1, status: 'FAILED' }),
+            expect.objectContaining({ attemptNo: 2, status: 'PAID' }),
+          ],
+        },
+      });
+    });
+
+    it('cancels an unpaid hosted order once, and refuses a charge afterwards (BN-TASK-018)', async () => {
+      const { id } = await createOrder(`E2E-CANCEL-${RUN_ID}`);
+      const res = await call(
+        'POST',
+        `/t/payments/orders/${id}/cancel`,
+        ownerToken,
+        undefined,
+        tenantHeader(),
+      );
+      expect(res.status).toBe(200);
+      expect(res.body['status']).toBe('CANCELLED');
+      expect(await outboxOf(id)).toEqual(['payment.cancelled']);
+
+      const again = await call(
+        'POST',
+        `/t/payments/orders/${id}/cancel`,
+        ownerToken,
+        undefined,
+        tenantHeader(),
+      );
+      expect(again.status).toBe(200);
+      expect(await outboxOf(id)).toEqual(['payment.cancelled']);
+
+      const charge = await call(
+        'POST',
+        `/t/payments/orders/${id}/charge`,
+        ownerToken,
+        { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE },
+        tenantHeader(),
+      );
+      expect(charge.status).toBe(409);
+      expect(errorCode(charge.body)).toBe('ORDER_STATE_CONFLICT');
+      const viewer = await call(
+        'POST',
+        `/t/payments/orders/${id}/cancel`,
+        viewerAccessToken,
+        undefined,
+        tenantHeader(),
+      );
+      expect(viewer.status).toBe(403);
+    });
+
+    it('refuses to cancel a paid order (BN-TASK-018)', async () => {
+      const { id } = await createOrder(`E2E-CANCEL-PAID-${RUN_ID}`, '650.00', { checkoutMode: 'custom' });
+      await call(
+        'POST',
+        `/t/payments/orders/${id}/charge`,
+        ownerToken,
+        { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE },
+        tenantHeader(),
+      );
+      const res = await call(
+        'POST',
+        `/t/payments/orders/${id}/cancel`,
+        ownerToken,
+        undefined,
+        tenantHeader(),
+      );
+      expect(res.status).toBe(409);
+      expect(errorCode(res.body)).toBe('ORDER_STATE_CONFLICT');
+      expect((await orderRow(id)).status).toBe('PAID');
+    });
+
+    it('keeps a cancelled order CANCELLED when it is paid anyway, and tells the consumer (BN-TASK-018)', async () => {
+      const { id, row } = await createOrder(`E2E-LATE-${RUN_ID}`);
+      expect(
+        (await call('POST', `/t/payments/orders/${id}/cancel`, ownerToken, undefined, tenantHeader())).status,
+      ).toBe(200);
+      const tx = `txn_late_${RUN_ID}`;
+      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+
+      expect((await notifyHosted(row.checkoutSessionId!, tx)).status).toBe(202);
+
+      const deadline = Date.now() + 15_000;
+      let late:
+        { status: string; paidAfterCancelAt: Date | null; netpayTransactionId: string | null } | undefined;
+      while (Date.now() < deadline) {
+        [late] = await tenantRows<{
+          status: string;
+          paidAfterCancelAt: Date | null;
+          netpayTransactionId: string | null;
+        }>(
+          `SELECT status, "paidAfterCancelAt", "netpayTransactionId" FROM "${tenantASchema}".payment_orders WHERE id = $1`,
+          [id],
+        );
+        if (late?.paidAfterCancelAt !== null && late !== undefined) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      expect(late).toMatchObject({ status: 'CANCELLED', netpayTransactionId: tx });
+      expect(late?.paidAfterCancelAt).not.toBeNull();
+      expect(await outboxOf(id)).toEqual(['payment.cancelled', 'payment.paid_after_cancel']);
+      const audit = await adminPool.query<{ metadata: Record<string, unknown> }>(
+        `SELECT metadata FROM "audit_logs" WHERE "tenantId" = $1 AND action = 'payment.paid_after_cancel' AND "resourceId" = $2`,
+        [tenantAId, id],
+      );
+      expect(audit.rows[0]?.metadata).toMatchObject({
+        outcome: 'LATE_PAYMENT_ON_CANCELLED',
+        status: 'CANCELLED',
+      });
+      const view = await call('GET', `/t/payments/orders/${id}`, ownerToken, undefined, tenantHeader());
+      expect(view.body['paidAfterCancelAt']).toEqual(expect.any(String));
+    });
+
+    it('accepts hosted return URLs only from the tenant allowlist once it is set (BN-TASK-021)', async () => {
+      const set = await call(
+        'PATCH',
+        '/t/payments/config',
+        ownerToken,
+        { allowedReturnOrigins: ['https://shop.example.com'] },
+        tenantHeader(),
+      );
+      expect(set.status).toBe(200);
+      expect(set.body['allowedReturnOrigins']).toEqual(['https://shop.example.com']);
+
+      for (const [successUrl, status] of [
+        ['https://evil.example/phish', 422],
+        ['http://shop.example.com/ok', 422],
+      ] as const) {
+        const res = await call(
+          'POST',
+          '/t/payments/orders',
+          ownerToken,
+          { merchantReferenceCode: `E2E-RET-${RUN_ID}`, amount: '10.00', successUrl },
+          tenantHeader(),
+        );
+        expect(res.status).toBe(status);
+        expect(errorCode(res.body)).toBe('RETURN_URL_NOT_ALLOWED');
+      }
+      const ok = await call(
+        'POST',
+        '/t/payments/orders',
+        ownerToken,
+        {
+          merchantReferenceCode: `E2E-RET-${RUN_ID}`,
+          amount: '10.00',
+          successUrl: 'https://shop.example.com/ok',
+        },
+        tenantHeader(),
+      );
+      expect(ok.status).toBe(201);
+      const badOrigin = await call(
+        'PATCH',
+        '/t/payments/config',
+        ownerToken,
+        { allowedReturnOrigins: ['http://shop.example.com'] },
+        tenantHeader(),
+      );
+      expect(badOrigin.status).toBe(400);
+    });
+
+    it('charges only in the currencies the tenant is enabled for (BN-TASK-022)', async () => {
+      const usd = {
+        merchantReferenceCode: `E2E-USD-${RUN_ID}`,
+        amount: '10.00',
+        currency: 'USD',
+        checkoutMode: 'custom',
+      };
+      const refused = await call('POST', '/t/payments/orders', ownerToken, usd, tenantHeader());
+      expect(refused.status).toBe(422);
+      expect(errorCode(refused.body)).toBe('CURRENCY_NOT_ENABLED');
+      const enable = await call(
+        'PATCH',
+        '/t/payments/config',
+        ownerToken,
+        { allowedCurrencies: ['MXN', 'USD'] },
+        tenantHeader(),
+      );
+      expect(enable.status).toBe(200);
+      const accepted = await call('POST', '/t/payments/orders', ownerToken, usd, tenantHeader());
+      expect(accepted.status).toBe(201);
+      expect(accepted.body['currency']).toBe('USD');
+    });
+
+    it('reports drift of the webhook Netpay calls, and none once it is this deployment (BN-TASK-026)', async () => {
+      provider.registeredWebhook = `https://betydeliv.replit.app/api/v1/payments/webhook/${webhookToken}`;
+      const drifted = await call('GET', '/t/payments/config/webhook', ownerToken, undefined, tenantHeader());
+      expect(drifted.status).toBe(200);
+      expect(drifted.body).toMatchObject({
+        drift: true,
+        reason: 'origin',
+        expected: 'https://api.example.com/api/v1/payments/webhook/{token}',
+        webhook: 'https://betydeliv.replit.app/api/v1/payments/webhook/[REDACTED]',
+      });
+      expect(JSON.stringify(drifted.body)).not.toContain(webhookToken);
+      const [stored] = await tenantRows<{ webhookDrift: boolean | null }>(
+        `SELECT "webhookDrift" FROM "${tenantASchema}".payment_provider_config WHERE active`,
+      );
+      expect(stored?.webhookDrift).toBe(true);
+
+      provider.registeredWebhook = `https://api.example.com/api/v1/payments/webhook/${webhookToken}`;
+      const fine = await call('GET', '/t/payments/config/webhook', ownerToken, undefined, tenantHeader());
+      expect(fine.body).toMatchObject({ drift: false, reason: 'match' });
+
+      // The authenticated readiness report carries the cached summary; the public one does not.
+      const ready = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const req = httpRequest(
+          `${BASE_URL}/health/ready`,
+          { method: 'GET', headers: { authorization: `Bearer ${adminAccessToken}` } },
+          (r) => {
+            const chunks: Buffer[] = [];
+            r.on('data', (c: Buffer) => chunks.push(c));
+            r.on('end', () =>
+              resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>),
+            );
+          },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+      expect(ready['netpayWebhookDrift']).toMatchObject({
+        status: expect.stringMatching(/^(ok|drift|unknown)$/) as unknown,
+      });
+      expect((await root('/health/ready')).body).not.toHaveProperty('netpayWebhookDrift');
+    });
+
+    it('refunds an old order with the configuration it was created with, after a key change (BN-TASK-024)', async () => {
+      const { id } = await createOrder(`E2E-CFG-V1-${RUN_ID}`, '650.00', { checkoutMode: 'custom' });
+      await call(
+        'POST',
+        `/t/payments/orders/${id}/charge`,
+        ownerToken,
+        { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE },
+        tenantHeader(),
+      );
+      expect((await orderRow(id)).status).toBe('PAID');
+
+      const changed = await call(
+        'POST',
+        '/t/payments/config',
+        ownerToken,
+        { ...VALID_CONFIG, secretKey: 'sk_netpay_e2esecondkey' },
+        tenantHeader(),
+      );
+      expect(changed.status).toBe(200);
+      // A new secret means a new webhook URL: a new token, shown once, to register again.
+      const newToken = String(changed.body['webhookToken']);
+      expect(newToken.length).toBeGreaterThanOrEqual(24);
+      expect(newToken).not.toBe(webhookToken);
+      const versions = await tenantRows<{
+        version: number;
+        active: boolean;
+        webhookRegisteredAt: Date | null;
+      }>(
+        `SELECT version, active, "webhookRegisteredAt" FROM "${tenantASchema}".payment_provider_config ORDER BY version`,
+      );
+      expect(versions.filter((v) => v.active)).toHaveLength(1);
+      expect(versions[versions.length - 1]).toMatchObject({ active: true, webhookRegisteredAt: null });
+      // Only the new token still routes to this tenant.
+      const routes = await adminPool.query<{ live: string }>(
+        `SELECT count(*)::text AS live FROM "payment_webhook_registry" WHERE "tenantId" = $1 AND "revokedAt" IS NULL`,
+        [tenantAId],
+      );
+      expect(routes.rows[0]?.live).toBe('1');
+      webhookToken = newToken;
+
+      provider.calls.length = 0;
+      const refund = await call('POST', `/t/payments/orders/${id}/refund`, ownerToken, {}, tenantHeader());
+      expect(refund.status).toBe(200);
+      const auths = new Set(provider.calls.map((c) => c.authorization ?? c.apiKey));
+      expect(auths).toEqual(new Set([VALID_CONFIG.secretKey]));
+
+      provider.calls.length = 0;
+      await createOrder(`E2E-CFG-V2-${RUN_ID}`);
+      expect(new Set(provider.calls.map((c) => c.authorization))).toEqual(
+        new Set(['sk_netpay_e2esecondkey']),
+      );
+    });
+  });
+  describe('consumer disconnect and internal routes', () => {
+    it('lets a consumer disconnect: disable its endpoint and revoke its own key (BN-TASK-050)', async () => {
+      const issued = await call(
+        'POST',
+        '/api-keys',
+        ownerToken,
+        { name: `consumer-${RUN_ID}`, scopes: ['admin:*', 'webhooks:read', 'webhooks:write'] },
+        tenantHeader(),
+      );
+      expect(issued.status).toBe(201);
+      const key = String(issued.body['secret']);
+      const keyId = String(issued.body['id']);
+      const endpoint = await call(
+        'POST',
+        '/t/webhooks',
+        key,
+        { url: 'https://8.8.4.4/consumer', events: ['payment.paid'] },
+        tenantHeader(),
+      );
+      expect(endpoint.status).toBe(201);
+      const endpointId = String(
+        (endpoint.body['endpoint'] as Record<string, unknown> | undefined)?.['id'] ?? endpoint.body['id'],
+      );
+
+      const disabled = await call(
+        'POST',
+        `/t/webhooks/${endpointId}/disable`,
+        key,
+        undefined,
+        tenantHeader(),
+      );
+      expect(disabled.status).toBe(204);
+      const [row] = await tenantRows<{ status: string }>(
+        `SELECT status FROM "${tenantASchema}".webhook_endpoints WHERE id = $1`,
+        [endpointId],
+      );
+      // The dispatcher fans events out to ACTIVE endpoints only.
+      expect(row?.status).toBe('DISABLED');
+
+      const revoked = await call('DELETE', `/api-keys/${keyId}`, key, undefined, tenantHeader());
+      expect(revoked.status).toBe(200);
+      expect(revoked.body['status']).toBe('REVOKED');
+
+      const after = await call('GET', '/t/webhooks', key, undefined, tenantHeader());
+      expect(after.status).toBe(401);
+      // The stable envelope (BN-REQ-API-002).
+      expect(after.body).toMatchObject({
+        error: { code: 'INVALID_API_KEY', retryable: false },
+        requestId: expect.any(String) as unknown,
+      });
+    });
+
+    it('accepts POST /internal/tick only with the scheduler’s Google ID token (BN-TASK-016)', async () => {
+      const tick = (authorization?: string) =>
+        new Promise<{ status: number; body: Record<string, unknown> }>((resolve, reject) => {
+          const req = httpRequest(
+            `${BASE_URL}/internal/tick`,
+            { method: 'POST', headers: authorization === undefined ? {} : { authorization } },
+            (r) => {
+              const chunks: Buffer[] = [];
+              r.on('data', (c: Buffer) => chunks.push(c));
+              r.on('end', () =>
+                resolve({
+                  status: r.statusCode ?? 0,
+                  body: JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>,
+                }),
+              );
+            },
+          );
+          req.on('error', reject);
+          req.end();
+        });
+      for (const authorization of [
+        undefined,
+        'Bearer not-a-token',
+        `Bearer ${ownerToken}`,
+        `Bearer ${adminAccessToken}`,
+      ]) {
+        const res = await tick(authorization);
+        expect(res.status).toBe(401);
+        expect((res.body['error'] as { code?: unknown } | undefined)?.code).toBe('UNAUTHENTICATED');
+      }
+      // Internal routes live outside the versioned API.
+      expect((await call('POST', '/internal/tick', ownerToken)).status).toBe(404);
     });
   });
 });

@@ -1,12 +1,15 @@
 import { jest } from '@jest/globals';
+import { Logger } from '@nestjs/common';
 import { Prisma } from '../generated/tenant-plane/client';
 import { PaymentOrdersService } from './payment-orders.service';
-import type { NetpayClient } from './netpay.client';
+import { NetpayRequestError, NetpayTransportError, type NetpayClient } from './netpay.client';
 import type { NetpayAddress } from './netpay-endpoints';
 import type { PaymentConfigService } from './payment-config.service';
 import type { PaymentEvents } from './payment-events';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import type { RequestContextService } from '../tenancy/request-context.service';
+import type { RecordEventInput } from './payment-events';
+import type { AuditEntry, AuditLogService } from '../audit/audit-log.service';
 
 const SCHEMA = 'tenant_acme_00000001';
 const TENANT_ID = '11111111-1111-4111-8111-111111111111';
@@ -86,11 +89,16 @@ function serviceOver(
   transaction: Record<string, unknown>,
 ): {
   service: PaymentOrdersService;
+  /** Attempt rows created, and attempt updates (`{ updated, where }`). */
+  attempts: Record<string, unknown>[];
+  /** Pending provider results written. */
+  pending: Record<string, unknown>[];
   writes: Record<string, unknown>[];
   claims: Record<string, unknown>[];
   /** Makes the next claim lose, the way the database reports a lost race. */
   loseClaimRace: () => void;
   emitted: string[];
+  audits: AuditEntry[];
   tokenizeAmount: jest.Mock<
     (env: string, key: string, amount: number) => Promise<{ tokenAmount: string; amount: number }>
   >;
@@ -111,6 +119,8 @@ function serviceOver(
   const writes: Record<string, unknown>[] = [];
   const claims: Record<string, unknown>[] = [];
   const emitted: string[] = [];
+  const attempts: Record<string, unknown>[] = [];
+  const pending: Record<string, unknown>[] = [];
   /** Flipped by a test to simulate losing the claim race, as the database would. */
   let claimWins = true;
   const client = {
@@ -124,9 +134,7 @@ function serviceOver(
         claims.push(args.where ?? {});
         return Promise.resolve({ count: claimWins ? 1 : 0 });
       }),
-      findFirstOrThrow: jest.fn(() =>
-        Promise.resolve({ status: rows[0]?.['status'] ?? 'PENDING', sequence: 0 }),
-      ),
+      findFirstOrThrow: jest.fn(() => Promise.resolve(rows[0] ?? { status: 'PENDING', sequence: 0 })),
       update: jest.fn((args: { data: Record<string, unknown> }) => {
         writes.push(args.data);
         const current = rows[0];
@@ -150,6 +158,38 @@ function serviceOver(
       create: jest.fn((args: { data: Record<string, unknown> }) => {
         writes.push({ created: args.data });
         return Promise.resolve(order({ id: 'order-new' }));
+      }),
+    },
+    paymentAttempt: {
+      // The order view lists the attempts (BN-TASK-017).
+      findMany: jest.fn(() => Promise.resolve(attempts.filter((a) => typeof a['attemptNo'] === 'number'))),
+      findFirst: jest.fn(() => {
+        const numbered = attempts.filter((a) => typeof a['attemptNo'] === 'number');
+        return Promise.resolve(numbered.length === 0 ? null : { attemptNo: numbered.length });
+      }),
+      create: jest.fn((args: { data: Record<string, unknown> }) => {
+        attempts.push(args.data);
+        return Promise.resolve(args.data);
+      }),
+      updateMany: jest.fn((args: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        attempts.push({ updated: args.data, where: args.where });
+        return Promise.resolve({ count: 1 });
+      }),
+    },
+    pendingProviderResult: {
+      create: jest.fn((args: { data: Record<string, unknown> }) => {
+        pending.push(args.data);
+        return Promise.resolve(args.data);
+      }),
+    },
+    paymentCustomer: {
+      // The tenant's own customers; `cus_1` is the one the stored-card tests use.
+      findFirst: jest.fn((args: { where: { netpayCustomerId?: string } }) =>
+        Promise.resolve(args.where.netpayCustomerId === 'cus_1' ? { id: 'pc-1' } : null),
+      ),
+      upsert: jest.fn((args: { create: Record<string, unknown> }) => {
+        writes.push({ customer: args.create });
+        return Promise.resolve({ id: 'pc-new' });
       }),
     },
   };
@@ -207,15 +247,26 @@ function serviceOver(
     assignCard,
     confirmCharge,
   } as unknown as NetpayClient;
+  // The outbox writer: records the status the event describes.
   const events = {
-    emitIfChanged: (_prev: string, next: string) => {
-      emitted.push(next);
-      return next;
+    record: (_tx: unknown, input: RecordEventInput) => {
+      emitted.push(input.order.status);
+      return Promise.resolve({});
     },
   } as unknown as PaymentEvents;
+  const audits: AuditEntry[] = [];
+  const audit = {
+    record: (entry: AuditEntry) => {
+      audits.push(entry);
+      return Promise.resolve();
+    },
+  } as unknown as AuditLogService;
 
   return {
-    service: new PaymentOrdersService(tenantPrisma, requestContext, config, netpay, events),
+    service: new PaymentOrdersService(tenantPrisma, requestContext, config, netpay, events, audit),
+    attempts,
+    pending,
+    audits,
     writes,
     claims,
     loseClaimRace: () => {
@@ -777,6 +828,362 @@ describe('PaymentOrdersService stored cards', () => {
       id: 'cus_1',
       identifier: 'buyer-1',
       cards: [{ token: 'token_a', default: true, lastFourDigits: '4242', brand: 'VISA' }],
+    });
+  });
+});
+
+describe('PaymentOrdersService provider outcome on a charge (BN-TASK-013)', () => {
+  const pending = (): Record<string, unknown> => order({ netpayTransactionId: null });
+  /** Whether a write cleared the operation claim. */
+  const releasedIn = (claims: Record<string, unknown>[]) => claims.length > 1;
+
+  it('keeps the claim when the charge times out: the buyer may have been charged', async () => {
+    const f = serviceOver([pending()], {});
+    f.createCharge.mockRejectedValueOnce(new NetpayTransportError('/v3.5/charges/', new Error('timeout')));
+    await expect(
+      f.service.chargeToken('order-1', { cardToken: 'token_abcdefghij', billing: billing(), ...DEVICE }),
+    ).rejects.toMatchObject({ code: 'PROVIDER_OUTCOME_UNKNOWN', status: 504, retryable: true });
+    // The first updateMany is the claim itself; a second would be the release.
+    expect(releasedIn(f.claims)).toBe(false);
+  });
+
+  it('releases the claim when the timeout happened before the charge was sent', async () => {
+    const f = serviceOver([pending()], {});
+    f.createClient.mockRejectedValueOnce(new NetpayTransportError('/v4/clients', new Error('timeout')));
+    await expect(
+      f.service.chargeToken('order-1', { cardToken: 'token_abcdefghij', billing: billing(), ...DEVICE }),
+    ).rejects.toMatchObject({ code: 'PROVIDER_OUTCOME_UNKNOWN' });
+    expect(f.createCharge).not.toHaveBeenCalled();
+    expect(releasedIn(f.claims)).toBe(true);
+  });
+
+  it('releases the claim when Netpay explicitly refuses the request', async () => {
+    const f = serviceOver([pending()], {});
+    f.createCharge.mockRejectedValueOnce(new NetpayRequestError(400, '/v3.5/charges/', 'Invalid Token'));
+    await expect(
+      f.service.chargeToken('order-1', { cardToken: 'token_abcdefghij', billing: billing(), ...DEVICE }),
+    ).rejects.toMatchObject({ code: 'PROVIDER_DECLINED', status: 502 });
+    expect(releasedIn(f.claims)).toBe(true);
+  });
+});
+
+describe('PaymentOrdersService decline codes (BN-TASK-020)', () => {
+  it('returns and persists the stable failure code, keeping the original internally', async () => {
+    const f = serviceOver([order({ netpayTransactionId: null })], { status: 'IN_PROCESS', amount: 150.75 });
+    f.createCharge.mockResolvedValueOnce({
+      transactionTokenId: 'txn-declined',
+      status: 'failed',
+      declineReason: 'Fondos insuficientes',
+      failureCode: 'INSUFFICIENT_FUNDS',
+      providerFailureCode: '51',
+    });
+    const result = await f.service.chargeToken('order-1', {
+      cardToken: 'token_abcdefghij',
+      billing: billing(),
+      ...DEVICE,
+    });
+    expect(result.failureCode).toBe('INSUFFICIENT_FUNDS');
+    expect(JSON.stringify(result)).not.toContain('"51"');
+    expect(f.writes.some((w) => w['failureCode'] === 'INSUFFICIENT_FUNDS')).toBe(true);
+    expect(f.writes.some((w) => w['providerFailureCode'] === '51')).toBe(true);
+  });
+
+  it('classifies a failure found by verification from the transaction response code', async () => {
+    const f = serviceOver([order()], { status: 'REJECT', amount: 150.75, responseCode: '54' });
+    await f.service.verifyOrder('order-1', 'txn-1');
+    expect(f.writes.some((w) => w['failureCode'] === 'CARD_EXPIRED')).toBe(true);
+  });
+
+  it('shows the failure code on the order view', async () => {
+    const f = serviceOver(
+      [
+        order({
+          status: 'FAILED',
+          failureCode: 'DO_NOT_HONOR',
+          providerFailureCode: '05',
+          paymentMethod: null,
+          paymentReference: null,
+          paymentReferenceExpiresAt: null,
+          refundedAmount: new Prisma.Decimal('0'),
+        }),
+      ],
+      {},
+    );
+    const view = await f.service.findById('order-1');
+    expect(view.failureCode).toBe('DO_NOT_HONOR');
+    // The original code is internal.
+    expect(JSON.stringify(view)).not.toContain('providerFailureCode');
+  });
+});
+
+describe('PaymentOrdersService stored-card ownership and digits (BN-TASK-053)', () => {
+  it('returns the last four digits Netpay reports, never the end of the token', async () => {
+    const f = serviceOver([order()], {});
+    f.createClient.mockResolvedValueOnce({
+      id: 'cus_new',
+      paymentSources: [{ source: 'token_abcdefghijklmnop', type: 'card' }],
+    });
+    f.getClient.mockResolvedValueOnce({
+      id: 'cus_new',
+      paymentSources: [{ source: 'token_abcdefghijklmnop', card: { lastFourDigits: '4242' } }],
+    });
+    const stored = await f.service.storeCard({
+      identifier: 'buyer',
+      firstName: 'A',
+      lastName: 'B',
+      email: 'a@b.mx',
+      phone: '5512345678',
+      cardToken: 'token_abcdefghijklmnop',
+    });
+    expect(stored.lastFourDigits).toBe('4242');
+  });
+
+  it('answers null rather than inventing digits when Netpay does not say', async () => {
+    const f = serviceOver([order()], {});
+    f.createClient.mockResolvedValueOnce({
+      id: 'cus_new',
+      paymentSources: [{ source: 'token_abcdefghijklmnop' }],
+    });
+    f.getClient.mockRejectedValueOnce(new NetpayTransportError('/v3/clients/cus_new', new Error('timeout')));
+    const stored = await f.service.storeCard({
+      identifier: 'buyer',
+      firstName: 'A',
+      lastName: 'B',
+      email: 'a@b.mx',
+      phone: '5512345678',
+      cardToken: 'token_abcdefghijklmnop',
+    });
+    expect(stored.lastFourDigits).toBeNull();
+  });
+
+  it.each([
+    ['getCustomer', (s: PaymentOrdersService) => s.getCustomer('cus_other')],
+    [
+      'assignCard',
+      (s: PaymentOrdersService) => s.assignCard('cus_other', { cardToken: 'token_abcdefghij', cvv: '123' }),
+    ],
+    ['deleteCard', (s: PaymentOrdersService) => s.deleteCard('cus_other', 'token_abcdefghij')],
+  ])('%s answers 404 for a customer that is not this tenant’s, without asking Netpay', async (_n, act) => {
+    const f = serviceOver([order()], {});
+    await expect(act(f.service)).rejects.toMatchObject({ status: 404 });
+    expect(f.getClient).not.toHaveBeenCalled();
+    expect(f.assignCard).not.toHaveBeenCalled();
+    expect(f.deleteCard).not.toHaveBeenCalled();
+  });
+
+  it('refuses to charge a stored card of a customer that is not this tenant’s', async () => {
+    const f = serviceOver([order({ netpayTransactionId: null })], {});
+    await expect(
+      f.service.chargeToken('order-1', {
+        cardToken: 'token_abcdefghij',
+        billing: billing(),
+        clientId: 'cus_other',
+        cvv: '123',
+        ...DEVICE,
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(f.createCharge).not.toHaveBeenCalled();
+  });
+
+  it('records the customer when a charge saves the card, so it can be charged again', async () => {
+    const f = serviceOver([order({ netpayTransactionId: null })], { status: 'DONE', amount: 150.75 });
+    await f.service.chargeToken('order-1', {
+      cardToken: 'token_abcdefghij',
+      billing: billing(),
+      saveCard: true,
+      ...DEVICE,
+    });
+    expect(
+      f.writes.some(
+        (w) => (w['customer'] as Record<string, unknown> | undefined)?.['netpayCustomerId'] === 'cus_new',
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('PaymentOrdersService status changes: audit and metrics (BN-TASK-030, BN-TASK-044)', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('audits a webhook-driven PENDING → PAID as the system, with the tenant and the order', async () => {
+    const { service, audits } = serviceOver([order()], { status: 'DONE', amount: 150.75 });
+    await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
+    expect(audits).toEqual([
+      expect.objectContaining({
+        tenantId: TENANT_ID,
+        actorType: 'SYSTEM',
+        action: 'payment.status_changed',
+        resourceType: 'payment_order',
+        resourceId: 'order-1',
+        metadata: expect.objectContaining({
+          orderId: 'order-1',
+          from: 'PENDING',
+          to: 'PAID',
+          event: 'payment.paid',
+          source: 'webhook',
+        }) as unknown,
+      }),
+    ]);
+  });
+
+  it('logs payment_status_change for the log-based metric', async () => {
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    const { service } = serviceOver([order()], { status: 'DONE', amount: 150.75 });
+    await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'payment_status_change',
+        orderId: 'order-1',
+        from: 'PENDING',
+        to: 'PAID',
+      }),
+    );
+  });
+
+  it('neither audits nor logs a verification that changed nothing', async () => {
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    const { service, audits } = serviceOver([order({ status: 'PAID' })], { status: 'DONE', amount: 150.75 });
+    await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
+    expect(audits).toHaveLength(0);
+    expect(log).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'payment_status_change' }));
+  });
+
+  it.each(['PARTIALLY_REFUNDED', 'REFUNDED'])(
+    'does not drag a %s order back on a later verification',
+    async (status) => {
+      const { service, writes, emitted } = serviceOver([order({ status })], {
+        status: 'CANCELED',
+        amount: 150.75,
+      });
+      const result = await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
+      expect(result).toEqual({ orderId: 'order-1', status, changed: false, emittedEvent: null });
+      expect(writes).toHaveLength(0);
+      expect(emitted).toHaveLength(0);
+    },
+  );
+});
+
+describe('PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TASK-015)', () => {
+  const token = 'token_abcdefghij';
+  const charge = (service: PaymentOrdersService) =>
+    service.chargeToken('order-1', { cardToken: token, billing: billing(), ...DEVICE });
+
+  it('turns the order CHARGE_UNKNOWN with an UNKNOWN attempt when the charge gets no answer', async () => {
+    const f = serviceOver([order({ netpayTransactionId: null })], {});
+    f.createCharge.mockRejectedValueOnce(new NetpayTransportError('/v3.5/charges/', new Error('timeout')));
+    await expect(charge(f.service)).rejects.toMatchObject({ code: 'PROVIDER_OUTCOME_UNKNOWN' });
+    expect(f.writes.some((w) => w['status'] === 'CHARGE_UNKNOWN')).toBe(true);
+    expect(f.attempts).toEqual([
+      expect.objectContaining({ attemptNo: 1, netpayTransactionId: null, status: 'UNKNOWN' }),
+    ]);
+    // Only the claim itself: nothing released it.
+    expect(f.claims).toHaveLength(1);
+    // CHARGE_UNKNOWN is not announced: nothing was concluded.
+    expect(f.emitted).toEqual([]);
+  });
+
+  it('refuses a new charge with 409 ORDER_STATE_CONFLICT while the order is CHARGE_UNKNOWN', async () => {
+    const f = serviceOver([order({ status: 'CHARGE_UNKNOWN', netpayTransactionId: null })], {});
+    await expect(charge(f.service)).rejects.toMatchObject({
+      code: 'ORDER_STATE_CONFLICT',
+      status: 409,
+      details: { status: 'CHARGE_UNKNOWN' },
+    });
+    expect(f.createCharge).not.toHaveBeenCalled();
+    expect(f.claims).toHaveLength(0);
+  });
+
+  it('accepts a new card on a FAILED order, as attempt 2 of the transaction it had', async () => {
+    const f = serviceOver([order({ status: 'FAILED', netpayTransactionId: 'txn-1' })], {
+      status: 'DONE',
+      amount: 150.75,
+    });
+    const result = await charge(f.service);
+    expect(f.createCharge).toHaveBeenCalledTimes(1);
+    // The guard is now "the transaction checked is still the bound one", not "none is bound".
+    expect(f.claims[0]).toMatchObject({
+      netpayTransactionId: 'txn-1',
+      status: { in: ['PENDING', 'PENDING_VERIFICATION', 'FAILED'] },
+    });
+    expect(f.attempts[0]).toMatchObject({
+      attemptNo: 2,
+      netpayTransactionId: 'txn-charged',
+      status: 'SUBMITTED',
+    });
+    // The new attempt leaves FAILED behind before Netpay's verdict is applied.
+    expect(
+      f.writes.some(
+        (w) => w['status'] === 'PENDING_VERIFICATION' && w['netpayTransactionId'] === 'txn-charged',
+      ),
+    ).toBe(true);
+    expect(result.orderStatus).toBe('PAID');
+  });
+
+  it('marks an abandoned 3-D Secure attempt and accepts the new charge', async () => {
+    const f = serviceOver([order({ status: 'PENDING_VERIFICATION', netpayTransactionId: 'txn-1' })], {
+      status: 'WAIT_THREEDS',
+      amount: 150.75,
+    });
+    await charge(f.service);
+    expect(f.attempts[0]).toMatchObject({
+      updated: { status: 'ABANDONED' },
+      where: { netpayTransactionId: 'txn-1' },
+    });
+    expect(f.createCharge).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses with the PAID order when the previous attempt was charged after all', async () => {
+    const previous = order({
+      status: 'PENDING_VERIFICATION',
+      netpayTransactionId: 'txn-1',
+      refundedAmount: new Prisma.Decimal(0),
+    });
+    const f = serviceOver([previous], {
+      status: 'DONE',
+      amount: 150.75,
+    });
+    const refused = await charge(f.service).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: 'ORDER_STATE_CONFLICT', status: 409 });
+    const details = (refused as { details: { order: Record<string, unknown> } }).details;
+    expect(details.order).toMatchObject({ id: 'order-1', status: 'PAID', netpayTransactionId: 'txn-1' });
+    expect(f.createCharge).not.toHaveBeenCalled();
+    expect(f.emitted).toEqual(['PAID']);
+  });
+
+  it('refuses while the previous attempt is still undecided at Netpay', async () => {
+    const f = serviceOver([order({ status: 'PENDING', netpayTransactionId: 'txn-1' })], {
+      status: 'REVIEW',
+      amount: 150.75,
+    });
+    await expect(charge(f.service)).rejects.toMatchObject({ code: 'ORDER_STATE_CONFLICT' });
+    expect(f.createCharge).not.toHaveBeenCalled();
+  });
+
+  it('announces a decline of a second attempt although the order was already FAILED', async () => {
+    const f = serviceOver([order({ status: 'FAILED', netpayTransactionId: 'txn-1' })], {});
+    f.createCharge.mockResolvedValueOnce({
+      transactionTokenId: 'txn-2',
+      status: 'failed',
+      declineReason: 'Fondos insuficientes',
+      failureCode: 'INSUFFICIENT_FUNDS',
+    });
+    const result = await charge(f.service);
+    expect(result.orderStatus).toBe('FAILED');
+    expect(f.emitted).toEqual(['FAILED']);
+    expect(f.attempts[0]).toMatchObject({
+      attemptNo: 2,
+      status: 'FAILED',
+      declineCode: 'INSUFFICIENT_FUNDS',
+    });
+  });
+
+  it('settles the attempt that verification concludes', async () => {
+    const f = serviceOver([order({ status: 'CHARGE_UNKNOWN', netpayTransactionId: null })], {
+      status: 'DONE',
+      amount: 150.75,
+    });
+    await f.service.verifyOrder('order-1', 'txn-found');
+    expect(f.attempts[0]).toMatchObject({
+      updated: { netpayTransactionId: 'txn-found', status: 'PAID' },
     });
   });
 });

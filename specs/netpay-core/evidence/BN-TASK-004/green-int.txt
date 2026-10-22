@@ -1,0 +1,140 @@
+# BN-TASK-004 green (integration: outbox against PostgreSQL 17) — 2026-10-21T19:07:02Z
+# npm run test:int -- test/outbox.int-spec.ts
+
+> netpay-api@1.0.0 test:int
+> node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-int.json --runInBand test/outbox.int-spec.ts
+
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+(node:43820) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+  event: 'payment_status_change',
+  message: 'order 1ef6af9e-119b-4e2c-86bb-c203941634f1: PENDING → PAID',
+  orderId: '1ef6af9e-119b-4e2c-86bb-c203941634f1',
+  from: 'PENDING',
+  to: 'PAID',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order 1ef6af9e-119b-4e2c-86bb-c203941634f1: PAID → PARTIALLY_REFUNDED',
+  orderId: '1ef6af9e-119b-4e2c-86bb-c203941634f1',
+  from: 'PAID',
+  to: 'PARTIALLY_REFUNDED',
+  source: 'webhook'
+}
+(node:43820) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+  event: 'outbound_delivery_result',
+  message: 'delivery e716fb51-4ece-48fe-af58-7c236dd81356 attempt 1: delivered',
+  deliveryId: 'e716fb51-4ece-48fe-af58-7c236dd81356',
+  result: 'delivered',
+  attempt: 1,
+  httpStatus: 200,
+  latencyMs: 4
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery 73d566ce-64d9-476a-8475-cc4fad359e61 attempt 1: delivered',
+  deliveryId: '73d566ce-64d9-476a-8475-cc4fad359e61',
+  result: 'delivered',
+  attempt: 1,
+  httpStatus: 200,
+  latencyMs: 1
+}
+  event: 'payment_status_change',
+  message: 'order 3ab15d9a-8e6f-43a9-b4aa-ca8ed853f984: PENDING → PAID',
+  orderId: '3ab15d9a-8e6f-43a9-b4aa-ca8ed853f984',
+  from: 'PENDING',
+  to: 'PAID',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order 3ab15d9a-8e6f-43a9-b4aa-ca8ed853f984: PAID → PARTIALLY_REFUNDED',
+  orderId: '3ab15d9a-8e6f-43a9-b4aa-ca8ed853f984',
+  from: 'PAID',
+  to: 'PARTIALLY_REFUNDED',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order 3ab15d9a-8e6f-43a9-b4aa-ca8ed853f984: PARTIALLY_REFUNDED → REFUNDED',
+  orderId: '3ab15d9a-8e6f-43a9-b4aa-ca8ed853f984',
+  from: 'PARTIALLY_REFUNDED',
+  to: 'REFUNDED',
+  source: 'webhook'
+}
+  event: 'payment_status_change',
+  message: 'order f0a5051c-5ef8-4fe9-9167-7da1a33f4130: PENDING → PAID',
+  orderId: 'f0a5051c-5ef8-4fe9-9167-7da1a33f4130',
+  from: 'PENDING',
+  to: 'PAID',
+  source: 'webhook'
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery a0d981d8-c5cc-4580-8b01-73cabd00e685 attempt 1: delivered',
+  deliveryId: 'a0d981d8-c5cc-4580-8b01-73cabd00e685',
+  result: 'delivered',
+  attempt: 1,
+  httpStatus: 200,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery a0d981d8-c5cc-4580-8b01-73cabd00e685 attempt 1: delivered',
+  deliveryId: 'a0d981d8-c5cc-4580-8b01-73cabd00e685',
+  result: 'delivered',
+  attempt: 1,
+  httpStatus: 200,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery 04f85159-6308-419e-ac6a-f6896454a477 attempt 1: delivered',
+  deliveryId: '04f85159-6308-419e-ac6a-f6896454a477',
+  result: 'delivered',
+  attempt: 1,
+  httpStatus: 200,
+  latencyMs: 1
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery 04f85159-6308-419e-ac6a-f6896454a477 attempt 1: delivered',
+  deliveryId: '04f85159-6308-419e-ac6a-f6896454a477',
+  result: 'delivered',
+  attempt: 1,
+  httpStatus: 200,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery bcf19cd6-d347-411b-a388-be7687ce2527 attempt 1: delivered',
+  deliveryId: 'bcf19cd6-d347-411b-a388-be7687ce2527',
+  result: 'delivered',
+  attempt: 1,
+  httpStatus: 200,
+  latencyMs: 0
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery bcf19cd6-d347-411b-a388-be7687ce2527 attempt 1: delivered',
+  deliveryId: 'bcf19cd6-d347-411b-a388-be7687ce2527',
+  result: 'delivered',
+  attempt: 1,
+  httpStatus: 200,
+  latencyMs: 1
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery 5f85d188-6dda-468f-92a5-1a32df947e52 attempt 1: delivered',
+  deliveryId: '5f85d188-6dda-468f-92a5-1a32df947e52',
+  result: 'delivered',
+  attempt: 1,
+  httpStatus: 200,
+  latencyMs: 1
+}
+  event: 'outbound_delivery_result',
+  message: 'delivery 5f85d188-6dda-468f-92a5-1a32df947e52 attempt 1: delivered',
+  deliveryId: '5f85d188-6dda-468f-92a5-1a32df947e52',
+  result: 'delivered',
+  attempt: 1,
+  httpStatus: 200,
+  latencyMs: 0
+}
+Test Suites: 1 passed, 1 total
+Tests:       4 passed, 4 total
+Snapshots:   0 total
+Time:        4.059 s, estimated 5 s
+Ran all test suites matching test/outbox.int-spec.ts.

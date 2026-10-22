@@ -24,7 +24,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { Roles } from '../common/decorators/roles.decorator';
+import { DeclaredRbac, Roles } from '../common/decorators/roles.decorator';
 import { OptionalTenant } from '../common/decorators/current-tenant.decorator';
 import {
   CreateTenantDto,
@@ -73,6 +73,10 @@ export class TenantsController {
    * bugs (a missing header, an unexpected subdomain) are the usual cause.
    */
   @Get('context')
+  // Deliberately open to any authenticated principal: it only echoes the tenant
+  // this request already resolved to. Declared so the boot-time RBAC audit, which
+  // now sees every controller, records that as a decision rather than an omission.
+  @DeclaredRbac()
   @ApiOperation({
     summary: 'Resolved tenant for this request',
     description:

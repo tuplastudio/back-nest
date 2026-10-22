@@ -703,7 +703,7 @@ COMMON=(
   --concurrency=15 --cpu=1 --memory=512Mi --timeout=60 --no-cpu-throttling
   --startup-probe="httpGet.path=/health/live,initialDelaySeconds=0,periodSeconds=2,timeoutSeconds=2,failureThreshold=30"
   --liveness-probe="httpGet.path=/health/live,periodSeconds=30,timeoutSeconds=3,failureThreshold=3"
-  --set-env-vars="^@^NODE_ENV=production@API_PREFIX=api/v1@API_BASE_DOMAIN=netpay.tupla.dev@CORS_ORIGINS=https://app.tupla.dev@TRUST_PROXY_HOPS=2@DOCS_ENABLED=false@PII_LOG_REDACTION=true@LOG_LEVEL=log@DATABASE_POOL_MAX=10@DATABASE_CONNECTION_TIMEOUT_MS=15000@DATABASE_STATEMENT_TIMEOUT_MS=15000@PAYMENT_REDIRECT_URL=https://netpay.tupla.dev/api/v1/payments/return@PAYMENT_CANCEL_URL=https://app.tupla.dev/payments/cancelled"
+  --set-env-vars="^@^NODE_ENV=production@API_PREFIX=api/v1@API_BASE_DOMAIN=netpay.tupla.dev@CORS_ORIGINS=https://app.tupla.dev@TRUST_PROXY_HOPS=2@DOCS_ENABLED=false@PII_LOG_REDACTION=true@LOG_LEVEL=log@DATABASE_POOL_MAX=10@DATABASE_CONNECTION_TIMEOUT_MS=15000@DATABASE_STATEMENT_TIMEOUT_MS=15000@PAYMENT_REDIRECT_URL=https://app.tupla.dev/payments/return@PAYMENT_CANCEL_URL=https://app.tupla.dev/payments/cancelled"
   --set-secrets="CONTROL_PLANE_DATABASE_URL=control-plane-db-url:latest,TENANT_PLANE_DATABASE_URL=tenant-plane-db-url:latest,JWT_ACCESS_SECRET=jwt-access-secret:latest,JWT_REFRESH_SECRET=jwt-refresh-secret:latest,PII_HMAC_KEY=pii-hmac-key:latest,PII_ENCRYPTION_KEY=pii-encryption-key:latest,NETPAY_ENCRYPTION_KEY=netpay-encryption-key:latest"
 )
 
@@ -724,16 +724,34 @@ gcloud run deploy "$CANARY_SERVICE" "${COMMON[@]}" \
 
 ### 11.3 Flags del servicio
 
-| Flag                      | Valor                               | Motivo                                                                                      |
-| ------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------- |
-| `--vpc-egress`            | `all-traffic`                       | **Obligatorio** para que Neon vea la IP del NAT (ADR-002).                                  |
-| `--no-cpu-throttling`     | activo                              | El dispatcher de webhooks (`setInterval` de 5 s) y Argon2id necesitan CPU entre peticiones. |
-| `--min-instances`         | `1` (prod)                          | Evita pagar arranque de Nest + TLS + conexión en la primera petición.                       |
-| `--max-instances`         | `4`                                 | Ver [§15](#15-capacidad-y-conexiones).                                                      |
-| `--concurrency`           | `15`                                | Argon2id es CPU puro; con 1 vCPU no conviene más.                                           |
-| `--timeout`               | `60`                                | Techo por petición.                                                                         |
-| `--ingress`               | `internal-and-cloud-load-balancing` | La URL `run.app` deja de ser pública; todo pasa por el LB con Cloud Armor.                  |
-| `--allow-unauthenticated` | solo en producción                  | La autenticación es de la aplicación (JWT/API key); sin esto el LB recibe 403 de IAM.       |
+Declarados en [`.github/cloudrun/flags.json`](../.github/cloudrun/flags.json)
+(BN-REQ-OPS-007), que es la fuente de verdad: `deploy-environment.yml` los
+aplica en **cada** despliegue mediante `scripts/gcp/cloudrun-flags.sh args`, y
+`drift-check.yml` compara a diario el servicio real con el fichero
+(`cloudrun-flags.sh check`) y falla si alguien los cambió a mano. Para cambiar
+un flag: PR que edite `flags.json` y esta tabla a la vez (un test de
+`scripts/ci/workflow-policy.spec.ts` comprueba que coinciden).
+
+| Flag                      | Producción                          | Staging       | Motivo                                                                                      |
+| ------------------------- | ----------------------------------- | ------------- | ------------------------------------------------------------------------------------------- |
+| `--vpc-egress`            | `all-traffic`                       | `all-traffic` | **Obligatorio** para que Neon vea la IP del NAT (ADR-002).                                  |
+| `--cpu-throttling`        | throttling                          | throttling    | Decisión del dueño (2026-10-21): costo mínimo. El dispatcher de webhooks y la conciliación solo avanzan mientras hay tráfico; staging además los dispara con Cloud Scheduler cada 15 min. |
+| `--min-instances`         | `0`                                 | `0`           | Escala a cero: la primera petición tras inactividad paga el arranque (~11 s con Neon).      |
+| `--max-instances`         | `4`                                 | `2`           | Ver [§15](#15-capacidad-y-conexiones).                                                      |
+| `--concurrency`           | `15`                                | `15`          | Argon2id es CPU puro; con 1 vCPU no conviene más.                                           |
+| `--timeout`               | `60`                                | `300`         | Techo por petición.                                                                         |
+| `--cpu` / `--memory`      | `1` / `512Mi`                       | igual         |                                                                                             |
+| `--ingress`               | `all`                               | `all`         | Objetivo: `internal-and-cloud-load-balancing` cuando exista el LB con Cloud Armor (BN-TASK-049, [§13](#13-fase-8--balanceador-cloud-armor-y-dominio)). Cambiarlo antes deja `run.app` inalcanzable: sería una caída. |
+| `--allow-unauthenticated` | solo en producción                  | no            | La autenticación es de la aplicación (JWT/API key); sin esto el LB recibe 403 de IAM. No lo gestiona `flags.json`: es IAM, no un flag de revisión. |
+
+Producción corre en `min-instances=0` con CPU throttling por decisión del dueño
+(2026-10-21, costo mínimo). Consecuencia: los eventos salientes y la
+conciliación de pagos solo avanzan mientras la API recibe tráfico, y la primera
+petición tras inactividad paga el arranque. Para eventos inmediatos y sin
+arranque en frío en cobros: `min-instances=1` + `--no-cpu-throttling`
+(~$50 USD/mes; se cambia `flags.json` y esta tabla en el mismo PR) o un Cloud
+Scheduler a `/internal/tick` ([§11.7](#117-conciliación-y-post-internaltick)),
+que hoy existe solo para staging.
 
 **Probes.** Ambos sobre `/health/live`. **No** usar `/health/ready` como startup/liveness: devuelve 503 si Postgres no responde y un probe que falla reinicia el contenedor; con Neon un despertar lento del compute provocaría reinicios en bucle. `/health/ready` es para monitorización y uptime checks. Nota: `onModuleInit` de ambos servicios Prisma hace `SELECT 1` al arrancar, por lo que el startup probe (hasta 60 s) ya exige BD alcanzable.
 
@@ -829,107 +847,149 @@ mirar `spec.template.metadata.annotations` (un export en YAML lo deja claro).
 
 ---
 
+### 11.7 Conciliación y `POST /internal/tick`
+
+La conciliación de pagos (BN-TASK-016, `src/payments/reconciliation/`) re-verifica con NetPay las órdenes no
+terminales, expira 3-D Secure abandonados y referencias OXXO vencidas, aplica resultados pendientes y detecta
+pagos tardíos de órdenes canceladas (procedimientos en [`RUNBOOK-PAYMENTS.md` §1](RUNBOOK-PAYMENTS.md#1-conciliación-manual)).
+Se dispara de dos formas:
+
+1. **En proceso**, cada `RECONCILE_INTERVAL_MS` (5 min, con jitter) mientras la instancia vive
+   (`RECONCILE_ENABLED=true` por defecto). Con `min-instances=0` y CPU throttling eso es **solo mientras hay
+   tráfico**.
+2. **`POST /internal/tick`** (fuera del prefijo `/api/v1`, como `/health`): una pasada de conciliación y un ciclo de
+   despacho de webhooks salientes. Lo autentica su propio guard con un **token OIDC de Google**: firma RS256 contra
+   el JWKS de Google, `iss` de Google, `aud` = `INTERNAL_TICK_AUDIENCE` (la URL del servicio; por defecto
+   `PUBLIC_BASE_URL`) y `email` = `INTERNAL_TICK_SA_EMAIL` verificado. Cualquier otro token → `401`; un token de
+   Google de otra identidad → `403`; sin `INTERNAL_TICK_SA_EMAIL` → `401` siempre. Está exento de los throttlers y
+   declarado como ruta interna en la auditoría RBAC del arranque (`@InternalOnly()`).
+
+| Entorno | Cloud Scheduler | Cómo |
+| --- | --- | --- |
+| Staging (`vondi-0q-staging`, `netpay-api-staging`, `us-east5`) | Cada 15 min | `scripts/gcp/scheduler-internal-tick.sh` (solo imprime; `--apply` lo ejecuta). Crea la SA `netpay-tick@vondi-0q-staging.iam.gserviceaccount.com` con `roles/run.invoker` sobre el servicio, fija `INTERNAL_TICK_SA_EMAIL`, `INTERNAL_TICK_AUDIENCE` y `PUBLIC_BASE_URL` y crea el job con `--oidc-service-account-email` y `--oidc-token-audience` = URL del servicio. **Requiere aprobación; no se ha ejecutado.** |
+| Producción (`vondi-0q`, `netpay-api`) | **No** | Decisión del dueño (costo mínimo). Consecuencia: sin tráfico no corren ni la conciliación ni el despacho; ver [`RUNBOOK-PAYMENTS.md` §1.2](RUNBOOK-PAYMENTS.md#12-cuándo-corre-la-conciliación-y-por-qué-en-producción-no-hay-scheduler) para forzar una pasada a mano. El script se niega a apuntar a producción. |
+
+Variables (todas validadas en `src/config/env.validation.ts`):
+
+| Variable | Defecto | Uso |
+| --- | --- | --- |
+| `RECONCILE_ENABLED` | `true` | Temporizador en proceso. `/internal/tick` responde igual con `false`. |
+| `RECONCILE_INTERVAL_MS` | `300000` | Entre pasadas del temporizador; `0` lo apaga. |
+| `RECONCILE_MIN_AGE_MS` | `300000` | Órdenes sin cambios en menos de esto no se tocan; también es el _lease_ por orden. |
+| `RECONCILE_BATCH_SIZE` | `50` | Órdenes por tenant y pasada. |
+| `RECONCILE_THREEDS_TIMEOUT_MS` | `1800000` | 3-D Secure esperando más de esto → `EXPIRED`. |
+| `RECONCILE_CHARGE_UNKNOWN_GRACE_MS` | `3600000` | `CHARGE_UNKNOWN` sin transacción más de esto → `PENDING`. |
+| `RECONCILE_NETPAY_RATE_PER_SECOND` | `5` | Llamadas a NetPay por segundo y tenant. |
+| `PUBLIC_BASE_URL` | — | Origen público del servicio; base del webhook esperado (drift, BN-TASK-026). |
+| `INTERNAL_TICK_SA_EMAIL` | — | Única identidad aceptada en `/internal/tick`. |
+| `INTERNAL_TICK_AUDIENCE` | `PUBLIC_BASE_URL` | Audiencia exigida al token. |
+
+Varias instancias son seguras: cada orden se toma con `FOR UPDATE SKIP LOCKED` + `reconcileLeaseUntil`, y cada
+escritura se condiciona al estado leído bajo el bloqueo de la fila. Métricas: `reconcile_checked`,
+`reconcile_corrected`, `reconcile_errors` y `netpay_webhook_drift` (`scripts/gcp/monitoring/log-metrics.sh`).
+
 ## 12. Fase 7 — GitHub Actions
 
 ### 12.1 Flujo
 
 ```
-verify ─► build ─► migrate ─► deploy (canario + revisión sin tráfico) ─► smoke ─► promote
-                                                                          │         │
-                                                       falla: nada llega  ┘         └ falla: rollback
+ci ─► build ─► migrate ─► deploy (--no-traffic --tag rc-<sha8>) ─► smoke (URL del tag) ─► promote 10 → 50 → 100
+ │                │                                                     │                    │
+ └ rojo: nada     └ falla: nada llega                                   └ rojo: sin tráfico  └ 5xx: rollback
 ```
 
-- Cada release usa un **nombre de revisión determinista** `r<sha7>-<intento>`; el nombre completo es `<servicio>-r<sha7>-<intento>`.
-- El canario es un servicio **separado** porque producción tiene ingress cerrado y su URL no es alcanzable desde CI.
-- El canario apunta a la **misma BD de producción** (solo lectura en el smoke) y con `OUTBOUND_WEBHOOK_ENABLED=false` para no despachar webhooks desde una versión no validada.
+- `ci` es un job de `deploy.yml` que llama a `ci.yml` (`workflow_call`); `deploy_staging` lo espera con `needs: ci` y `deploy_production` con `needs: [ci, deploy_staging]` (BN-REQ-OPS-001). Un push a `main` con tests en rojo no despliega.
+- Cada release usa un **nombre de revisión determinista** `r<sha>-<intento>`; el nombre completo es `<servicio>-r<sha>-<intento>`.
+- La revisión nueva se despliega **sin tráfico y con tag** `rc-<sha8>`: tiene URL propia (`https://rc-<sha8>---<servicio>-….run.app`) y el humo la prueba ahí. Sustituye al canario (`netpay-api-canary`), que ya no se despliega; el servicio puede borrarse a mano cuando se confirme el primer release con tags.
+- Mismo flujo en staging y producción. Solo cambian datos: los flags de [§11.3](#113-flags-del-servicio) y los escalones de `promote` (producción `10 50 100` con 5 min de observación por escalón; staging `100` con 90 s).
 
 ### 12.2 CI de verificación
 
 El Postgres de CI necesita los roles `mtb_control` y `mtb_app`. Un `services: postgres` no ejecuta `docker/postgres/init/01-roles.sql`; ejecutarlo con `psql` tras levantar el servicio (el script lee las contraseñas de `MTB_CONTROL_PASSWORD`/`MTB_APP_PASSWORD`, igual que `docker-compose.yml`; si no admite variables fuera de initdb, adaptar con `psql -v`).
 
-### 12.3 `.github/workflows/deploy.yml`
+### 12.3 Workflows
 
-Implementado en [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml),
-que es la fuente de verdad. Este resumen explica las decisiones; el YAML no se
-duplica aquí para que no derive.
-
-```
-verify ─► build ─► migrate ─► deploy (canario + revisión sin tráfico) ─► smoke ─► promote
-                                                                          │         │
-                                                       falla: nada llega  ┘         └ falla: rollback
-```
+Implementado en [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)
+(orquestador), [`ci.yml`](../.github/workflows/ci.yml) (verificación,
+reutilizable), [`deploy-environment.yml`](../.github/workflows/deploy-environment.yml)
+(un entorno, reutilizable) y [`drift-check.yml`](../.github/workflows/drift-check.yml)
+(programado). Los YAML son la fuente de verdad; aquí van las decisiones.
 
 | Job          | Qué hace                                                                                                   | Falla si…                        |
 | ------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `verify`     | gitleaks (set commiteable + histórico), format, lint, typecheck, migrations:validate, `test:cov` + subida a Codecov, roles de la BD, `prisma:seed`, `test:e2e` | algo del gate falla              |
-| `build`      | runtime y migrate por digest, con SBOM y provenance, y Trivy `HIGH,CRITICAL` con `exit-code: 1`            | la imagen tiene una vulnerabilidad |
-| `migrate`    | `gcloud run jobs execute --wait` con `--tasks=1 --parallelism=1 --max-retries=0`                            | la migración falla               |
-| `deploy`     | canario y revisión de producción con `--no-traffic`, nombre `r<sha>-<intento>`                              | el servicio no acepta la imagen  |
-| `smoke`      | `/health/live`, `/health/ready` y una ruta protegida (401/403) contra el canario                            | la revisión no sirve tráfico     |
-| `promote`    | `update-traffic` al 100% y verificación; si la revisión no queda `Ready=True`, vuelve el tráfico a la anterior | —                               |
+| `ci / verify` | gitleaks (set commiteable + histórico), format, lint, typecheck, `migrations:validate` (plano de control y tenants, y que ninguna migración ya mergeada cambió), scripts del pipeline con fixtures, `test:cov` con umbral de líneas en `src/payments` (80 %), `test:int` (migraciones de tenant contra Postgres), roles, seed, `test:e2e` | algo del gate falla |
+| `ci / scan`  | Trivy `HIGH,CRITICAL` con `exit-code: 1` sobre el árbol (`fs`) y sobre la imagen de runtime construida en local; un reintento ante fallo de descarga, el segundo intento es bloqueante | hay una vulnerabilidad sin ignorar en `.trivyignore` |
+| `build`      | runtime y migrate por digest, con SBOM y provenance                                                        | la imagen no construye           |
+| `migrate`    | Job con `npm run db:migrate:all`: plano de control y después tenants ([§12.5](#125-migraciones-por-tenant)); `--wait`, sin reintentos | una migración falla, un checksum no coincide o un tenant queda atrás |
+| `deploy`     | `gcloud run deploy --no-traffic --tag rc-<sha8>` con los flags de `.github/cloudrun/flags.json`             | el servicio no acepta la imagen  |
+| `smoke`      | `/health/live`, `/health/ready` y una ruta protegida (401/403) contra la URL del tag                         | la revisión no sirve; no recibe tráfico |
+| `promote`    | `Ready=True`, después por escalón `update-traffic` y `scripts/ci/revision-error-rate.sh` (5xx de la revisión en Cloud Monitoring, umbral 2 %); al acabar retira los tags `rc-` anteriores | 5xx sobre el umbral → `update-traffic --to-revisions=<anterior>=100` |
 
-Cuatro puntos donde la implementación difiere del diseño original de este
-documento, todos por una razón concreta:
+Decisiones que no son obvias:
 
 1. **El token de identidad del smoke lo emite la action de auth, no
    `gcloud auth print-identity-token`.** Ese comando rechaza credenciales WIF
-   (`external_account`); el smoke se quedaba sin token y el paso fallaba siempre.
-   Se usa `token_format: id_token` con `id_token_audience` = URL del canario.
+   (`external_account`). Se usa `token_format: id_token` con
+   `id_token_audience` = URL del servicio; Cloud Run lo acepta también en la URL
+   del tag.
 2. **`npm run secrets:staged` no sirve en CI.** Escanea el índice de git, que en
-   un checkout de Actions está vacío: escanearía cero ficheros. El gate usa
-   `npm run secrets` (set commiteable) y `npm run secrets:history`.
-3. **La ruta protegida del smoke es real**, no un marcador: `GET /api/v1/api-keys`
-   exige JWT (`API_PREFIX=api/v1`, ver `.env.example`).
-4. **Las migraciones se aplican antes del seed.** `prisma:seed` escribe en el
-   esquema, así que una base recién creada fallaría. Se usa
-   `npm run db:migrate:deploy`, que es el mismo entrypoint que ejecuta el Job de
-   producción (`scripts/migrate.ts`), y no un `prisma migrate deploy` suelto: el
-   CI ejercita la misma ruta que producción, incluido el guard que rechaza el
-   pooler.
+   un checkout de Actions está vacío. El gate usa `npm run secrets` y
+   `npm run secrets:history`.
+3. **La ruta protegida del smoke es real**: `GET /api/v1/api-keys` exige JWT.
+4. **Las migraciones se aplican antes del seed**, con `npm run db:migrate:deploy`,
+   el mismo entrypoint que el Job de producción.
+5. **El PR no tiene `paths-ignore`.** Los checks `CI / …` son obligatorios en
+   `main`; un workflow que no corre deja el check pendiente para siempre.
+6. **La revisión anterior se lee por porcentaje**, no como la primera entrada de
+   `status.traffic`: con tags, la lista incluye revisiones etiquetadas al 0 %.
+7. **La ventana de 5xx es de 30 min**: la revisión es nueva, así que es su
+   historial completo, y cubre el retraso de ingesta de Cloud Monitoring (~3 min).
 
 Detalles de `verify` que no son obvios:
 
 - El plano de control migra como el superusuario del Postgres de servicio y el
-  plano de datos conecta como `mtb_app`. Es lo mismo que `.env.test.example`: si
-  el plano de datos conectara como dueño de tabla, las políticas RLS no serían
-  exigibles porque un dueño las ignora.
+  plano de datos conecta como `mtb_app`. Si el plano de datos conectara como
+  dueño de tabla, las políticas RLS no serían exigibles.
 - `prisma.config.ts` lee `CONTROL_PLANE_DATABASE_URL_UNPOOLED` y **no** acepta
-  fallback a la URL normal, así que el paso de e2e tiene que exportar esa
-  variable o `prisma migrate deploy` falla.
-- `prisma/seed.ts` es quien crea el catálogo RBAC. Sin él, `seedAdmin` no
-  encuentra el rol `platform-owner` y toda ruta protegida responde 403.
+  fallback a la URL normal.
+- `prisma/seed.ts` crea el catálogo RBAC; sin él toda ruta protegida responde 403.
 - Las claves (PII, JWT, docs, seed) se generan efímeras por ejecución y se
-  comparten entre seed y e2e: `env.validation.ts` rechaza los placeholders de
-  `.env.example`, y si el seed y el servidor que arranca `beforeAll` usaran claves
-  distintas, las filas PII que el seed cifra no se podrían descifrar.
-- `01-roles.sql` usa `\getenv`, que necesita **psql 11 o superior**. En los
-  runners de GitHub hay psql 16; en un macOS con el psql de `/usr/bin` (13 o
-  anterior, o 9.x) el script aborta.
+  comparten entre seed y e2e.
+- `01-roles.sql` usa `\getenv`, que necesita **psql 11 o superior**.
 
-Notas del workflow:
+Protección y permisos (aplicar con
+[`scripts/github/protect-repo.sh`](../scripts/github/protect-repo.sh), que por
+defecto solo imprime; `--apply` escribe y `--verify` comprueba con `gh api`):
 
-- `environment: production` aplica reglas de protección (aprobadores) si se
-  configuran.
-- El deployer necesita `roles/run.invoker` sobre el canario para el smoke:
-  ```bash
-  gcloud run services add-iam-policy-binding "$CANARY" --region="$REGION" \
-    --member="serviceAccount:$DEPLOYER_SA" --role="roles/run.invoker"
-  gcloud iam service-accounts add-iam-policy-binding "$DEPLOYER_SA" \
-    --member="serviceAccount:$DEPLOYER_SA" --role="roles/iam.serviceAccountTokenCreator"
-  ```
-- Primero desplegar con `--no-traffic` y promover **por nombre de revisión**: el
-  nombre determinista (`<servicio>-r<sha>-<intento>`) evita depender de "la última
-  revisión".
+- Environment `production`: al menos un revisor y solo la rama `main`.
+- Environment `staging`: sin revisores ni política de ramas (los PR despliegan ahí).
+- Environments `staging-readonly` y `production-readonly`: solo para
+  `drift-check.yml`, que es programado y no puede esperar aprobación. Variables:
+  `GCP_PROJECT_ID`, `GCP_REGION`, `CLOUD_RUN_SERVICE`, `GCP_WIF_PROVIDER`,
+  `GCP_DRIFT_SA` (cuenta con `roles/run.viewer` y nada más; la condición de la
+  pool de WIF debe admitir `environment == <entorno>-readonly`).
+- Rama `main`: PR con 1 aprobación, revisiones obsoletas descartadas, checks
+  `CI / Verificación, tests y e2e` y `CI / Vulnerabilidades` obligatorios y al
+  día, sin force-push ni borrado, también para admins.
+- El deployer necesita `roles/run.invoker` sobre el servicio (humo con ID token)
+  y `roles/monitoring.viewer` en el proyecto (tasa de 5xx de `promote`).
 - `skip_migrations` es solo para hotfix: deja el esquema por detrás del código.
-- Rama `main` protegida: PR obligatorio, una revisión, checks obligatorios, sin
-  force-push.
-- Variables de GitHub (Environment `production`): `GCP_PROJECT_ID`, `GCP_REGION`,
-  `CLOUD_RUN_SERVICE`, `CLOUD_RUN_CANARY`, `MIGRATE_JOB`, `AR_REPOSITORY`,
-  `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`.
+- Variables de cada Environment de despliegue: `GCP_PROJECT_ID`, `GCP_REGION`,
+  `CLOUD_RUN_SERVICE`, `MIGRATE_JOB`, `MIGRATOR_SA`, `RUNTIME_SA`,
+  `AR_REPOSITORY`, `IMAGE_NAME`, `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`.
+  `CLOUD_RUN_CANARY` ya no se usa.
+
+Artifact Registry conserva las 10 versiones más recientes de cada imagen y
+borra lo demás con más de 30 días:
+[`scripts/gcp/artifact-cleanup-policy.json`](../scripts/gcp/artifact-cleanup-policy.json),
+aplicada con `scripts/gcp/apply-artifact-cleanup.sh --dry-run` (simulación) y
+después `--apply` (BN-REQ-OPS-008).
 
 ### 12.4 Compatibilidad de migraciones
 
-Cloud Run mantiene la revisión anterior hasta la promoción, por lo que las migraciones deben ser compatibles hacia atrás.
+Durante `promote` sirven a la vez la revisión anterior y la nueva (10 % y 50 %),
+y un rollback vuelve a la anterior sobre el esquema ya migrado: las migraciones
+siguen **expand/contract** y deben ser compatibles hacia atrás.
 
 | Permitido en un release       | Requiere dos releases |
 | ----------------------------- | --------------------- |
@@ -940,9 +1000,36 @@ Cloud Run mantiene la revisión anterior hasta la promoción, por lo que las mig
 
 ### 12.5 Migraciones por tenant
 
-`prisma/tenant-migrations/` se aplican en runtime por `TenantProvisionerService` **al aprovisionar** (la imagen las incluye). Un tenant ya provisionado **no** recibe migraciones nuevas: cualquier cambio de esquema que lo afecte requiere un script de backfill, fuera de este pipeline.
+El Job de migraciones ejecuta `npm run db:migrate:all`: primero el plano de
+control (`scripts/migrate.ts`) y después
+[`scripts/migrate-tenants.ts`](../scripts/migrate-tenants.ts), que aplica
+`prisma/tenant-migrations/` a **todo tenant ACTIVE** antes de que el release
+reciba tráfico (BN-REQ-OPS-002):
 
-El provisioner ejecuta `CREATE SCHEMA` y DDL por el cliente del plano de control (host **pooled**), dentro de transacciones interactivas; es compatible con el modo transacción y no hay advisory locks de sesión. Si el volumen de provisiones crece, moverlo a un Job con conexión directa.
+1. **Preflight**, solo lectura: compara el ledger de cada esquema con los
+   ficheros. Un checksum distinto (migración editada después de aplicarse), una
+   versión registrada sin fichero o una versión nueva por debajo de una ya
+   aplicada abortan **antes de tocar ningún esquema**.
+2. **Aplicación**, una transacción por esquema bajo
+   `pg_advisory_xact_lock(hashtext(<esquema>))`. Dos ejecuciones concurrentes (un
+   re-run, o el pipeline y un alta de tenant) se serializan y la segunda no
+   encuentra nada que hacer. Cada versión queda en
+   `<esquema>.tenant_schema_migrations (version, name, checksum sha256, baseline, appliedAt)`
+   y `tenants.schemaVersion` se actualiza en la misma transacción.
+3. **Verificación**: todos los tenants ACTIVE en la versión máxima, con una fila
+   de ledger por migración. Si no, el Job falla y no se despliega.
+
+Un esquema creado antes del ledger se **adopta**: las versiones hasta su
+`schemaVersion` se registran con `baseline = true` sin ejecutarse. El
+aprovisionamiento (`TenantProvisionerService.applyPendingMigrations`) usa el
+mismo código (`src/tenancy/tenant-migrations.ts`), el mismo lock y el mismo
+ledger. Los tenants SUSPENDED no se migran; reciben las migraciones pendientes
+con `POST /tenants/:id/migrate` o al reactivarse por ese mismo camino.
+
+Usa la conexión directa (`CONTROL_PLANE_DATABASE_URL_UNPOOLED`), como el plano de
+control. La CI valida las migraciones de tenant (`npm run migrations:validate`)
+y ejecuta la integración con 3 esquemas y ejecución concurrente
+(`npm run test:int`). Detalle en [MIGRATIONS.md](MIGRATIONS.md#tenant-migrations).
 
 ### 12.6 Provisionar un entorno nuevo
 
@@ -1157,16 +1244,51 @@ Las métricas del pooler (conexiones cliente/servidor, esperas) están en _Neon 
 
 Si la IP de salida cambia, Neon rechaza la conexión y los logs muestran un error de IP no permitida o de autenticación; el síntoma no apunta a la causa ([RB-05](#rb-05--la-ip-de-salida-cambió)).
 
-Uptime check externo contra el dominio público:
+Canal, uptime check, SLO y métricas están como scripts en
+[`scripts/gcp/monitoring/`](../scripts/gcp/monitoring/) (BN-REQ-OPS-003/005).
+Todos **solo imprimen** lo que harían; `--apply` lo ejecuta. Orden:
 
 ```bash
-gcloud monitoring uptime create netpay-api-ready \
-  --resource-type=uptime-url \
-  --resource-labels=host=netpay.tupla.dev,project_id="$PROJECT_ID" \
-  --path=/health/ready --protocol=https --period=1 --timeout=10
+export PROJECT_ID=vondi-0q SERVICE=netpay-api REGION=us-east5
+# 1. Canal on-call por email y añadirlo a todas las políticas existentes.
+CHANNEL=$(scripts/gcp/monitoring/notification-channel.sh oncall@tupla.dev --apply)
+# 2. Métricas log-based (las usa el SLO de latencia).
+scripts/gcp/monitoring/log-metrics.sh --apply
+# 3. Uptime check de /health/live y su alerta.
+HOST=netpay.tupla.dev CHANNEL="$CHANNEL" scripts/gcp/monitoring/uptime-check.sh --apply
+# 4. SLOs (disponibilidad 99,9 %, charge p95 < 1,5 s) y alertas de burn rate.
+CHANNEL="$CHANNEL" scripts/gcp/monitoring/slo.sh --apply
 ```
 
-(Los flags de `gcloud monitoring uptime` cambian entre versiones: confirmar con `--help`.)
+El uptime check va contra **`/health/live`**, no `/health/ready`. Además de que
+ready devuelve 503 mientras Neon despierta el compute, **`/health/ready` responde
+200 también en estado `degraded`** (p. ej. entregas de webhooks desactivadas o
+drift del webhook de NetPay): no sirve como señal de «sacar de rotación» ni como
+probe. El detalle de `degraded` se lee autenticado y se vigila con las
+alertas de 5xx y los SLO.
+
+Métricas log-based ([`log-metrics.sh`](../scripts/gcp/monitoring/log-metrics.sh)),
+sobre los logs JSON (`jsonPayload.*`); los nombres de evento son el contrato de
+`src/common/logging/payment-log-events.ts`:
+
+| Métrica                    | Tipo         | Origen                                         | Etiquetas            |
+| -------------------------- | ------------ | ---------------------------------------------- | -------------------- |
+| `payment_status_change`    | contador     | `event="payment_status_change"`                | `to`, `from`         |
+| `netpay_latency_ms`        | distribución | `event="netpay_request"`, `latencyMs`          | `operation`, `outcome` |
+| `outbound_delivery_result` | contador     | `event="outbound_delivery_result"`             | `result`             |
+| `charge_latency_ms`        | distribución | log de acceso de `POST …/orders/:id/charge`    | —                    |
+
+Tasa de aprobación = `payment_status_change{to="PAID"}` / total de intentos de
+cobro. Los emisores de los tres eventos de pago están en
+`payment-log-events.ts`; los servicios de pagos y de entregas deben llamarlos
+(si una métrica sale vacía, es que su emisor aún no se llama).
+
+**Formato de los logs.** Una línea JSON por entrada (`src/common/logging/json-logger.ts`)
+con `severity`, `message`, `timestamp`, `requestId`, `tenantId` y
+`logging.googleapis.com/trace` (con `GCP_PROJECT_ID`), al nivel de `LOG_LEVEL`.
+Cada petición deja además una línea de acceso (`type="access"`) con `method`,
+`route` (patrón, sin ids), `status`, `latencyMs` y `httpRequest`; la ruta del
+webhook entrante sale con el token redactado.
 
 ### 14.4 Auditoría
 
@@ -1586,10 +1708,13 @@ THROTTLE_LIMIT=300
 THROTTLE_TTL=60s
 API_KEY_PREFIX=mtb
 API_KEY_DEFAULT_TTL_DAYS=90
-PAYMENT_REDIRECT_URL=https://netpay.tupla.dev/api/v1/payments/return
+PAYMENT_REDIRECT_URL=https://app.tupla.dev/payments/return
 PAYMENT_CANCEL_URL=https://app.tupla.dev/payments/cancelled
 OUTBOUND_WEBHOOK_ENABLED=true              # false en el canario
 OUTBOUND_WEBHOOK_REQUIRE_HTTPS=true
+PUBLIC_BASE_URL=https://<url-del-servicio>  # base del webhook esperado (drift)
+RECONCILE_ENABLED=true                     # §11.7
+INTERNAL_TICK_SA_EMAIL=netpay-tick@vondi-0q-staging.iam.gserviceaccount.com   # solo staging (§11.7)
 OUTBOUND_WEBHOOK_ALLOWED_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,169.254.0.0/16
 ```
 

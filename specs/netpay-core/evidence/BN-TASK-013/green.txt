@@ -1,0 +1,14 @@
+# BN-TASK-013 green — 2026-10-21T18:18:31Z
+# jest src/common/filters/all-exceptions.filter.spec.ts src/payments/payment-orders.cash-and-refund.spec.ts src/payments/payment-orders.service.spec.ts -t "AllExceptionsFilter — stable|provider outcomes|outcome is unknown|5xx|BN-TASK-013"
+(node:11344) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:11345) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:11343) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Test Suites: 3 passed, 3 total
+Tests:       88 skipped, 13 passed, 101 total
+Snapshots:   0 total
+Time:        2.116 s, estimated 11 s
+Ran all test suites matching src/common/filters/all-exceptions.filter.spec.ts|src/payments/payment-orders.cash-and-refund.spec.ts|src/payments/payment-orders.service.spec.ts with tests matching "AllExceptionsFilter — stable|provider outcomes|outcome is unknown|5xx|BN-TASK-013".

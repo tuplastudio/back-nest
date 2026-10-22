@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -17,6 +18,7 @@ import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { RequireScopes } from '../common/decorators/scopes.decorator';
 import { PaymentOrdersService, type CheckoutMode } from './payment-orders.service';
 import { PaymentConfigService } from './payment-config.service';
+import { WebhookDriftService } from './webhook-drift.service';
 import { NetpayClient } from './netpay.client';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import {
@@ -26,6 +28,7 @@ import {
   IsBoolean,
   IsDefined,
   IsEmail,
+  IsISO8601,
   IsIn,
   IsInt,
   IsObject,
@@ -52,6 +55,9 @@ import {
   type NetpayEnvironment,
 } from './netpay-endpoints';
 import { ValidationException } from '../common/errors/app.exception';
+import { Idempotent } from '../common/idempotency/idempotent.decorator';
+import { CurrentTenant } from '../common/decorators/current-tenant.decorator';
+import type { TenantContext } from '../tenancy/tenant-context.interface';
 
 /** Message for the certification's digits-only rule. */
 const DIGITS_RULE = { message: 'must contain digits only.' };
@@ -387,9 +393,47 @@ export class SavePaymentConfigDto {
   @MaxLength(24)
   @Matches(/^[A-Za-z0-9_-]+$/)
   orderReferencePrefix?: string;
+
+  /**
+   * Origins a hosted order may send the buyer back to (`https://shop.example.com`),
+   * BN-REQ-PAY-007. Empty: any `https` origin, logged as a warning. Omitted: kept.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(255, { each: true })
+  allowedReturnOrigins?: string[];
+
+  /** ISO currencies this tenant may charge in (BN-REQ-PAY-008). Default `["MXN"]`. Omitted: kept. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(10)
+  @Matches(/^[A-Z]{3}$/, { each: true })
+  allowedCurrencies?: string[];
 }
 
-/** Query for listing orders. */
+/** Body for changing the tenant's payment settings without touching the keys. */
+export class UpdatePaymentSettingsDto {
+  /** See {@link SavePaymentConfigDto.allowedReturnOrigins}. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(255, { each: true })
+  allowedReturnOrigins?: string[];
+
+  /** See {@link SavePaymentConfigDto.allowedCurrencies}. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(10)
+  @Matches(/^[A-Z]{3}$/, { each: true })
+  allowedCurrencies?: string[];
+}
+
+/** Query for listing orders (BN-REQ-REC-005). */
 export class ListPaymentOrdersQueryDto {
   // A query string arrives as text; without the conversion `?limit=50` is refused
   // as "not an integer".
@@ -399,6 +443,29 @@ export class ListPaymentOrdersQueryDto {
   @Min(1)
   @Max(100)
   limit?: number;
+
+  /** `nextCursor` of the previous page, unchanged. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(512)
+  cursor?: string;
+
+  /** ISO 8601 instant: only orders changed at or after it, oldest change first. */
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  updatedSince?: string;
+
+  /** One status, or several separated by commas (`PAID,REFUNDED`). */
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Z_]+(,[A-Z_]+)*$/)
+  @MaxLength(200)
+  status?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  merchantReferenceCode?: string;
 }
 
 /** Body for registering the inbound webhook URL with Netpay. */
@@ -427,6 +494,7 @@ export class PaymentOrdersController {
     private readonly config: PaymentConfigService,
     private readonly netpay: NetpayClient,
     private readonly tenantPrisma: TenantPrismaService,
+    private readonly drift: WebhookDriftService,
   ) {}
 
   /**
@@ -436,6 +504,7 @@ export class PaymentOrdersController {
    * @returns The order, with its checkout URL.
    */
   @Post('orders')
+  @Idempotent()
   @RequirePermissions('payments:write')
   @RequireScopes('payments:write')
   @ApiOperation({ summary: 'Create a payment order and return a checkout URL' })
@@ -457,18 +526,28 @@ export class PaymentOrdersController {
   }
 
   /**
-   * Lists recent orders.
+   * Lists orders a page at a time, for a consumer to reconcile (BN-REQ-REC-005).
    *
-   * @param query Page size.
-   * @returns The orders.
+   * @param query Page size, cursor and filters.
+   * @returns `{ items, nextCursor }`.
    */
   @Get('orders')
   @RequirePermissions('payments:read')
   @RequireScopes('payments:read')
-  @ApiOperation({ summary: 'List payment orders' })
-  @ApiOkResponse({ description: 'Recent orders.' })
+  @ApiOperation({
+    summary: 'List payment orders (cursor pagination)',
+    description:
+      'Answers `{ items, nextCursor }`; pass `nextCursor` back as `cursor` until it is null. With `updatedSince` the orders come oldest change first (an incremental sync: keep the last `updatedAt` seen); without it, newest first. Filters: `status` (comma-separated), `merchantReferenceCode`. `limit` 1-100, default 25.',
+  })
+  @ApiOkResponse({ description: 'One page of orders and the cursor of the next one.' })
   listOrders(@Query() query: ListPaymentOrdersQueryDto) {
-    return this.orders.list(query.limit ?? 25);
+    return this.orders.list({
+      limit: query.limit,
+      cursor: query.cursor,
+      updatedSince: query.updatedSince === undefined ? undefined : new Date(query.updatedSince),
+      status: query.status?.split(','),
+      merchantReferenceCode: query.merchantReferenceCode,
+    });
   }
 
   /**
@@ -480,9 +559,32 @@ export class PaymentOrdersController {
   @Get('orders/:id')
   @RequirePermissions('payments:read')
   @RequireScopes('payments:read')
-  @ApiOperation({ summary: 'Read one payment order' })
+  @ApiOperation({
+    summary: 'Read one payment order',
+    description:
+      'Includes what a consumer reconciles against (BN-REQ-REC-006): `verifiedAmount`, `netpayTransactionId`, `refundedAmount`, `failureCode`, `paidAfterCancelAt` and `attempts` (`{ count, items }`).',
+  })
   getOrder(@Param('id') id: string) {
     return this.orders.findById(id);
+  }
+
+  /**
+   * Cancels an unpaid order (BN-REQ-PAY-004).
+   *
+   * @param id Order id.
+   * @returns The cancelled order.
+   */
+  @Post('orders/:id/cancel')
+  @RequirePermissions('payments:write')
+  @RequireScopes('payments:write')
+  @ApiOperation({
+    summary: 'Cancel an unpaid payment order',
+    description:
+      'From PENDING, PENDING_VERIFICATION or FAILED → CANCELLED, emitting `payment.cancelled`. A bound charge is checked with Netpay first: 409 `ORDER_STATE_CONFLICT` (with the PAID order) if it was charged, or while Netpay has not decided; CHARGE_UNKNOWN is refused until verified. Netpay cannot expire a hosted session or a cash reference, so a payment that still arrives keeps the order CANCELLED and emits `payment.paid_after_cancel` for the consumer to refund. Repeating it on a CANCELLED order answers the order.',
+  })
+  @HttpCode(HttpStatus.OK)
+  cancel(@Param('id') id: string) {
+    return this.orders.cancel(id);
   }
 
   /**
@@ -505,7 +607,12 @@ export class PaymentOrdersController {
     const order = await this.orders.findById(id);
     const transactionId = body.transactionId ?? order.netpayTransactionId;
     if (transactionId === null || transactionId === undefined) {
-      throw new ValidationException('The order has no transaction yet; pass the transactionId Netpay shows.');
+      // Netpay offers no search by order reference, so an order whose charge got no
+      // answer (CHARGE_UNKNOWN) is resolved by the transaction id: the one Netpay
+      // Manager shows, or the one the inbound notification binds (BN-REQ-PAY-003).
+      throw new ValidationException(
+        'The order has no transaction yet; pass the transactionId Netpay shows (Netpay cannot be searched by order reference).',
+      );
     }
     return this.orders.verifyOrder(id, transactionId);
   }
@@ -519,6 +626,7 @@ export class PaymentOrdersController {
    * @returns The transaction as Netpay reports it.
    */
   @Post('orders/:id/charge')
+  @Idempotent()
   @RequirePermissions('payments:write')
   @RequireScopes('payments:write')
   @ApiOperation({ summary: 'Charge a tokenized card against an order' })
@@ -552,6 +660,7 @@ export class PaymentOrdersController {
    * @returns The order status after the provider was asked again.
    */
   @Post('orders/:id/confirm')
+  @Idempotent()
   @RequirePermissions('payments:write')
   @RequireScopes('payments:write')
   @ApiOperation({ summary: 'Confirm a charge after 3-D Secure' })
@@ -662,6 +771,7 @@ export class PaymentOrdersController {
    * @returns The resulting status.
    */
   @Post('orders/:id/refund')
+  @Idempotent()
   @RequirePermissions('payments:refund')
   @RequireScopes('payments:refund')
   @ApiOperation({ summary: 'Refund a settled payment order' })
@@ -683,13 +793,20 @@ export class PaymentOrdersController {
   async readConfig() {
     const stored = await this.tenantPrisma.forCurrentTenantTransaction((client) =>
       client.paymentProviderConfig.findFirst({
-        orderBy: { createdAt: 'desc' },
+        where: { active: true },
+        orderBy: { version: 'desc' },
         select: {
+          id: true,
+          version: true,
           environment: true,
           publicKey: true,
           orderReferencePrefix: true,
           enabled: true,
           webhookRegisteredAt: true,
+          webhookDrift: true,
+          webhookDriftCheckedAt: true,
+          allowedReturnOrigins: true,
+          allowedCurrencies: true,
         },
       }),
     );
@@ -698,19 +815,29 @@ export class PaymentOrdersController {
     }
     return {
       configured: true,
+      configId: stored.id,
+      version: stored.version,
       environment: stored.environment,
       // The public key ships to browsers by design: NetpayJS tokenises with it.
       publicKey: stored.publicKey,
       orderReferencePrefix: stored.orderReferencePrefix,
       enabled: stored.enabled,
+      allowedReturnOrigins: stored.allowedReturnOrigins,
+      allowedCurrencies: stored.allowedCurrencies,
       webhookRegisteredAt: stored.webhookRegisteredAt?.toISOString() ?? null,
+      webhookDrift: stored.webhookDrift,
+      webhookDriftCheckedAt: stored.webhookDriftCheckedAt?.toISOString() ?? null,
     };
   }
 
   @Post('config')
   @RequirePermissions('payments:configure')
   @RequireScopes('payments:configure')
-  @ApiOperation({ summary: 'Store this tenant’s Netpay credentials' })
+  @ApiOperation({
+    summary: 'Store this tenant’s Netpay credentials (a new configuration version)',
+    description:
+      'Append-only (BN-REQ-CFG-002): a change writes the next version and orders keep the version they were created with. A first configuration, or a change of environment or secret key, returns a new `webhookToken` once, retires the previous one and clears `webhookRegisteredAt`: register the new URL with Netpay (BN-REQ-CFG-003).',
+  })
   @HttpCode(HttpStatus.OK)
   async saveConfig(@Body() body: SavePaymentConfigDto) {
     const { config, webhookToken } = await this.config.save({
@@ -718,17 +845,51 @@ export class PaymentOrdersController {
       secretKey: body.secretKey,
       environment: body.environment,
       orderReferencePrefix: body.orderReferencePrefix,
+      allowedReturnOrigins: body.allowedReturnOrigins,
+      allowedCurrencies: body.allowedCurrencies,
     });
     return {
+      configId: config.id,
+      version: config.version,
       environment: config.environment,
       publicKey: config.publicKey,
       orderReferencePrefix: config.orderReferencePrefix,
       enabled: config.enabled,
-      // Returned only on a first configuration, because only then is the token
-      // new. The caller has to register it with Netpay; there is no way to read
-      // it back, since only its hash is stored.
+      allowedReturnOrigins: config.allowedReturnOrigins,
+      allowedCurrencies: config.allowedCurrencies,
+      // Returned only when the token is new: a first configuration, or a change of
+      // environment or secret key. The caller has to register it with Netpay; there
+      // is no way to read it back, since only its hash is stored.
       webhookToken,
       webhookUrlPath: webhookToken === null ? null : `/api/v1/payments/webhook/${webhookToken}`,
+    };
+  }
+
+  /**
+   * Changes the allowlists without touching the keys, as a new configuration version.
+   *
+   * @param body Settings to change.
+   * @returns The new version's settings.
+   */
+  @Patch('config')
+  @RequirePermissions('payments:configure')
+  @RequireScopes('payments:configure')
+  @ApiOperation({
+    summary: 'Change the return-origin and currency allowlists',
+    description:
+      'Writes a new configuration version with the same keys and webhook token. `allowedReturnOrigins`: https origins a hosted order may return the buyer to (BN-REQ-PAY-007); `allowedCurrencies`: ISO codes this tenant may charge in (BN-REQ-PAY-008).',
+  })
+  @HttpCode(HttpStatus.OK)
+  async updateSettings(@Body() body: UpdatePaymentSettingsDto) {
+    const { config } = await this.config.updateSettings({
+      allowedReturnOrigins: body.allowedReturnOrigins,
+      allowedCurrencies: body.allowedCurrencies,
+    });
+    return {
+      configId: config.id,
+      version: config.version,
+      allowedReturnOrigins: config.allowedReturnOrigins,
+      allowedCurrencies: config.allowedCurrencies,
     };
   }
 
@@ -769,31 +930,34 @@ export class PaymentOrdersController {
       throw new ValidationException('The webhook URL must be HTTPS.');
     }
     await this.netpay.registerWebhook(config.environment, config.secretKey, body.url);
-    await this.tenantPrisma.forCurrentTenantTransaction((client) =>
-      client.paymentProviderConfig.update({
-        where: { id: config.id },
-        data: { webhookRegisteredAt: new Date(), updatedAt: new Date() },
-      }),
-    );
+    await this.config.markWebhookRegistered(config.id, body.url);
     return { registered: true };
   }
 
   /**
-   * Reads the webhook URL Netpay has registered for this key set.
+   * Reads the webhook URL Netpay has registered for this key set and compares it
+   * with this deployment's (BN-REQ-CFG-004).
    *
-   * Netpay documents no response schema, so only a string URL is surfaced.
-   *
-   * @returns The registered URL, or `null` when none is set. A provider error
-   *   surfaces as a 502, like every other Netpay call.
+   * @returns The registered URL (token redacted), the expected one, and `drift`.
+   *   A provider error surfaces like every other Netpay call.
    */
   @Get('config/webhook')
   @RequirePermissions('payments:configure')
   @RequireScopes('payments:configure')
-  @ApiOperation({ summary: 'Read the webhook URL registered with Netpay' })
-  async registeredWebhook() {
-    const config = await this.config.getUsable();
-    const answer = await this.netpay.getWebhook(config.environment, config.secretKey);
-    const url = [answer['webhook'], answer['url']].find((v) => typeof v === 'string' && v !== '');
-    return { webhook: typeof url === 'string' ? url : null };
+  @ApiOperation({
+    summary: 'Read the webhook URL registered with Netpay and detect drift',
+    description:
+      '`drift: true` when Netpay calls anything other than `${PUBLIC_BASE_URL}/api/v1/payments/webhook/{token}` with this tenant’s current token; `reason` is `match`, `none_registered`, `origin`, `path` or `token`. The verdict is stored, logged as `netpay_webhook_drift` (the alert’s metric) and summarised in the authenticated `/health/ready`.',
+  })
+  async registeredWebhook(@CurrentTenant() tenant: TenantContext) {
+    const report = await this.drift.check({ id: tenant.id, schemaName: tenant.schemaName });
+    return {
+      // Kept for existing readers: the registered URL, with its token redacted.
+      webhook: report.registered,
+      expected: report.expected,
+      drift: report.drift,
+      reason: report.reason,
+      checkedAt: report.checkedAt,
+    };
   }
 }

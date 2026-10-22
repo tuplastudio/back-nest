@@ -1,4 +1,4 @@
-import { envSchema } from './env.validation';
+import { envSchema, validateEnv } from './env.validation';
 
 const SECRETS = {
   CONTROL_PLANE_DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/mtb?schema=public',
@@ -9,6 +9,9 @@ const SECRETS = {
   // Required since payments became a wired module: it encrypts each tenant's
   // provider secret, and is deliberately a different key from the PII one.
   NETPAY_ENCRYPTION_KEY: Buffer.alloc(32, 4).toString('base64'),
+  // Required in production since BN-TASK-028 (see payment-urls.spec.ts).
+  PAYMENT_REDIRECT_URL: 'https://pay.example.test/return',
+  PAYMENT_CANCEL_URL: 'https://pay.example.test/cancel',
 };
 
 const DOCS_PASSWORD = 'a-real-docs-password-value';
@@ -201,5 +204,50 @@ describe('env validation (regression: production must carry a data-plane credent
     expect(
       envSchema.safeParse({ ...SECRETS, NODE_ENV: 'test', DOCS_BASIC_AUTH_PASSWORD: DOCS_PASSWORD }).success,
     ).toBe(true);
+  });
+});
+
+describe('env validation: security settings (BN-TASK-032/034/035/040)', () => {
+  const base = {
+    ...SECRETS,
+    DOCS_BASIC_AUTH_PASSWORD: DOCS_PASSWORD,
+    TENANT_PLANE_DATABASE_URL: TENANT_PLANE_URL,
+  };
+  const auth = (env: Record<string, string>) => (validateEnv(env)['auth'] as Record<string, unknown>) ?? {};
+
+  it('requires admin MFA by default in production (staging runs as production) and not elsewhere', () => {
+    expect(auth({ ...base, NODE_ENV: 'production' })['mfaRequiredForAdmins']).toBe(true);
+    expect(auth({ ...base, NODE_ENV: 'test' })['mfaRequiredForAdmins']).toBe(false);
+    expect(
+      auth({ ...base, NODE_ENV: 'production', MFA_REQUIRED_FOR_ADMINS: 'false' })['mfaRequiredForAdmins'],
+    ).toBe(false);
+  });
+
+  it('caps the authorization cache TTL at 5 s', () => {
+    expect(auth({ ...base, NODE_ENV: 'test' })['authzCacheTtlMs']).toBe(5_000);
+    expect(envSchema.safeParse({ ...base, NODE_ENV: 'test', AUTHZ_CACHE_TTL_MS: '30000' }).success).toBe(
+      false,
+    );
+  });
+
+  it('validates keyring JSON', () => {
+    const key = Buffer.alloc(32, 5).toString('base64');
+    const good = JSON.stringify({ current: '2', keys: { '1': key, '2': key } });
+    expect(envSchema.safeParse({ ...base, NODE_ENV: 'test', PII_KEYS_JSON: good }).success).toBe(true);
+    expect(envSchema.safeParse({ ...base, NODE_ENV: 'test', NETPAY_KEYS_JSON: good }).success).toBe(true);
+    const missingCurrent = JSON.stringify({ current: '3', keys: { '1': key } });
+    expect(envSchema.safeParse({ ...base, NODE_ENV: 'test', PII_KEYS_JSON: missingCurrent }).success).toBe(
+      false,
+    );
+  });
+
+  it('accepts only redis:// or rediss:// for the shared throttler storage', () => {
+    expect(
+      envSchema.safeParse({ ...base, NODE_ENV: 'test', THROTTLER_REDIS_URL: 'rediss://:pw@10.0.0.3:6378/0' })
+        .success,
+    ).toBe(true);
+    expect(envSchema.safeParse({ ...base, NODE_ENV: 'test', THROTTLER_REDIS_URL: 'http://x' }).success).toBe(
+      false,
+    );
   });
 });

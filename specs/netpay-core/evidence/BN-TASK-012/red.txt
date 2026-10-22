@@ -1,0 +1,16 @@
+# BN-TASK-012 red — 2026-10-21T18:14:11Z
+# jest src/payments/netpay-webhook.spec.ts -t "dedupe|Cash reference"
+FAIL src/payments/netpay-webhook.spec.ts
+  ● Test suite failed to run
+
+    SyntaxError: The requested module './netpay-webhook.service' does not provide an export named 'INBOUND_DEDUPE_WINDOW_MS'
+
+      at EsmLoader.linkAndEvaluateModule (node_modules/jest-runtime/build/index.js:1989:7)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        1.325 s
+Ran all test suites matching src/payments/netpay-webhook.spec.ts with tests matching "dedupe|Cash reference".
+(node:5420) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

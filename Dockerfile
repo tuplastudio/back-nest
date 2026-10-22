@@ -61,13 +61,21 @@ COPY --chown=app:app prisma.config.ts ./
 # they must ship with the image.
 USER app
 
+# Build stamp reported by authenticated /health/ready (src/config/build-info.ts,
+# BN-REQ-OPS-010). Declared last so a new commit only invalidates this layer.
+ARG BUILD_VERSION=""
+ARG BUILD_SHA=""
+ENV BUILD_VERSION=$BUILD_VERSION \
+    BUILD_SHA=$BUILD_SHA
+
 # `tini` reaps zombies and forwards SIGTERM, which is what lets the Nest
 # shutdown hooks drain in-flight requests before the container exits.
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/main.js"]
 
 # --- Migrate stage ----------------------------------------------------------
-# Runs the control-plane migrations as the Cloud Run Job `netpay-migrate`.
+# Runs the control-plane migrations, then the tenant migrations on every ACTIVE
+# tenant (BN-REQ-OPS-002), as the Cloud Run Job `netpay-migrate`.
 # `prisma` and `tsx` are devDependencies and are pruned from the runtime image,
 # so this stage installs the full tree. Build with `--target migrate`.
 FROM node:22-alpine AS migrate
@@ -81,8 +89,16 @@ RUN npm ci --no-audit --no-fund
 
 COPY prisma ./prisma
 COPY prisma.config.ts ./
-COPY scripts/migrate.ts ./scripts/migrate.ts
+COPY scripts/migrate.ts scripts/migrate-tenants.ts ./scripts/
+COPY scripts/lib/tenant-migration-runner.ts ./scripts/lib/
+# The tenant runner shares the loader, checksum, ledger and lock with the
+# provisioner, so the two paths cannot drift. Only these dependency-free files.
+COPY src/prisma/identifiers.ts src/prisma/tenant-ddl.ts ./src/prisma/
+COPY src/tenancy/tenant-migrations.ts ./src/tenancy/
+COPY src/common/logging/json-logger.ts ./src/common/logging/
 
 ENV NODE_ENV=production
 
-CMD ["npx", "tsx", "scripts/migrate.ts"]
+# Same command the deploy workflow sets on the Job (`npm run db:migrate:all`):
+# the tenant step only runs once the control plane is migrated.
+CMD ["npm", "run", "db:migrate:all"]

@@ -1,0 +1,353 @@
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/outbound/url-guard.spec.ts
+
+ts-jest[config] (WARN) [94mmessage[0m[90m TS151002: [0mUsing hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+FAIL src/payments/outbound/url-guard.spec.ts
+  ● UrlGuard › accepts a public HTTPS destination and pins it to the validated address
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "https://hooks.example.com/payments"
+    Received: "https://93.184.216.34/payments"
+
+      74 |     // The URL is the subscribed one; the pin is the address list, which the
+      75 |     // transport connects to instead of resolving the name again.
+    > 76 |     expect(validated.url).toBe('https://hooks.example.com/payments');
+         |                           ^
+      77 |     expect(validated.hostname).toBe('hooks.example.com');
+      78 |     expect(validated.hostHeader).toBe('hooks.example.com');
+      79 |     expect(validated.address).toBe('93.184.216.34');
+
+      at Object.<anonymous> (src/payments/outbound/url-guard.spec.ts:76:27)
+
+  ● UrlGuard › keeps the scheme, port, path and query of the subscribed URL
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "https://hooks.example.com:8443/x/y?a=1&b=two"
+    Received: "https://93.184.216.34:8443/x/y?a=1&b=two"
+
+      84 |     const guard = new UrlGuard(resolverOver({ 'hooks.example.com': [PUBLIC] }));
+      85 |     const validated = await guard.validate('https://hooks.example.com:8443/x/y?a=1&b=two');
+    > 86 |     expect(validated.url).toBe('https://hooks.example.com:8443/x/y?a=1&b=two');
+         |                           ^
+      87 |     expect(validated.hostHeader).toBe('hooks.example.com:8443');
+      88 |   });
+      89 |
+
+      at Object.<anonymous> (src/payments/outbound/url-guard.spec.ts:86:27)
+
+  ● UrlGuard › refuses a name when any of its addresses is private, which is the rebinding shape
+
+    expect(received).rejects.toMatchObject(expected)
+
+    - Expected  - 1
+    + Received  + 1
+
+      Object {
+    -   "reason": "PRIVATE_ADDRESS",
+    +   "reason": "AMBIGUOUS_ADDRESS",
+      }
+
+      126 |       }),
+      127 |     );
+    > 128 |     await expect(guard.validate('https://rebind.example.com/')).rejects.toMatchObject({
+          |                                                                         ^
+      129 |       reason: 'PRIVATE_ADDRESS',
+      130 |     });
+      131 |   });
+
+      at Object.toMatchObject (node_modules/expect/build/index.js:2155:20)
+      at Object.<anonymous> (src/payments/outbound/url-guard.spec.ts:128:73)
+
+  ● UrlGuard › a name with several public addresses (PaaS, CDN) › accepts 8 A + 8 AAAA public answers and offers every one of them, IPv4 first
+
+    UrlRejectedError: The webhook URL was refused: AMBIGUOUS_ADDRESS.
+
+      112 |     const distinct = new Set(answers.map((a) => a.address));
+      113 |     if (distinct.size > 1) {
+    > 114 |       throw new UrlRejectedError('AMBIGUOUS_ADDRESS', `${hostname} resolves to ${distinct.size} addresses`);
+          |             ^
+      115 |     }
+      116 |     const answer = answers[0];
+      117 |     if (isBlockedAddress(answer.address)) {
+
+      at UrlGuard.validate (src/payments/outbound/url-guard.ts:114:13)
+      at Object.<anonymous> (src/payments/outbound/url-guard.spec.ts:140:25)
+
+  ● UrlGuard › a name with several public addresses (PaaS, CDN) › collapses duplicate answers
+
+    expect(received).resolves.toMatchObject(expected)
+
+    - Expected  - 4
+    + Received  + 2
+
+      Object {
+    -   "addresses": Array [
+    -     Object {
+        "address": "93.184.216.34",
+        "family": 4,
+    -     },
+    -   ],
+    +   "hostHeader": "hooks.example",
+    +   "url": "https://93.184.216.34/",
+      }
+
+      148 |     it('collapses duplicate answers', async () => {
+      149 |       const guard = new UrlGuard(resolverOver({ 'hooks.example': [PUBLIC, PUBLIC, PUBLIC] }));
+    > 150 |       await expect(guard.validate('https://hooks.example/')).resolves.toMatchObject({
+          |                                                                       ^
+      151 |         addresses: [PUBLIC],
+      152 |       });
+      153 |     });
+
+      at Object.toMatchObject (node_modules/expect/build/index.js:2140:20)
+      at Object.<anonymous> (src/payments/outbound/url-guard.spec.ts:150:71)
+
+  ● UrlGuard › a name with several public addresses (PaaS, CDN) › refuses the whole name with 422 BLOCKED_ADDRESS when one answer is 10.0.0.1
+
+    expect(received).toMatchObject(expected)
+
+    - Expected  - 3
+    + Received  + 3
+
+      Object {
+    -   "code": "BLOCKED_ADDRESS",
+    -   "reason": "PRIVATE_ADDRESS",
+    -   "status": 422,
+    +   "code": "VALIDATION_ERROR",
+    +   "reason": "AMBIGUOUS_ADDRESS",
+    +   "status": 400,
+      }
+
+      162 |       );
+      163 |       expect(error).toBeInstanceOf(UrlRejectedError);
+    > 164 |       expect(error).toMatchObject({ reason: 'PRIVATE_ADDRESS', code: 'BLOCKED_ADDRESS', status: 422 });
+          |                     ^
+      165 |     });
+      166 |
+      167 |     it('names the metadata address even when it hides among public ones', async () => {
+
+      at Object.<anonymous> (src/payments/outbound/url-guard.spec.ts:164:21)
+
+  ● UrlGuard › a name with several public addresses (PaaS, CDN) › names the metadata address even when it hides among public ones
+
+    expect(received).rejects.toMatchObject(expected)
+
+    - Expected  - 2
+    + Received  + 2
+
+      Object {
+    -   "code": "BLOCKED_ADDRESS",
+    -   "reason": "METADATA_ADDRESS",
+    +   "code": "VALIDATION_ERROR",
+    +   "reason": "AMBIGUOUS_ADDRESS",
+      }
+
+      169 |         resolverOver({ 'hooks.example': [...v4, { address: '169.254.169.254', family: 4 }] }),
+      170 |       );
+    > 171 |       await expect(guard.validate('https://hooks.example/')).rejects.toMatchObject({
+          |                                                                      ^
+      172 |         reason: 'METADATA_ADDRESS',
+      173 |         code: 'BLOCKED_ADDRESS',
+      174 |       });
+
+      at Object.toMatchObject (node_modules/expect/build/index.js:2155:20)
+      at Object.<anonymous> (src/payments/outbound/url-guard.spec.ts:171:70)
+
+  ● UrlGuard › a name with several public addresses (PaaS, CDN) › refuses an IPv6 unique-local answer hidden among public ones
+
+    expect(received).rejects.toMatchObject(expected)
+
+    - Expected  - 1
+    + Received  + 1
+
+      Object {
+    -   "reason": "PRIVATE_ADDRESS",
+    +   "reason": "AMBIGUOUS_ADDRESS",
+      }
+
+      179 |         resolverOver({ 'hooks.example': [...v4, ...v6, { address: 'fd00::1', family: 6 }] }),
+      180 |       );
+    > 181 |       await expect(guard.validate('https://hooks.example/')).rejects.toMatchObject({
+          |                                                                      ^
+      182 |         reason: 'PRIVATE_ADDRESS',
+      183 |       });
+      184 |     });
+
+      at Object.toMatchObject (node_modules/expect/build/index.js:2155:20)
+      at Object.<anonymous> (src/payments/outbound/url-guard.spec.ts:181:70)
+
+  ● UrlGuard › a name with several public addresses (PaaS, CDN) › applies the egress allow-list to every answer, not just the first
+
+    expect(received).rejects.toMatchObject(expected)
+
+    - Expected  - 2
+    + Received  + 2
+
+      Object {
+    -   "code": "BLOCKED_ADDRESS",
+    -   "reason": "NOT_ALLOWED_BY_POLICY",
+    +   "code": "VALIDATION_ERROR",
+    +   "reason": "AMBIGUOUS_ADDRESS",
+      }
+
+      190 |         ['93.184.0.0/16'],
+      191 |       );
+    > 192 |       await expect(guard.validate('https://hooks.example/')).rejects.toMatchObject({
+          |                                                                      ^
+      193 |         reason: 'NOT_ALLOWED_BY_POLICY',
+      194 |         code: 'BLOCKED_ADDRESS',
+      195 |       });
+
+      at Object.toMatchObject (node_modules/expect/build/index.js:2155:20)
+      at Object.<anonymous> (src/payments/outbound/url-guard.spec.ts:192:70)
+
+Test Suites: 1 failed, 1 total
+Tests:       9 failed, 33 passed, 42 total
+Snapshots:   0 total
+Time:        2.185 s
+Ran all test suites matching src/payments/outbound/url-guard.spec.ts.
+
+=== http.transport.spec.ts (pin + fallback, shared with BN-TASK-007) ===
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/http.transport.spec.ts
+
+ts-jest[config] (WARN) [94mmessage[0m[90m TS151002: [0mUsing hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) [94mmessage[0m[90m TS151002: [0mUsing hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+FAIL src/payments/http.transport.spec.ts
+  ● NodeOutboundTransport › sends to the exact subscribed path and query, with the original host and port
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:76:38)
+
+  ● NodeOutboundTransport › keeps the plain-http scheme when it was subscribed that way, instead of forcing https
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:92:17)
+
+  ● NodeOutboundTransport › connects to the pinned address and never resolves the name
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:102:17)
+
+  ● NodeOutboundTransport › falls back to the next validated address when connecting fails
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:111:17)
+
+  ● NodeOutboundTransport › does not try another address once the request reached the subscriber
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:125:17)
+
+  ● NodeOutboundTransport › returns a non-2xx status as an answer, not as a reason to try elsewhere
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:137:17)
+
+  ● NodeOutboundTransport › fails with the connect error when every address is dead
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:149:17)
+
+  ● NodeOutboundTransport › refuses to send without a validated address
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:155:28)
+
+Test Suites: 1 failed, 1 total
+Tests:       8 failed, 8 total
+Snapshots:   0 total
+Time:        2.118 s
+Ran all test suites matching src/payments/http.transport.spec.ts.

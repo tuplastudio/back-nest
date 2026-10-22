@@ -1,24 +1,74 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpStatus, Logger } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { AppException, NotFoundException } from '../errors/app.exception';
+import { AppException, NotFoundException, isRetryableStatus } from '../errors/app.exception';
 import { PiiRedactionService } from '../../pii/pii-redaction.service';
 
 /**
- * Shape of every error response body produced by the API.
+ * Shape of every error response body produced by the API (BN-REQ-API-002).
+ *
+ * ```json
+ * { "error": { "code": "PROVIDER_OUTCOME_UNKNOWN", "message": "…", "retryable": true, "details": {} },
+ *   "requestId": "…", "timestamp": "…", "source": "application" }
+ * ```
+ *
+ * `error.code` is the stable discriminator a client branches on; `error.retryable`
+ * says whether repeating the same request may succeed. Documented codes include:
+ *
+ *  * `PROVIDER_OUTCOME_UNKNOWN` (504, retryable) — the provider gave no definitive
+ *    answer; the operation may have happened and is left for reconciliation.
+ *  * `PROVIDER_DECLINED` (502) — the provider explicitly refused the request.
+ *  * `CREDENTIALS_ENVIRONMENT_MISMATCH` / `CREDENTIALS_INVALID` (422) — provider
+ *    keys refused by the selected environment.
+ *  * `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `TOO_MANY_REQUESTS`, … for the rest.
  */
 export interface ErrorResponseBody {
-  /** Stable, machine-readable error code. */
-  error: string;
-  /** Human readable, PII-free description. */
-  message: string;
-  /** Structured, non-sensitive context such as validation failures. */
-  details?: Record<string, unknown>;
+  readonly error: {
+    /** Stable, machine-readable error code. */
+    readonly code: string;
+    /** Human readable, PII-free description. */
+    readonly message: string;
+    /** Whether the same request may succeed if repeated later. */
+    readonly retryable: boolean;
+    /** Structured, non-sensitive context such as validation failures. */
+    readonly details?: Record<string, unknown>;
+  };
   /** Correlation id, matching the `X-Request-Id` response header. */
-  requestId: string;
+  readonly requestId: string;
   /** RFC 3339 timestamp of the failure. */
-  timestamp: string;
+  readonly timestamp: string;
   /** Which layer produced the error, for triage. */
-  source: 'application' | 'http' | 'prisma' | 'unexpected';
+  readonly source: 'application' | 'http' | 'prisma' | 'unexpected';
+}
+
+/** Placeholder written in place of a secret path segment or query value. */
+const REDACTED = '[REDACTED]';
+
+/**
+ * Removes secrets from a request URL before it is logged (BN-REQ-SEC-005).
+ *
+ * The inbound webhook token is the only credential of that route and travels in the
+ * path, so the segment after `/payments/webhook/` is replaced. Query values can carry
+ * provider ids or tokens, so every value is replaced and only the names are kept.
+ *
+ * @param url Request URL as Express reports it.
+ * @returns The URL safe to log.
+ */
+export function redactRequestUrl(url: string): string {
+  const queryAt = url.indexOf('?');
+  const path = queryAt === -1 ? url : url.slice(0, queryAt);
+  const safePath = path.replace(/(\/payments\/webhook\/)[^/]+/g, `$1${REDACTED}`);
+  if (queryAt === -1) {
+    return safePath;
+  }
+  const query = url
+    .slice(queryAt + 1)
+    .split('&')
+    .map((pair) => {
+      const eq = pair.indexOf('=');
+      return eq === -1 ? pair : `${pair.slice(0, eq)}=${REDACTED}`;
+    })
+    .join('&');
+  return `${safePath}?${query}`;
 }
 
 /**
@@ -83,21 +133,28 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const requestId = request.id ?? 'unknown';
 
     const { status, body } = this.normalize(exception, requestId);
+    // Never the raw URL: the webhook token and query values are secrets.
+    const url = redactRequestUrl(request.originalUrl ?? request.url);
 
     if (status >= Number(HttpStatus.INTERNAL_SERVER_ERROR)) {
       this.logger.error(
-        `${request.method} ${request.url} -> ${status} [${requestId}] ${body.error}: ${body.message}`,
+        `${request.method} ${url} -> ${status} [${requestId}] ${body.error.code}: ${body.error.message}`,
         exception instanceof Error ? exception.stack : undefined,
       );
     } else {
-      this.logger.warn(`${request.method} ${request.url} -> ${status} [${requestId}] ${body.error}`);
+      this.logger.warn(`${request.method} ${url} -> ${status} [${requestId}] ${body.error.code}`);
     }
 
-    if (body.error === 'NOT_FOUND' && status === Number(HttpStatus.NOT_FOUND)) {
+    if (body.error.code === 'NOT_FOUND' && status === Number(HttpStatus.NOT_FOUND)) {
       // A 404 on an unknown path is normal operation, not a warning.
-      this.logger.debug(`No route matched ${request.method} ${request.url} [${requestId}]`);
+      this.logger.debug(`No route matched ${request.method} ${url} [${requestId}]`);
     }
 
+    const retryAfter = retryAfterOf(exception);
+    if (retryAfter !== null) {
+      // 429 TOO_MANY_REQUESTS and 409 IDEMPOTENCY_IN_PROGRESS say when to come back.
+      response.setHeader('Retry-After', String(retryAfter));
+    }
     response.status(status).json(body);
   }
 
@@ -116,9 +173,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return {
         status: exception.status,
         body: {
-          error: exception.code,
-          message: this.redaction.scrubMessage(exception.message),
-          ...(exception.details ? { details: this.redaction.scrub(exception.details) } : {}),
+          error: {
+            code: exception.code,
+            message: this.redaction.scrubMessage(exception.message),
+            retryable: exception.retryable,
+            ...(exception.details ? { details: this.redaction.scrub(exception.details) } : {}),
+          },
           requestId,
           timestamp,
           source: 'application',
@@ -134,9 +194,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return {
         status,
         body: {
-          error: extracted.code,
-          message: this.redaction.scrubMessage(extracted.message),
-          ...(extracted.details ? { details: this.redaction.scrub(extracted.details) } : {}),
+          error: {
+            code: extracted.code,
+            message: this.redaction.scrubMessage(extracted.message),
+            retryable: isRetryableStatus(status),
+            ...(extracted.details ? { details: this.redaction.scrub(extracted.details) } : {}),
+          },
           requestId,
           timestamp,
           source: 'http',
@@ -150,8 +213,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return {
         status: HttpStatus.PAYLOAD_TOO_LARGE,
         body: {
-          error: 'PAYLOAD_TOO_LARGE',
-          message: 'The request body exceeds the maximum allowed size.',
+          error: {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: 'The request body exceeds the maximum allowed size.',
+            retryable: false,
+          },
           requestId,
           timestamp,
           source: 'http',
@@ -162,8 +228,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return {
         status: HttpStatus.BAD_REQUEST,
         body: {
-          error: 'MALFORMED_BODY',
-          message: 'The request body could not be parsed.',
+          error: {
+            code: 'MALFORMED_BODY',
+            message: 'The request body could not be parsed.',
+            retryable: false,
+          },
           requestId,
           timestamp,
           source: 'http',
@@ -181,10 +250,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return {
         status,
         body: {
-          error: isClientVisible ? prismaCode : 'DATABASE_ERROR',
-          message: isClientVisible
-            ? AllExceptionsFilter.PRISMA_MESSAGE[prismaCode]
-            : 'The database rejected the request.',
+          error: {
+            code: isClientVisible ? prismaCode : 'DATABASE_ERROR',
+            message: isClientVisible
+              ? AllExceptionsFilter.PRISMA_MESSAGE[prismaCode]
+              : 'The database rejected the request.',
+            // A serialisation conflict (P2034) succeeds on a plain retry.
+            retryable: prismaCode === 'P2034' || isRetryableStatus(status),
+          },
           requestId,
           timestamp,
           source: 'prisma',
@@ -198,8 +271,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return {
         status: HttpStatus.BAD_REQUEST,
         body: {
-          error: 'INVALID_QUERY',
-          message: 'The database query was malformed.',
+          error: { code: 'INVALID_QUERY', message: 'The database query was malformed.', retryable: false },
           requestId,
           timestamp,
           source: 'prisma',
@@ -210,8 +282,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return {
         status: HttpStatus.SERVICE_UNAVAILABLE,
         body: {
-          error: 'DATABASE_UNAVAILABLE',
-          message: 'The database is currently unavailable. Please retry shortly.',
+          error: {
+            code: 'DATABASE_UNAVAILABLE',
+            message: 'The database is currently unavailable. Please retry shortly.',
+            retryable: true,
+          },
           requestId,
           timestamp,
           source: 'prisma',
@@ -223,8 +298,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
     return {
       status: HttpStatus.INTERNAL_SERVER_ERROR,
       body: {
-        error: 'INTERNAL_SERVER_ERROR',
-        message: 'An unexpected error occurred. The incident has been logged.',
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'An unexpected error occurred. The incident has been logged.',
+          retryable: false,
+        },
         requestId,
         timestamp,
         source: 'unexpected',
@@ -258,6 +336,20 @@ export class AllExceptionsFilter implements ExceptionFilter {
       ...(Array.isArray(message) ? { details: { violations: message as string[] } } : {}),
     };
   }
+}
+
+/**
+ * Seconds a client should wait before retrying, when the exception says.
+ *
+ * @param exception The thrown value.
+ * @returns A positive whole number of seconds, or `null`.
+ */
+export function retryAfterOf(exception: unknown): number | null {
+  if (!(exception instanceof AppException)) {
+    return null;
+  }
+  const value = (exception as AppException & { retryAfterSeconds?: unknown }).retryAfterSeconds;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
 }
 
 /**
@@ -315,11 +407,14 @@ export class NotFoundFilter implements ExceptionFilter {
           : exception
         : new NotFoundException('Endpoint');
 
-    this.logger.debug(`Unhandled ${request.method} ${request.url}`);
+    this.logger.debug(`Unhandled ${request.method} ${redactRequestUrl(request.url)}`);
 
     response.status(notFound instanceof NotFoundException ? notFound.status : HttpStatus.NOT_FOUND).json({
-      error: 'NOT_FOUND',
-      message: `No endpoint matches ${request.method} ${request.url}.`,
+      error: {
+        code: 'NOT_FOUND',
+        message: `No endpoint matches ${request.method} ${redactRequestUrl(request.url)}.`,
+        retryable: false,
+      },
       requestId: request.id ?? 'unknown',
       timestamp: new Date().toISOString(),
       source: 'application',

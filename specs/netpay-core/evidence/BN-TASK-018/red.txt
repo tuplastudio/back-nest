@@ -1,0 +1,18 @@
+# BN-TASK-018 red — 2026-10-21T20:50:37Z
+# npm test -- src/payments/payment-orders.lifecycle.spec.ts -t "cancel"
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/payment-orders.lifecycle.spec.ts -t cancel
+
+FAIL src/payments/payment-orders.lifecycle.spec.ts
+  ● Test suite failed to run
+
+    SyntaxError: The requested module './payment-orders.service' does not provide an export named 'decodeOrderCursor'
+
+      at EsmLoader.linkAndEvaluateModule (node_modules/jest-runtime/build/index.js:1989:7)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        1.426 s
+Ran all test suites matching src/payments/payment-orders.lifecycle.spec.ts with tests matching "cancel".

@@ -1,0 +1,20 @@
+# BN-TASK-003 green (unit: config + health) — 2026-10-21T18:35:32Z
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/config/outbound-webhook-env.spec.ts src/health --verbose
+
+(node:30033) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[33m[Nest] 30034  - [39m10/21/2026, 11:35:36 AM [33m   WARN[39m [38;5;3m[HealthService] [39m[33mHealth probe failed: tenant plane unreachable[39m
+[33m[Nest] 30034  - [39m10/21/2026, 11:35:36 AM [33m   WARN[39m [38;5;3m[HealthService] [39m[33mHealth probe failed: control plane unreachable[39m
+[33m[Nest] 30034  - [39m10/21/2026, 11:35:36 AM [33m   WARN[39m [38;5;3m[HealthService] [39m[33mHealth probe failed: connect ECONNREFUSED 10.1.2.3:5432: database "mtb_prod" user "mtb_control" password authentication failed for tenant_acme_45fd71af[39m
+[33m[Nest] 30034  - [39m10/21/2026, 11:35:36 AM [33m   WARN[39m [38;5;3m[HealthService] [39m[33mHealth probe failed: down[39m
+(node:30034) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:30032) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Test Suites: 3 passed, 3 total
+Tests:       31 passed, 31 total
+Snapshots:   0 total
+Time:        3.755 s, estimated 4 s
+Ran all test suites matching src/config/outbound-webhook-env.spec.ts|src/health.

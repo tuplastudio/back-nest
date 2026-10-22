@@ -1,0 +1,77 @@
+# BN-TASK-019 red (refund state machine with the previous rule: partial stays PAID, only PAID refundable) — 2026-10-21T19:05:21Z
+# npm test -- src/payments/payment-orders.cash-and-refund.spec.ts -t Partial refunds
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/payment-orders.cash-and-refund.spec.ts -t Partial refunds
+
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+  event: 'payment_status_change',
+  message: 'order order-1: PAID → REFUNDED',
+  orderId: 'order-1',
+  from: 'PAID',
+  to: 'REFUNDED',
+  source: 'api'
+}
+(node:42743) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/payment-orders.cash-and-refund.spec.ts
+  ● Partial refunds › returns part of the amount: PARTIALLY_REFUNDED, accumulates, and announces payment.refunded
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 1
+
+      Object {
+        "refunded": "30.00",
+        "refundedAmount": "30.00",
+    -   "status": "PARTIALLY_REFUNDED",
+    +   "status": "PAID",
+      }
+
+      232 |     const result = await f.service.refund('order-1', 'cliente', '30.00');
+      233 |     expect(f.refund).toHaveBeenCalledWith('SANDBOX', 'sk_netpay_y', 'tx-1', '30.00', 'cliente');
+    > 234 |     expect(result).toEqual({ status: 'PARTIALLY_REFUNDED', refundedAmount: '30.00', refunded: '30.00' });
+          |                    ^
+      235 |     expect(f.emitted).toEqual([
+      236 |       { type: PAYMENT_EVENTS.REFUNDED, status: 'PARTIALLY_REFUNDED', previousStatus: 'PAID', refunded: '30.00' },
+      237 |     ]);
+
+      at Object.<anonymous> (src/payments/payment-orders.cash-and-refund.spec.ts:234:20)
+
+  ● Partial refunds › turns REFUNDED only when the total reaches the amount (BN-REQ-PAY-005)
+
+    ConflictException: Only a settled order can be refunded; this one is PARTIALLY_REFUNDED.
+
+      1013 |     // PAID, or PARTIALLY_REFUNDED with something left (BN-REQ-PAY-005).
+      1014 |     if (!REFUNDABLE_STATUSES.includes(existing.status)) {
+    > 1015 |       throw new ConflictException(`Only a settled order can be refunded; this one is ${existing.status}.`);
+           |             ^
+      1016 |     }
+      1017 |     if (existing.netpayTransactionId === null) {
+      1018 |       throw new ConflictException('This order has no transaction to reverse.');
+
+      at PaymentOrdersService.refund (src/payments/payment-orders.service.ts:1015:13)
+      at Object.<anonymous> (src/payments/payment-orders.cash-and-refund.spec.ts:242:20)
+
+  ● Partial refunds › announces a second partial refund too, although the status stays PARTIALLY_REFUNDED
+
+    ConflictException: Only a settled order can be refunded; this one is PARTIALLY_REFUNDED.
+
+      1013 |     // PAID, or PARTIALLY_REFUNDED with something left (BN-REQ-PAY-005).
+      1014 |     if (!REFUNDABLE_STATUSES.includes(existing.status)) {
+    > 1015 |       throw new ConflictException(`Only a settled order can be refunded; this one is ${existing.status}.`);
+           |             ^
+      1016 |     }
+      1017 |     if (existing.netpayTransactionId === null) {
+      1018 |       throw new ConflictException('This order has no transaction to reverse.');
+
+      at PaymentOrdersService.refund (src/payments/payment-orders.service.ts:1015:13)
+      at Object.<anonymous> (src/payments/payment-orders.cash-and-refund.spec.ts:259:20)
+
+Test Suites: 1 failed, 1 total
+Tests:       3 failed, 18 skipped, 5 passed, 26 total
+Snapshots:   0 total
+Time:        3.062 s
+Ran all test suites matching src/payments/payment-orders.cash-and-refund.spec.ts with tests matching "Partial refunds".

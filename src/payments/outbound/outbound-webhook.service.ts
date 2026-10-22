@@ -5,6 +5,8 @@ import { PaymentSecretBox } from '../payment-secret-box';
 import { ALL_PAYMENT_EVENTS } from '../payment-events';
 import { UrlGuard } from './url-guard';
 import { NotFoundException, ValidationException } from '../../common/errors/app.exception';
+import { AuditLogService } from '../../audit/audit-log.service';
+import { auditActorOf } from '../../audit/audit-actor';
 
 /** An endpoint as exposed over the API. Never contains a secret. */
 export interface WebhookEndpointView {
@@ -38,6 +40,7 @@ export class OutboundWebhookService {
     private readonly requestContext: RequestContextService,
     private readonly secretBox: PaymentSecretBox,
     private readonly urlGuard: UrlGuard,
+    private readonly audit: AuditLogService,
   ) {}
 
   /**
@@ -95,6 +98,11 @@ export class OutboundWebhookService {
         select: this.select(),
       }),
     );
+    await this.audited('webhook.endpoint_created', 'webhook_endpoint', id, {
+      // The host only: a query string may carry the subscriber's own credential.
+      host: new URL(input.url).host,
+      events: input.events,
+    });
     return { ...this.toView(row), secret };
   }
 
@@ -130,6 +138,7 @@ export class OutboundWebhookService {
         select: this.select(),
       }),
     );
+    await this.audited('webhook.endpoint_secret_rotated', 'webhook_endpoint', id, {});
     return { ...this.toView(row), secret };
   }
 
@@ -146,6 +155,7 @@ export class OutboundWebhookService {
         data: { previousSecretCiphertext: null, updatedAt: new Date() },
       }),
     );
+    await this.audited('webhook.endpoint_rotation_ended', 'webhook_endpoint', id, {});
   }
 
   /**
@@ -166,6 +176,14 @@ export class OutboundWebhookService {
           updatedAt: new Date(),
         },
       }),
+    );
+    await this.audited(
+      enabled ? 'webhook.endpoint_enabled' : 'webhook.endpoint_disabled',
+      'webhook_endpoint',
+      id,
+      {
+        to: enabled ? 'ACTIVE' : 'DISABLED',
+      },
     );
   }
 
@@ -200,7 +218,14 @@ export class OutboundWebhookService {
   }
 
   /**
-   * Re-queues a dead delivery for another attempt.
+   * Re-queues a delivery for another attempt (BN-REQ-EVT-010).
+   *
+   * The attempt counter is kept, not reset: the history of a delivery is what an
+   * operator reads to decide whether the subscriber is fixed, and the next
+   * `X-MTBPay-Attempt` must not claim a first try. The retry window restarts at
+   * the replay (`replayedAt`) and the attempt cap counts only the attempts made
+   * from now on (`attemptsBeforeReplay`), so a replay gets a full new window. Who
+   * replayed it is recorded in the audit log.
    *
    * @param deliveryId Delivery to replay.
    */
@@ -208,18 +233,69 @@ export class OutboundWebhookService {
     const row = await this.tenantPrisma.forCurrentTenantTransaction((client) =>
       client.webhookDelivery.findFirst({
         where: { id: deliveryId, endpoint: { tenantId: this.currentTenantId() } },
-        select: { id: true },
+        select: {
+          id: true,
+          endpointId: true,
+          eventId: true,
+          eventType: true,
+          orderId: true,
+          status: true,
+          attempt: true,
+        },
       }),
     );
     if (row === null) {
       throw new NotFoundException('The requested resource was not found.');
     }
+    const now = new Date();
     await this.tenantPrisma.forCurrentTenantTransaction((client) =>
       client.webhookDelivery.update({
         where: { id: deliveryId },
-        data: { status: 'PENDING', attempt: 0, nextAttemptAt: new Date(), error: null },
+        data: {
+          status: 'PENDING',
+          nextAttemptAt: now,
+          error: null,
+          replayedAt: now,
+          // `attempt` is the number of the next attempt, so this many were made.
+          attemptsBeforeReplay: Math.max(row.attempt - 1, 0),
+        },
       }),
     );
+    await this.audited('webhook.delivery_replayed', 'webhook_delivery', row.id, {
+      endpointId: row.endpointId,
+      eventId: row.eventId,
+      eventType: row.eventType,
+      orderId: row.orderId,
+      from: row.status,
+      to: 'PENDING',
+      attempt: row.attempt,
+    });
+  }
+
+  /**
+   * Records a change to an endpoint or a delivery in the audit log
+   * (BN-REQ-OPS-011). Never carries a secret; never throws.
+   *
+   * @param action Dotted action name.
+   * @param resourceType `webhook_endpoint` or `webhook_delivery`.
+   * @param resourceId Affected row.
+   * @param metadata PII-free context.
+   */
+  private async audited(
+    action: string,
+    resourceType: 'webhook_endpoint' | 'webhook_delivery',
+    resourceId: string,
+    metadata: Record<string, unknown>,
+  ): Promise<void> {
+    const context = this.requestContext.get();
+    await this.audit.record({
+      tenantId: context.tenant?.id ?? null,
+      ...auditActorOf(context),
+      action,
+      resourceType,
+      resourceId,
+      metadata,
+    });
   }
 
   /**

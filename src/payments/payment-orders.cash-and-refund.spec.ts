@@ -7,6 +7,8 @@ import type { PaymentConfigService } from './payment-config.service';
 import type { PaymentEvents } from './payment-events';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import type { RequestContextService } from '../tenancy/request-context.service';
+import type { RecordEventInput } from './payment-events';
+import type { AuditEntry, AuditLogService } from '../audit/audit-log.service';
 
 /**
  * OXXO Pay cash references, hosted cash, and partial refunds. The tenant client
@@ -43,7 +45,8 @@ function row(over: Record<string, unknown> = {}): Record<string, unknown> {
 function fixture(rows: Record<string, unknown>[]) {
   const writes: Record<string, unknown>[] = [];
   const created: Record<string, unknown>[] = [];
-  const emitted: { type: string; extra: unknown }[] = [];
+  const emitted: { type: string; status: string; previousStatus: string | null; refunded?: string }[] = [];
+  const audits: AuditEntry[] = [];
   const client = {
     paymentOrder: {
       findFirst: jest.fn(() => Promise.resolve(rows[0] ?? null)),
@@ -89,7 +92,12 @@ function fixture(rows: Record<string, unknown>[]) {
       Promise.resolve(cb(client)),
   } as unknown as TenantPrismaService;
   const requestContext = {
-    get: () => ({ tenant: { id: TENANT_ID, schemaName: SCHEMA } }),
+    get: () => ({
+      tenant: { id: TENANT_ID, schemaName: SCHEMA },
+      principal: { kind: 'api-key', id: 'key-1', name: 'erp', tenantId: TENANT_ID, scopes: [] },
+      ipHash: null,
+      userAgentHash: null,
+    }),
   } as unknown as RequestContextService;
   const cfg = {
     id: 'cfg-1',
@@ -121,17 +129,30 @@ function fixture(rows: Record<string, unknown>[]) {
     refund,
     cancelCharge,
   } as unknown as NetpayClient;
+  // The outbox writer, called with the transaction client that changed the order.
   const events = {
-    emitIfChanged: () => null,
-    emit: (type: string, _o: unknown, _s: string, _t: string, extra: unknown) => {
-      emitted.push({ type, extra });
+    record: (_tx: unknown, input: RecordEventInput) => {
+      emitted.push({
+        type: input.eventType,
+        status: input.order.status,
+        previousStatus: input.previousStatus,
+        ...(input.refunded === undefined ? {} : { refunded: input.refunded.toFixed(2) }),
+      });
+      return Promise.resolve({});
     },
   } as unknown as PaymentEvents;
+  const audit = {
+    record: (entry: AuditEntry) => {
+      audits.push(entry);
+      return Promise.resolve();
+    },
+  } as unknown as AuditLogService;
   return {
-    service: new PaymentOrdersService(tenantPrisma, requestContext, config, netpay, events),
+    service: new PaymentOrdersService(tenantPrisma, requestContext, config, netpay, events, audit),
     writes,
     created,
     emitted,
+    audits,
     createOxxoReference,
     createCheckoutSession,
     refund,
@@ -206,23 +227,56 @@ describe('Hosted session methods', () => {
 });
 
 describe('Partial refunds', () => {
-  it('returns part of the amount: stays PAID, accumulates, and announces payment.refunded', async () => {
+  it('returns part of the amount: PARTIALLY_REFUNDED, accumulates, and announces payment.refunded', async () => {
     const f = fixture([row()]);
     const result = await f.service.refund('order-1', 'cliente', '30.00');
     expect(f.refund).toHaveBeenCalledWith('SANDBOX', 'sk_netpay_y', 'tx-1', '30.00', 'cliente');
-    expect(result).toEqual({ status: 'PAID', refundedAmount: '30.00', refunded: '30.00' });
+    expect(result).toEqual({ status: 'PARTIALLY_REFUNDED', refundedAmount: '30.00', refunded: '30.00' });
     expect(f.emitted).toEqual([
-      { type: PAYMENT_EVENTS.REFUNDED, extra: { refunded: '30.00', fullyRefunded: false } },
+      {
+        type: PAYMENT_EVENTS.REFUNDED,
+        status: 'PARTIALLY_REFUNDED',
+        previousStatus: 'PAID',
+        refunded: '30.00',
+      },
     ]);
   });
 
-  it('turns REFUNDED only when the total reaches the amount', async () => {
-    const f = fixture([row({ refundedAmount: new Prisma.Decimal('30.00') })]);
+  it('turns REFUNDED only when the total reaches the amount (BN-REQ-PAY-005)', async () => {
+    const f = fixture([row({ status: 'PARTIALLY_REFUNDED', refundedAmount: new Prisma.Decimal('30.00') })]);
     const result = await f.service.refund('order-1', 'resto');
     // Not an untouched charge, so the refund service is the only route.
     expect(f.cancelCharge).not.toHaveBeenCalled();
     expect(f.refund).toHaveBeenCalledWith('SANDBOX', 'sk_netpay_y', 'tx-1', '70.00', 'resto');
     expect(result).toEqual({ status: 'REFUNDED', refundedAmount: '100.00', refunded: '70.00' });
+    expect(f.emitted).toEqual([
+      {
+        type: PAYMENT_EVENTS.REFUNDED,
+        status: 'REFUNDED',
+        previousStatus: 'PARTIALLY_REFUNDED',
+        refunded: '70.00',
+      },
+    ]);
+  });
+
+  it('announces a second partial refund too, although the status stays PARTIALLY_REFUNDED', async () => {
+    const f = fixture([row({ status: 'PARTIALLY_REFUNDED', refundedAmount: new Prisma.Decimal('30.00') })]);
+    const result = await f.service.refund('order-1', 'otra', '20.00');
+    expect(result).toEqual({ status: 'PARTIALLY_REFUNDED', refundedAmount: '50.00', refunded: '20.00' });
+    expect(f.emitted).toHaveLength(1);
+    expect(f.emitted[0]).toMatchObject({ type: PAYMENT_EVENTS.REFUNDED, refunded: '20.00' });
+  });
+
+  it('still refunds the rest of an order partly refunded before PARTIALLY_REFUNDED existed (left PAID)', async () => {
+    const f = fixture([row({ refundedAmount: new Prisma.Decimal('30.00') })]);
+    const result = await f.service.refund('order-1', 'resto');
+    expect(result.status).toBe('REFUNDED');
+  });
+
+  it('refuses to refund a fully refunded order', async () => {
+    const f = fixture([row({ status: 'REFUNDED', refundedAmount: new Prisma.Decimal('100.00') })]);
+    await expect(f.service.refund('order-1', 'x', '1.00')).rejects.toThrow(/REFUNDED/);
+    expect(f.refund).not.toHaveBeenCalled();
   });
 
   it('refuses a refund above what is left, without calling Netpay', async () => {
@@ -301,9 +355,89 @@ describe('Full refund through the gateway cancellation', () => {
   it('does NOT try the other route after a 5xx: it is an unknown outcome, not a refusal', async () => {
     const f = fixture([row()]);
     f.cancelCharge.mockRejectedValueOnce(new NetpayRequestError(500, '/v3/transactions/tx-1/refund', 'boom'));
-    await expect(f.service.refund('order-1', 'x')).rejects.toThrow(/refused the request \(status 500\)/);
+    await expect(f.service.refund('order-1', 'x')).rejects.toThrow(/no definitive answer \(status 500\)/);
     expect(f.refund).not.toHaveBeenCalled();
     // The order is left refundable so the caller can retry.
     expect(f.writes.some((w) => 'refundedAmount' in w)).toBe(false);
+  });
+});
+
+describe('Refund claim when the provider outcome is unknown (BN-TASK-013)', () => {
+  /** Whether a write cleared the operation claim. */
+  const released = (writes: Record<string, unknown>[]) =>
+    writes.some((w) => {
+      const data = (w['many'] ?? w) as Record<string, unknown>;
+      return 'operationClaim' in data && data['operationClaim'] === null;
+    });
+
+  it('keeps the claim after a Netpay timeout, so a retry cannot reverse twice', async () => {
+    const f = fixture([row()]);
+    f.cancelCharge.mockRejectedValueOnce(
+      new NetpayTransportError('/v3/transactions/tx-1/refund', new Error('timeout')),
+    );
+    const error = await f.service.refund('order-1', 'x').catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: 'PROVIDER_OUTCOME_UNKNOWN', status: 504, retryable: true });
+    expect(released(f.writes)).toBe(false);
+  });
+
+  it('keeps the claim after a Netpay 5xx', async () => {
+    const f = fixture([row()]);
+    f.cancelCharge.mockRejectedValueOnce(new NetpayRequestError(503, '/v3/transactions/tx-1/refund', null));
+    await expect(f.service.refund('order-1', 'x')).rejects.toMatchObject({
+      code: 'PROVIDER_OUTCOME_UNKNOWN',
+    });
+    expect(released(f.writes)).toBe(false);
+  });
+
+  it('releases the claim after an explicit refusal, so the caller can retry', async () => {
+    const f = fixture([row()]);
+    f.refund.mockRejectedValueOnce(new NetpayRequestError(400, '/v2/transactions/x/refund', 'No permitida'));
+    await expect(f.service.refund('order-1', 'x', '10.00')).rejects.toMatchObject({
+      code: 'PROVIDER_DECLINED',
+      status: 502,
+    });
+    expect(released(f.writes)).toBe(true);
+  });
+});
+
+describe('Audit of payment status changes (BN-TASK-030, BN-REQ-OPS-011)', () => {
+  it('records the change with the actor, the tenant, the order and from → to', async () => {
+    const f = fixture([row()]);
+    await f.service.refund('order-1', 'cliente', '30.00');
+    expect(f.audits).toEqual([
+      expect.objectContaining({
+        tenantId: TENANT_ID,
+        actorType: 'API_KEY',
+        actorId: 'key-1',
+        actorLabel: 'erp',
+        action: 'payment.status_changed',
+        resourceType: 'payment_order',
+        resourceId: 'order-1',
+        metadata: expect.objectContaining({
+          orderId: 'order-1',
+          from: 'PAID',
+          to: 'PARTIALLY_REFUNDED',
+          event: PAYMENT_EVENTS.REFUNDED,
+        }) as unknown,
+      }),
+    ]);
+  });
+
+  it('records nothing when the provider refused and nothing changed', async () => {
+    const f = fixture([row()]);
+    f.refund.mockRejectedValueOnce(new Error('Comercio no tiene permitida esta operativa'));
+    await expect(f.service.refund('order-1', 'x', '10.00')).rejects.toThrow(/permitida/);
+    expect(f.audits).toHaveLength(0);
+  });
+
+  it('records the creation of an order as ∅ → PENDING', async () => {
+    const f = fixture([]);
+    await f.service.create({ merchantReferenceCode: 'H', amount: '50.00', checkoutMode: 'custom' });
+    expect(f.audits).toEqual([
+      expect.objectContaining({
+        action: 'payment.status_changed',
+        metadata: expect.objectContaining({ from: null, to: 'PENDING' }) as unknown,
+      }),
+    ]);
   });
 });

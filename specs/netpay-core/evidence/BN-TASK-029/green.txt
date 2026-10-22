@@ -1,0 +1,55 @@
+# BN-TASK-029 green — 2026-10-21T18:15:33Z
+# npm test -- src/common/rbac-audit
+PASS src/common/rbac-audit.routes.spec.ts
+  RBAC route table (BN-REQ-SEC-001)
+    ✓ has no route with @RequirePermissions and no @RequireScopes (4 ms)
+    ✓ boots: every route declares a policy and a scope where it declares permissions (1 ms)
+    ✓ makes webhooks:read and webhooks:write grantable to API keys (3 ms)
+    ✓ requires a webhooks scope on every /t/webhooks route (1 ms)
+    ✓ requires users:write at method level on POST /t/users, so VIEWER is refused (BN-REQ-SEC-003)
+
+PASS src/common/rbac-audit.service.spec.ts
+  RbacAuditService
+    ✓ reports a controller whose route declares no policy (2 ms)
+    ✓ refuses to start and names the offending route (8 ms)
+    ✓ accepts a route guarded by @Roles (1 ms)
+    ✓ accepts a route guarded by @RequirePermissions
+    ✓ accepts a route guarded by all-of permissions (1 ms)
+    ✓ accepts a public route and an API-key-only route
+    ✓ accepts a dual-plane route declared only at the class level (1 ms)
+    ✓ refuses to start when a route declares @RequirePermissions without @RequireScopes (BN-REQ-SEC-001)
+    ✓ applies the scope rule to class-level permissions too (1 ms)
+    ✓ reports every offending route, not just the first
+    ✓ describes the policy each route declares (1 ms)
+    ✓ audits controllers listed by discovery.getControllers(), even without an instance (regression)
+    ✓ ignores providers that are not controllers
+
+Test Suites: 2 passed, 2 total
+Tests:       18 passed, 18 total
+Snapshots:   0 total
+Time:        2.416 s, estimated 4 s
+Ran all test suites matching src/common/rbac-audit.
+
+================ e2e ================
+# BN-TASK-029/031/032/034/038/039 e2e — test/security.e2e-spec.ts against compiled app (Postgres bn-e2e-b:55432)
+PASS test/security.e2e-spec.ts
+  Security hardening (e2e)
+    ✓ never answers 429 to 30 readiness probes a minute, and does not count them (52 ms)
+    ✓ refuses an admin without MFA with 403 MFA_REQUIRED (86 ms)
+    ✓ enrols TOTP, confirms it and unlocks the control plane (61 ms)
+    ✓ requires the second factor at sign-in once enrolled (62 ms)
+    ✓ provisions the tenant used below (113 ms)
+    ✓ requires a step-up (MFA within 5 min) for a cross-tenant payment write (41 ms)
+    ✓ refuses /t/webhooks to a key holding only payments:read, and admits webhooks:* keys (143 ms)
+    ✓ caps API-key member creation at MEMBER, refuses a password and invites instead (217 ms)
+    ✓ refuses POST /t/users to a VIEWER (method-level users:write) (101 ms)
+    ✓ restricts an admin with mustChangePassword to the password change endpoint (70 ms)
+    ✓ answers an allowed preflight with 204 and a disallowed one with 403 (1 ms)
+    ✓ sends no X-Powered-By header (12 ms)
+    ✓ answers 429 on the 11th sign-in within a minute (242 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       13 passed, 13 total
+Snapshots:   0 total
+Time:        5.093 s, estimated 6 s
+Ran all test suites matching test/security.e2e-spec.ts.

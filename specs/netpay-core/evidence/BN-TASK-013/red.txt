@@ -1,0 +1,122 @@
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+FAIL src/common/filters/all-exceptions.filter.spec.ts
+  ● Test suite failed to run
+
+    SyntaxError: The requested module '../errors/app.exception' does not provide an export named 'ProviderDeclinedException'
+
+      at EsmLoader.linkAndEvaluateModule (node_modules/jest-runtime/build/index.js:1989:7)
+
+(node:3430) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+(node:3431) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/payment-orders.cash-and-refund.spec.ts
+  ● Full refund through the gateway cancellation › does NOT try the other route after a 5xx: it is an unknown outcome, not a refusal
+
+    expect(received).rejects.toThrow(expected)
+
+    Expected pattern: /no definitive answer \(status 500\)/
+    Received message: "The payment provider refused the request (status 500)."
+
+          301 |   it('does NOT try the other route after a 5xx: it is an unknown outcome, not a refusal', async () => {
+          302 |     const f = fixture([row()]);
+        > 303 |     f.cancelCharge.mockRejectedValueOnce(new NetpayRequestError(500, '/v3/transactions/tx-1/refund', 'boom'));
+              |                                          ^
+          304 |     await expect(f.service.refund('order-1', 'x')).rejects.toThrow(/no definitive answer \(status 500\)/);
+          305 |     expect(f.refund).not.toHaveBeenCalled();
+          306 |     // The order is left refundable so the caller can retry.
+
+      at Object.<anonymous> (src/payments/payment-orders.cash-and-refund.spec.ts:303:42)
+      at Object.toThrow (node_modules/expect/build/index.js:2155:20)
+      at Object.<anonymous> (src/payments/payment-orders.cash-and-refund.spec.ts:304:60)
+
+  ● Refund claim when the provider outcome is unknown (BN-TASK-013) › keeps the claim after a Netpay timeout, so a retry cannot reverse twice
+
+    expect(received).toMatchObject(expected)
+
+    - Expected  - 3
+    + Received  + 2
+
+      Object {
+    -   "code": "PROVIDER_OUTCOME_UNKNOWN",
+    -   "retryable": true,
+    -   "status": 504,
+    +   "code": "UPSTREAM_PROVIDER_ERROR",
+    +   "status": 502,
+      }
+
+      323 |     );
+      324 |     const error = await f.service.refund('order-1', 'x').catch((e: unknown) => e);
+    > 325 |     expect(error).toMatchObject({ code: 'PROVIDER_OUTCOME_UNKNOWN', status: 504, retryable: true });
+          |                   ^
+      326 |     expect(released(f.writes)).toBe(false);
+      327 |   });
+      328 |
+
+      at Object.<anonymous> (src/payments/payment-orders.cash-and-refund.spec.ts:325:19)
+
+  ● Refund claim when the provider outcome is unknown (BN-TASK-013) › keeps the claim after a Netpay 5xx
+
+    expect(received).rejects.toMatchObject(expected)
+
+    - Expected  - 1
+    + Received  + 1
+
+      Object {
+    -   "code": "PROVIDER_OUTCOME_UNKNOWN",
+    +   "code": "UPSTREAM_PROVIDER_ERROR",
+      }
+
+      330 |     const f = fixture([row()]);
+      331 |     f.cancelCharge.mockRejectedValueOnce(new NetpayRequestError(503, '/v3/transactions/tx-1/refund', null));
+    > 332 |     await expect(f.service.refund('order-1', 'x')).rejects.toMatchObject({ code: 'PROVIDER_OUTCOME_UNKNOWN' });
+          |                                                            ^
+      333 |     expect(released(f.writes)).toBe(false);
+      334 |   });
+      335 |
+
+      at Object.toMatchObject (node_modules/expect/build/index.js:2155:20)
+      at Object.<anonymous> (src/payments/payment-orders.cash-and-refund.spec.ts:332:60)
+
+  ● Refund claim when the provider outcome is unknown (BN-TASK-013) › releases the claim after an explicit refusal, so the caller can retry
+
+    expect(received).rejects.toMatchObject(expected)
+
+    - Expected  - 1
+    + Received  + 1
+
+      Object {
+    -   "code": "PROVIDER_DECLINED",
+    +   "code": "UPSTREAM_PROVIDER_ERROR",
+        "status": 502,
+      }
+
+      337 |     const f = fixture([row()]);
+      338 |     f.refund.mockRejectedValueOnce(new NetpayRequestError(400, '/v2/transactions/x/refund', 'No permitida'));
+    > 339 |     await expect(f.service.refund('order-1', 'x', '10.00')).rejects.toMatchObject({
+          |                                                                     ^
+      340 |       code: 'PROVIDER_DECLINED',
+      341 |       status: 502,
+      342 |     });
+
+      at Object.toMatchObject (node_modules/expect/build/index.js:2155:20)
+      at Object.<anonymous> (src/payments/payment-orders.cash-and-refund.spec.ts:339:69)
+
+Test Suites: 2 failed, 2 total
+Tests:       4 failed, 16 skipped, 20 total
+Snapshots:   0 total
+Time:        3.653 s, estimated 11 s
+Ran all test suites matching src/common/filters/all-exceptions.filter.spec.ts|src/payments/payment-orders.cash-and-refund.spec.ts with tests matching "AllExceptionsFilter — stable|provider outcomes|outcome is unknown|5xx".

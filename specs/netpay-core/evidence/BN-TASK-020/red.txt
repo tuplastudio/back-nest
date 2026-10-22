@@ -1,0 +1,129 @@
+# BN-TASK-020 red — 2026-10-21T18:14:07Z
+# jest src/payments/decline-codes.spec.ts src/payments/netpay.client.spec.ts src/payments/payment-orders.service.spec.ts -t "decline"
+FAIL src/payments/decline-codes.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './decline-codes' from 'src/payments/decline-codes.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+(node:5319) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[Nest] 5318  - 10/21/2026, 11:14:10 AM    WARN [NetpayClient] Netpay POST /v3.5/charges/ returned status 400
+[Nest] 5318  - 10/21/2026, 11:14:10 AM    WARN [NetpayClient] Netpay POST /v3.5/charges/ returned status 400
+[Nest] 5318  - 10/21/2026, 11:14:10 AM    WARN [NetpayClient] Netpay POST /v3.5/charges/ returned status 404
+[Nest] 5318  - 10/21/2026, 11:14:10 AM    WARN [NetpayClient] Netpay POST /v3.5/charges/ returned status 409
+[Nest] 5318  - 10/21/2026, 11:14:10 AM    WARN [NetpayClient] Netpay POST /v3.5/charges/ returned status 409
+[Nest] 5318  - 10/21/2026, 11:14:10 AM    WARN [NetpayClient] Netpay POST /v3.5/charges/ returned status 500
+(node:5318) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/netpay.client.spec.ts
+  ● NetpayClient — provider-echoed values never leave the client (BN-TASK-023) › keeps a declined charge free of the echoed values too
+
+    expect(received).not.toContain(expected) // indexOf
+
+    Expected substring: not "4111111111111111"
+    Received string:        "{\"transactionTokenId\":\"tx-d\",\"status\":\"failed\",\"error\":\"Rejected\",\"subErrors\":[{\"object\":\"charge\",\"field\":\"source\",\"rejectedValue\":\"4111111111111111\",\"value\":\"4111111111111111\",\"message\":\"Invalid card\"},{\"object\":\"charge\",\"field\":\"cvv\",\"value\":\"987\",\"message\":\"cvv 987 is invalid\"},{\"object\":\"billing\",\"field\":\"email\",\"value\":\"ana.lopez@example.mx\"}],\"declineReason\":\"Rejected (source: 4111111111111111; cvv: 987; email: ana.lopez@example.mx)\"}"
+
+      406 |     });
+      407 |     const tx = await client.createCharge('SANDBOX', SK, { source: 'token_x' } as never);
+    > 408 |     expect(JSON.stringify(tx)).not.toContain(PAN);
+          |                                    ^
+      409 |     expect(JSON.stringify(tx)).not.toContain(EMAIL);
+      410 |   });
+      411 | });
+
+      at Object.<anonymous> (src/payments/netpay.client.spec.ts:408:36)
+
+  ● NetpayClient — decline codes (BN-TASK-020) › maps a decline to the stable enum and keeps the original code internally
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "INSUFFICIENT_FUNDS"
+    Received: undefined
+
+      418 |     });
+      419 |     const tx = await client.createCharge('SANDBOX', SK, { source: 'token_x' } as never);
+    > 420 |     expect(tx.failureCode).toBe('INSUFFICIENT_FUNDS');
+          |                            ^
+      421 |     expect(tx.providerFailureCode).toBe('51');
+      422 |   });
+      423 |
+
+      at Object.<anonymous> (src/payments/netpay.client.spec.ts:420:28)
+
+  ● NetpayClient — decline codes (BN-TASK-020) › classifies the Decision Manager rejection as suspected fraud
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "FRAUD_SUSPECTED"
+    Received: undefined
+
+      428 |     });
+      429 |     const tx = await client.createCharge('SANDBOX', SK, { source: 'token_x' } as never);
+    > 430 |     expect(tx.failureCode).toBe('FRAUD_SUSPECTED');
+          |                            ^
+      431 |   });
+      432 | });
+      433 |
+
+      at Object.<anonymous> (src/payments/netpay.client.spec.ts:430:28)
+
+(node:5317) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/payment-orders.service.spec.ts
+  ● PaymentOrdersService decline codes (BN-TASK-020) › returns and persists the stable failure code, keeping the original internally
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "INSUFFICIENT_FUNDS"
+    Received: undefined
+
+      832 |       ...DEVICE,
+      833 |     });
+    > 834 |     expect(result.failureCode).toBe('INSUFFICIENT_FUNDS');
+          |                                ^
+      835 |     expect(JSON.stringify(result)).not.toContain('"51"');
+      836 |     expect(f.writes.some((w) => w['failureCode'] === 'INSUFFICIENT_FUNDS')).toBe(true);
+      837 |     expect(f.writes.some((w) => w['providerFailureCode'] === '51')).toBe(true);
+
+      at Object.<anonymous> (src/payments/payment-orders.service.spec.ts:834:32)
+
+  ● PaymentOrdersService decline codes (BN-TASK-020) › classifies a failure found by verification from the transaction response code
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      841 |     const f = serviceOver([order()], { status: 'REJECT', amount: 150.75, responseCode: '54' });
+      842 |     await f.service.verifyOrder('order-1', 'txn-1');
+    > 843 |     expect(f.writes.some((w) => w['failureCode'] === 'CARD_EXPIRED')).toBe(true);
+          |                                                                       ^
+      844 |   });
+      845 |
+      846 |   it('shows the failure code on the order view', async () => {
+
+      at Object.<anonymous> (src/payments/payment-orders.service.spec.ts:843:71)
+
+  ● PaymentOrdersService decline codes (BN-TASK-020) › shows the failure code on the order view
+
+    TypeError: Cannot read properties of undefined (reading 'toFixed')
+
+      1422 |       paymentReference: row.paymentReference,
+      1423 |       paymentReferenceExpiresAt: row.paymentReferenceExpiresAt?.toISOString() ?? null,
+    > 1424 |       refundedAmount: row.refundedAmount.toFixed(2),
+           |                                          ^
+      1425 |       checkout: null,
+      1426 |       failureReason: row.failureReason,
+      1427 |       createdAt: row.createdAt.toISOString(),
+
+      at PaymentOrdersService.toView (src/payments/payment-orders.service.ts:1424:42)
+      at PaymentOrdersService.findById (src/payments/payment-orders.service.ts:356:17)
+      at Object.<anonymous> (src/payments/payment-orders.service.spec.ts:848:18)
+
+Test Suites: 3 failed, 3 total
+Tests:       6 failed, 93 skipped, 9 passed, 108 total
+Snapshots:   0 total
+Time:        2.49 s, estimated 9 s
+Ran all test suites matching src/payments/decline-codes.spec.ts|src/payments/netpay.client.spec.ts|src/payments/payment-orders.service.spec.ts with tests matching "decline".

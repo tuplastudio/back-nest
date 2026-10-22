@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config.service';
 
 /**
@@ -40,6 +40,11 @@ export interface AccessTokenPayload {
   readonly kind: 'platform-admin' | 'tenant-user';
   /** Tenant the token is scoped to, for tenant members. */
   readonly tid?: string;
+  /**
+   * Epoch seconds of the second-factor verification behind this session, for
+   * platform administrators (BN-REQ-SEC-006). Absent until MFA is verified.
+   */
+  readonly mfa?: number;
   /** Issued-at, epoch seconds. */
   readonly iat: number;
   /** Expiry, epoch seconds. */
@@ -73,11 +78,37 @@ export interface RefreshTokenPayload {
   readonly kind: 'platform-admin' | 'tenant-user';
   /** Tenant the token is scoped to, for tenant members. */
   readonly tid?: string;
+  /**
+   * Epoch seconds of the second-factor verification behind this session, for
+   * platform administrators (BN-REQ-SEC-006). Absent until MFA is verified.
+   */
+  readonly mfa?: number;
   /** Issued-at, epoch seconds. */
   readonly iat: number;
   /** Expiry, epoch seconds. */
   readonly exp: number;
 }
+
+/**
+ * Claims of a member invitation token.
+ */
+export interface InvitationTokenPayload {
+  /** Invited member id. */
+  readonly sub: string;
+  /** Tenant the member belongs to. */
+  readonly tid: string;
+  /** Token kind. */
+  readonly typ: 'invite';
+}
+
+/**
+ * How long a member invitation stays valid.
+ *
+ * The token is single use by construction — accepting it moves the member out of
+ * `INVITED`, which every later presentation is checked against — so the window
+ * only bounds how long an unaccepted, leaked invitation is useful.
+ */
+export const INVITATION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /**
  * A refresh token ready to be persisted.
@@ -137,6 +168,7 @@ export class TokenService {
     subject: string,
     kind: 'platform-admin' | 'tenant-user',
     tenantId?: string,
+    mfaAt?: number,
   ): { token: string; expiresAt: number } {
     const expiresInMs = this.durationToMs(this.config.jwtAccessTtl);
     const payload: Omit<AccessTokenPayload, 'iat' | 'exp'> = {
@@ -145,6 +177,7 @@ export class TokenService {
       typ: 'access',
       kind,
       ...(tenantId ? { tid: tenantId } : {}),
+      ...(mfaAt !== undefined ? { mfa: mfaAt } : {}),
     };
 
     const token = this.jwtService.sign(payload, {
@@ -171,6 +204,7 @@ export class TokenService {
     kind: 'platform-admin' | 'tenant-user',
     familyId: string = randomUUID(),
     tenantId?: string,
+    mfaAt?: number,
   ): IssuedRefreshToken {
     const expiresInMs = this.durationToMs(this.config.jwtRefreshTtl);
     const payload: Omit<RefreshTokenPayload, 'iat' | 'exp'> = {
@@ -180,6 +214,7 @@ export class TokenService {
       fid: familyId,
       kind,
       ...(tenantId ? { tid: tenantId } : {}),
+      ...(mfaAt !== undefined ? { mfa: mfaAt } : {}),
     };
 
     const token = this.jwtService.sign(payload, {
@@ -204,6 +239,7 @@ export class TokenService {
    * @param kind Which principal table the principal belongs to.
    * @param tenantId Tenant scope, for tenant members.
    * @param familyId Existing rotation family when refreshing, new family on sign-in.
+   * @param mfaAt Epoch seconds of the session's second-factor verification.
    * @returns The token pair plus the digest to persist for the refresh token.
    */
   issuePair(
@@ -211,9 +247,12 @@ export class TokenService {
     kind: 'platform-admin' | 'tenant-user',
     tenantId?: string,
     familyId?: string,
+    mfaAt?: number,
   ): TokenPair {
-    const access = this.issueAccessToken(subject, kind, tenantId);
-    const refresh = this.issueRefreshToken(subject, kind, familyId, tenantId);
+    const access = this.issueAccessToken(subject, kind, tenantId, mfaAt);
+    // The refresh token carries the original verification time, so a refreshed
+    // session stays verified but never looks *recently* verified for step-up.
+    const refresh = this.issueRefreshToken(subject, kind, familyId, tenantId, mfaAt);
 
     return {
       accessToken: access.token,
@@ -223,6 +262,49 @@ export class TokenService {
       familyId: refresh.familyId,
       refreshTokenDigest: refresh.digest,
     };
+  }
+
+  /**
+   * Signs a member invitation token, returned once to whoever created the member.
+   *
+   * Signed with a key derived from the access secret under its own label, so an
+   * invitation can never be replayed as an access token or the other way round.
+   *
+   * @param userId Invited member id.
+   * @param tenantId Tenant the member belongs to.
+   * @returns The token and its expiry as epoch milliseconds.
+   */
+  issueInvitationToken(userId: string, tenantId: string): { token: string; expiresAt: number } {
+    const payload: InvitationTokenPayload = { sub: userId, tid: tenantId, typ: 'invite' };
+    const token = this.jwtService.sign(
+      { ...payload, jti: randomUUID() },
+      {
+        secret: this.invitationSecret(),
+        expiresIn: INVITATION_TTL_SECONDS,
+        issuer: this.config.jwtIssuer,
+        audience: `${this.config.jwtAudience}:invite`,
+      },
+    );
+    return { token, expiresAt: Date.now() + INVITATION_TTL_SECONDS * 1000 };
+  }
+
+  /**
+   * Verifies a member invitation token.
+   *
+   * @param token Raw invitation token.
+   * @returns The member and tenant it names.
+   * @throws {Error} When the token is invalid, expired or of the wrong type.
+   */
+  verifyInvitationToken(token: string): InvitationTokenPayload {
+    const payload = this.jwtService.verify<InvitationTokenPayload>(token, {
+      secret: this.invitationSecret(),
+      issuer: this.config.jwtIssuer,
+      audience: `${this.config.jwtAudience}:invite`,
+    });
+    if (payload.typ !== 'invite') {
+      throw new Error('Wrong token type: not an invitation.');
+    }
+    return payload;
   }
 
   /**
@@ -311,6 +393,15 @@ export class TokenService {
    */
   static randomOpaqueToken(bytes = 32): string {
     return randomBytes(bytes).toString('base64url');
+  }
+
+  /**
+   * Derives the invitation signing key from the access secret.
+   *
+   * @returns The domain-separated key.
+   */
+  private invitationSecret(): string {
+    return createHmac('sha256', this.config.jwtAccessSecret).update('invitation:v1', 'utf8').digest('base64');
   }
 
   /**

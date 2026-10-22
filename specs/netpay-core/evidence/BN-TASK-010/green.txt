@@ -1,0 +1,28 @@
+# BN-TASK-010 green — 2026-10-21T20:25:56Z
+
+# e2e: npm run build && jest --config ./test/jest-e2e.json --runInBand test/payments.e2e-spec.ts (Idempotency-Key block; whole suite count above)
+# numPassedTests=140 numFailedTests=0 numTotalTests=140
+PASS  payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › runs two concurrent refunds with one key once: one Netpay call, and the stored answer on retry
+PASS  payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › replays an order creation and a charge without calling Netpay again
+PASS  payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › stores a definitive 4xx, and keeps a 5xx in progress so a retry cannot run twice
+PASS  payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › refuses a malformed key and leaves requests without one as they were
+
+# integration (PostgreSQL 17): npm run test:int -- test/payment-recovery.int-spec.ts
+# numPassedTests=6 numFailedTests=0 numTotalTests=6
+PASS  payment recovery paths (BN-TASK-010/011/014/015, integration) › idempotency store (BN-TASK-010) › lets exactly one of two concurrent requests own a key, then replays, refuses another body and expires
+PASS  payment recovery paths (BN-TASK-010/011/014/015, integration) › idempotency store (BN-TASK-010) › keeps a 5xx key in progress for ten minutes
+
+# unit: npm test -- src/common/idempotency src/common/filters/all-exceptions.filter.spec.ts
+# numPassedTests=120 numFailedTests=0 numTotalTests=120
+PASS  AllExceptionsFilter — idempotency and order state codes (BN-TASK-010, BN-TASK-014) › answers 409 IDEMPOTENCY_IN_PROGRESS as retryable, with Retry-After
+PASS  AllExceptionsFilter — idempotency and order state codes (BN-TASK-010, BN-TASK-014) › answers 422 IDEMPOTENCY_KEY_REUSED, not retryable and without Retry-After
+PASS  AllExceptionsFilter — idempotency and order state codes (BN-TASK-010, BN-TASK-014) › answers 409 ORDER_STATE_CONFLICT with the order status in details
+PASS  IdempotencyInterceptor (BN-TASK-010) › leaves a request without the header alone
+PASS  IdempotencyInterceptor (BN-TASK-010) › refuses a key that is not 1-255 printable characters
+PASS  IdempotencyInterceptor (BN-TASK-010) › scopes the key to the method and concrete path, and hashes the canonical body
+PASS  IdempotencyInterceptor (BN-TASK-010) › stores a success with the status the route answers
+PASS  IdempotencyInterceptor (BN-TASK-010) › replays a stored response without calling the handler
+PASS  IdempotencyInterceptor (BN-TASK-010) › replays a stored error as the same error
+PASS  IdempotencyInterceptor (BN-TASK-010) › answers 422 to another body and 409 with Retry-After while the first runs
+PASS  IdempotencyInterceptor (BN-TASK-010) › stores a definitive 4xx, keeps a 5xx in progress and frees the key on a retryable 4xx
+PASS  IdempotencyInterceptor (BN-TASK-010) › hashes bodies that differ only in key order the same, and other bodies differently

@@ -1,14 +1,18 @@
-# Verificación: formato, lint, tipos, secretos, tests unitarios con cobertura y
-# e2e contra un Postgres desechable.
+# Verificación: formato, lint, tipos, secretos, tests unitarios con cobertura
+# (umbral en src/payments), migraciones (plano de control y tenants), e2e contra
+# un Postgres desechable y Trivy bloqueante sobre el árbol y la imagen.
 #
-# Este workflow no despliega nada y no depende de ningún environment de GitHub:
-# es el check que `main` puede exigir para poder mergear. Vive aparte del
-# despliegue por dos razones:
+# Es un workflow REUTILIZABLE (`workflow_call`, BN-REQ-OPS-001): lo invoca
+# deploy.yml como job `ci`, y los despliegues lo esperan con `needs`. Antes
+# eran dos workflows hermanos disparados por el mismo push, y nada impedía que
+# el despliegue saliera con los tests en rojo: corrían en paralelo. Ahora un
+# push con tests fallando no despliega, porque el job que despliega no empieza.
+# Los checks que exige la protección de `main` llevan por eso el prefijo del
+# job llamador: «CI / Verificación, tests y e2e» y «CI / Vulnerabilidades»
+# (scripts/github/protect-repo.sh).
 #
-#   * Corre una sola vez. Con un único workflow, un PR disparaba `verify` y
-#     además el grupo de deploy; partirlo evita pagar la suite e2e (2 min 40 s
-#     medidos) y un Postgres de servicio por cada workflow.
-#   * No arrastra las variables de GCP. En el workflow de despliegue las
+# Este workflow no despliega nada y no depende de ningún environment de GitHub.
+# Vive en su propio fichero porque no arrastra las variables de GCP. En el workflow de despliegue las
 #     `vars.*` del nivel de workflow se resuelven según el `environment:` de
 #     cada job, y un job sin environment las recibe **vacías y sin avisar**
 #     (IMAGE_BASE quedaba como `-docker.pkg.dev///`). Aquí no hay
@@ -22,12 +26,10 @@
 name: ci
 
 on:
-  push:
-    branches: [main, staging]
-    # La documentación no cambia el runtime; no debe gastar un release.
-    paths-ignore: ['docs/**', '**/*.md']
-  pull_request:
-    branches: [main, staging]
+  # Lo dispara deploy.yml en cada push y PR a main/staging.
+  workflow_call:
+  # Para relanzar la verificación sola, sin desplegar.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -102,9 +104,30 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
-      - name: Validar migraciones
-        run: npm run migrations:validate
+      # Con MIGRATIONS_BASE_REF el validador además rechaza editar, renombrar o
+      # borrar una migración ya mergeada: el ledger de tenants lo detectaría en
+      # el Job de despliegue (checksum distinto) y abortaría el release; aquí
+      # falla en el PR. En un push se compara con el commit anterior.
+      - name: Validar migraciones (plano de control y tenants)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -n "$BASE_REF" ]; then
+            export MIGRATIONS_BASE_REF="origin/$BASE_REF"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            export MIGRATIONS_BASE_REF="$BEFORE"
+          fi
+          npm run migrations:validate
 
+      # Promoción por escalones y drift de flags: scripts que solo corren contra
+      # GCP, probados aquí con fixtures.
+      - name: Scripts del pipeline (fixtures)
+        run: bash scripts/ci/test-pipeline-scripts.sh
+
+      # Falla si la cobertura de líneas de src/payments baja del umbral de
+      # jest.config.mjs (BN-REQ-OPS-009).
       - name: Tests unitarios con cobertura
         run: npm run test:cov
 
@@ -138,6 +161,18 @@ jobs:
           psql -h localhost -U postgres -d mtb_test -v ON_ERROR_STOP=1 \
             -f docker/postgres/init/01-roles.sql
           echo "::add-mask::$MTB_APP_PASSWORD"
+
+      # Contra Postgres real: el runner de migraciones de tenant (3 esquemas,
+      # ejecución concurrente, checksum alterado y adopción de esquemas previos
+      # al ledger, BN-REQ-OPS-002), el outbox transaccional de eventos (rollback,
+      # caída antes de despachar, secuencia por orden; BN-REQ-EVT-004/005/006) y
+      # las rutas de recuperación de pagos (resultados pendientes con fallo de BD
+      # inyectado, CHARGE_UNKNOWN, intentos e idempotencia; BN-TASK-010/011/014/015).
+      # Cada suite crea y borra su propia base.
+      - name: Integración (migraciones de tenant y outbox)
+        env:
+          TENANT_MIGRATIONS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: npm run test:int
 
       # El plano de control se migra con la variante sin pooler porque
       # prisma.config.ts lee CONTROL_PLANE_DATABASE_URL_UNPOOLED y no acepta
@@ -182,6 +217,18 @@ jobs:
           CONTROL_PLANE_DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
         run: npm run prisma:seed
 
+      # docs/openapi.json es el contrato publicado (BN-REQ-API-001), con los
+      # eventos salientes en `x-webhooks` y el sobre de error. Se regenera desde
+      # el código (arranca la app: la DI de Nest necesita la base migrada) y el
+      # job falla si difiere del commiteado: `npm run docs:openapi` y commit.
+      - name: OpenAPI sincronizado con el código
+        env:
+          NODE_ENV: test
+          CONTROL_PLANE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+          CONTROL_PLANE_DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/mtb_test?schema=public
+          TENANT_PLANE_DATABASE_URL: postgresql://mtb_app:${{ github.run_id }}-app@localhost:5432/mtb_test?schema=public
+        run: npm run openapi:check
+
       - name: E2E
         env:
           NODE_ENV: test
@@ -190,29 +237,30 @@ jobs:
           TENANT_PLANE_DATABASE_URL: postgresql://mtb_app:${{ github.run_id }}-app@localhost:5432/mtb_test?schema=public
         run: npm run test:e2e
 
-  # =============================================================================
-  # staging: el entorno donde se prueba antes de tocar producción (§17)
-  # =============================================================================
-
   # ===========================================================================
-  # scan: vulnerabilidades del árbol de dependencias, sin bloquear
+  # scan: vulnerabilidades HIGH/CRITICAL del árbol y de la imagen, BLOQUEANTE
   # ===========================================================================
+  #
+  # BN-REQ-OPS-008. El escaneo era informativo porque una descarga fallida del
+  # binario de Trivy tumbó un despliegue sin que hubiera ningún CVE (run
+  # 39169632356). Eso se resuelve con un reintento, no quitando el gate: el
+  # primer intento tolera el fallo y el segundo, que solo corre si el primero
+  # falló, no. Un CVE real falla los dos (es determinista); una caída de red,
+  # casi nunca dos veces. Los hallazgos aceptados van en .trivyignore, con motivo.
+  #
+  # La imagen se construye aquí, en local y sin empujar: el paquete del sistema
+  # base (node:22-alpine) no aparece en el lockfile y solo se ve escaneando la
+  # imagen. Mismo Dockerfile y target que el despliegue.
   scan:
-    name: Vulnerabilidades (informativo)
+    name: Vulnerabilidades
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # Nunca es un requisito: un escáner que se cae por red no puede decidir si
-    # alguien puede mergear. El informe se lee y se archiva; la decisión se toma
-    # con criterio humano o con Artifact Analysis sobre la imagen ya publicada.
-    continue-on-error: false
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      # Escanea el árbol (`scan-ref: .`), no la imagen: en un PR la imagen aún no
-      # está en el registro, y lo interesante en un PR es el lockfile, que es
-      # donde se introducen los CVE.
       - name: Escanear dependencias
+        id: trivy_fs
         continue-on-error: true
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
         with:
@@ -220,24 +268,57 @@ jobs:
           scan-ref: .
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          # Findings aceptados a propósito, cada uno con su motivo.
           trivyignores: .trivyignore
+          exit-code: '1'
           format: table
 
-      - name: Publicar el informe
-        if: always()
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+      - name: Escanear dependencias (reintento, bloqueante)
+        if: steps.trivy_fs.outcome == 'failure'
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
         with:
-          name: trivy-dependencies
-          path: trivy-results.*
-          if-no-files-found: ignore
-          retention-days: 14
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: '1'
+          format: table
 
-      # Si el paso anterior falló (por red o por lo que sea), el motivo tiene que
-      # quedar escrito: un escaneo que no se ejecutó no es un escaneo en verde.
-      - name: Por qué no hay informe
-        if: failure()
-        run: |
-          echo "::warning::El escaneo de dependencias no pudo completarse."
-          echo "::warning::Suele ser una caída de la descarga del binario de Trivy,"
-          echo "::warning::no una vulnerabilidad. Revisa el paso anterior."
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
+      - name: Construir la imagen de runtime (sin publicar)
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
+        with:
+          context: .
+          target: runtime
+          load: true
+          push: false
+          tags: netpay-api:ci-${{ github.sha }}
+          cache-from: type=gha,scope=app
+          platforms: linux/amd64
+
+      - name: Escanear la imagen
+        id: trivy_image
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          scan-type: image
+          image-ref: netpay-api:ci-${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: '1'
+          format: table
+
+      - name: Escanear la imagen (reintento, bloqueante)
+        if: steps.trivy_image.outcome == 'failure'
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          scan-type: image
+          image-ref: netpay-api:ci-${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: '1'
+          format: table

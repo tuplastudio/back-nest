@@ -1,0 +1,65 @@
+# BN-TASK-034 (public routes vs admin session policy) red — 2026-10-21T18:52:34Z
+# npm test -- src/auth/auth.guard.public-session.spec.ts
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/auth/auth.guard.public-session.spec.ts
+
+(node:38635) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/auth/auth.guard.public-session.spec.ts
+  ● AuthGuard on @Public routes with a restricted admin session › lets MFA pending (not enrolled) through a public route as an anonymous caller
+
+    AppException: Platform administrators must enrol a second factor: POST /auth/mfa/enroll, then /auth/mfa/confirm.
+
+      66 |   }
+      67 |   if (mfaApplies && (!facts.mfaEnrolled || facts.mfaAt === undefined)) {
+    > 68 |     return new AppException(
+         |            ^
+      69 |       facts.mfaEnrolled
+      70 |         ? 'Verify your second factor at POST /auth/mfa/verify before using this endpoint.'
+      71 |         : 'Platform administrators must enrol a second factor: POST /auth/mfa/enroll, then /auth/mfa/confirm.',
+
+      at evaluateAdminSession (src/auth/admin-session-policy.ts:68:12)
+      at AuthGuard.canActivate (src/auth/auth.guard.ts:126:22)
+      at src/auth/auth.guard.public-session.spec.ts:80:22
+      at src/auth/auth.guard.public-session.spec.ts:79:21
+
+  ● AuthGuard on @Public routes with a restricted admin session › lets MFA pending (enrolled, not verified) through a public route as an anonymous caller
+
+    AppException: Verify your second factor at POST /auth/mfa/verify before using this endpoint.
+
+      66 |   }
+      67 |   if (mfaApplies && (!facts.mfaEnrolled || facts.mfaAt === undefined)) {
+    > 68 |     return new AppException(
+         |            ^
+      69 |       facts.mfaEnrolled
+      70 |         ? 'Verify your second factor at POST /auth/mfa/verify before using this endpoint.'
+      71 |         : 'Platform administrators must enrol a second factor: POST /auth/mfa/enroll, then /auth/mfa/confirm.',
+
+      at evaluateAdminSession (src/auth/admin-session-policy.ts:68:12)
+      at AuthGuard.canActivate (src/auth/auth.guard.ts:126:22)
+      at src/auth/auth.guard.public-session.spec.ts:80:22
+      at src/auth/auth.guard.public-session.spec.ts:79:21
+
+  ● AuthGuard on @Public routes with a restricted admin session › lets password change pending through a public route as an anonymous caller
+
+    AppException: Verify your second factor at POST /auth/mfa/verify before using this endpoint.
+
+      66 |   }
+      67 |   if (mfaApplies && (!facts.mfaEnrolled || facts.mfaAt === undefined)) {
+    > 68 |     return new AppException(
+         |            ^
+      69 |       facts.mfaEnrolled
+      70 |         ? 'Verify your second factor at POST /auth/mfa/verify before using this endpoint.'
+      71 |         : 'Platform administrators must enrol a second factor: POST /auth/mfa/enroll, then /auth/mfa/confirm.',
+
+      at evaluateAdminSession (src/auth/admin-session-policy.ts:68:12)
+      at AuthGuard.canActivate (src/auth/auth.guard.ts:126:22)
+      at src/auth/auth.guard.public-session.spec.ts:80:22
+      at src/auth/auth.guard.public-session.spec.ts:79:21
+
+Test Suites: 1 failed, 1 total
+Tests:       3 failed, 1 passed, 4 total
+Snapshots:   0 total
+Time:        1.665 s, estimated 2 s
+Ran all test suites matching src/auth/auth.guard.public-session.spec.ts.

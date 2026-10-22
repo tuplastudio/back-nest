@@ -13,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
@@ -24,16 +25,19 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
+import { AuthThrottle } from '../auth/throttling';
 import { Public } from '../common/decorators/public.decorator';
 import { RequireScopes } from '../common/decorators/scopes.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentPrincipal, CurrentTenant } from '../common/decorators/current-tenant.decorator';
+import { AuthorizationException } from '../common/errors/app.exception';
 import { ProjectsService } from './projects.service';
 import { TenantUsersService } from './tenant-users.service';
 import { TenantGuard } from '../tenancy/tenant.guard';
 import { ProjectStatus } from '../generated/tenant-plane/enums';
 import {
+  AcceptInvitationDto,
+  CreatedUserDto,
   CreateProjectDto,
   CreateUserDto,
   ListUsersQueryDto,
@@ -70,7 +74,7 @@ export class TenantAuthController {
    */
   @Public()
   @UseGuards(TenantGuard)
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @AuthThrottle()
   @Post('sign-in')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -103,7 +107,7 @@ export class TenantAuthController {
    */
   @Public()
   @UseGuards(TenantGuard)
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @AuthThrottle()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -125,6 +129,26 @@ export class TenantAuthController {
       displayName: result.displayName,
       role: result.role,
     };
+  }
+
+  /**
+   * Accepts a member invitation and sets the member's password.
+   *
+   * @param dto Invitation token and the chosen password.
+   */
+  @Public()
+  @UseGuards(TenantGuard)
+  @AuthThrottle()
+  @Post('accept-invitation')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Accept a member invitation',
+    description:
+      'Activates an INVITED member with the password they choose. The token is single use: once accepted the member is no longer INVITED and the token is refused.',
+  })
+  @ApiBadRequestResponse({ description: 'The invitation is invalid, expired or already used.' })
+  async acceptInvitation(@Body() dto: AcceptInvitationDto): Promise<void> {
+    await this.users.acceptInvitation(dto.token, dto.password);
   }
 }
 
@@ -155,6 +179,7 @@ export class TenantUsersController {
    */
   @Get()
   @RequireScopes('users:read')
+  @RequirePermissions('users:read')
   @ApiOperation({
     summary: 'List tenant members',
     description: 'Members of the current tenant only. E-mail addresses are returned masked.',
@@ -193,6 +218,10 @@ export class TenantUsersController {
    * @returns The decrypted address.
    */
   @Get('me/email')
+  // Declared for the boot audit (BN-REQ-SEC-001): the class-level permissions
+  // apply here too, so an API key must name a scope. Keys have no e-mail and are
+  // refused below regardless.
+  @RequireScopes('users:read')
   @ApiOperation({
     summary: "Reveal the caller's own e-mail",
     description:
@@ -201,7 +230,7 @@ export class TenantUsersController {
   @ApiOkResponse({ schema: { type: 'object', properties: { email: { type: 'string' } } } })
   async ownEmail(@CurrentPrincipal() principal: Principal): Promise<{ email: string }> {
     if (principal.kind !== 'tenant-user') {
-      throw new Error('Only tenant members have an e-mail to reveal.');
+      throw new AuthorizationException('Only tenant members have an e-mail to reveal.');
     }
     return { email: await this.users.ownEmail(principal.id) };
   }
@@ -214,15 +243,19 @@ export class TenantUsersController {
    */
   @Post()
   @RequireScopes('users:write')
+  // Method level on purpose (BN-REQ-SEC-003): the class-level any-of
+  // `users:read | users:write` let a read-only VIEWER create members.
+  @RequirePermissions('users:write')
   @ApiOperation({
     summary: 'Create a tenant member',
     description:
-      'E-mail and phone are encrypted with AES-256-GCM before storage. Lookups use a keyed blind index, and responses expose only the masked e-mail.',
+      'E-mail and phone are encrypted with AES-256-GCM before storage. Lookups use a keyed blind index, and responses expose only the masked e-mail. API keys may grant at most MEMBER and may not send a password: the member is created INVITED and the one-time invitation token is returned only in this response.',
   })
-  @ApiCreatedResponse({ type: () => UserDto })
+  @ApiCreatedResponse({ type: () => CreatedUserDto })
   @ApiConflictResponse({ description: 'The e-mail is already registered in this tenant.' })
-  async create(@Body() dto: CreateUserDto): Promise<UserDto> {
-    const user = await this.users.create({
+  @ApiForbiddenResponse({ description: 'The caller may not grant the requested role.' })
+  async create(@Body() dto: CreateUserDto): Promise<CreatedUserDto> {
+    const { user, invitation } = await this.users.create({
       email: dto.email,
       phone: dto.phone,
       displayName: dto.displayName,
@@ -238,6 +271,8 @@ export class TenantUsersController {
       emailVerifiedAt: user.emailVerifiedAt,
       lastLoginAt: user.lastLoginAt,
       createdAt: user.createdAt,
+      invitationToken: invitation?.token ?? null,
+      invitationExpiresAt: invitation ? new Date(invitation.expiresAt) : null,
     };
   }
 
@@ -249,6 +284,7 @@ export class TenantUsersController {
    */
   @Get(':id')
   @RequireScopes('users:read')
+  @RequirePermissions('users:read')
   @ApiOperation({ summary: 'Get a tenant member' })
   @ApiOkResponse({ type: () => UserDto })
   @ApiNotFoundResponse({ description: 'No member with that id exists in this tenant.' })
@@ -292,6 +328,7 @@ export class TenantProjectsController {
    */
   @Get()
   @RequireScopes('projects:read')
+  @RequirePermissions('projects:read')
   @ApiOperation({
     summary: 'List projects',
     description: 'Soft-deleted projects are excluded. Pagination is cursor based.',
@@ -319,6 +356,7 @@ export class TenantProjectsController {
    */
   @Post()
   @RequireScopes('projects:write')
+  @RequirePermissions('projects:write')
   @ApiOperation({
     summary: 'Create a project',
     description: 'Member sessions own what they create; API keys must pass `ownerId`.',
@@ -344,6 +382,7 @@ export class TenantProjectsController {
    */
   @Get(':id')
   @RequireScopes('projects:read')
+  @RequirePermissions('projects:read')
   @ApiOperation({ summary: 'Get a project' })
   @ApiOkResponse({ description: 'The project.' })
   @ApiNotFoundResponse({ description: 'No project with that id exists in this tenant.' })
@@ -360,6 +399,7 @@ export class TenantProjectsController {
    */
   @Patch(':id')
   @RequireScopes('projects:write')
+  @RequirePermissions('projects:write')
   @ApiOperation({
     summary: 'Update a project',
     description: 'Supply `expectedVersion` for optimistic concurrency control; a mismatch returns 409.',
@@ -385,6 +425,7 @@ export class TenantProjectsController {
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @RequireScopes('projects:write')
+  @RequirePermissions('projects:write')
   @ApiOperation({
     summary: 'Delete a project',
     description: 'Soft delete: the row is retained with `deletedAt` set.',

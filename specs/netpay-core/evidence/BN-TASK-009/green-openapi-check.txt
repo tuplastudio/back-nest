@@ -1,0 +1,15 @@
+# BN-TASK-009 green (npm run openapi:check after npm run docs:openapi) — 2026-10-21T19:13:12Z
+# bash -c npm run openapi:check; echo "exit code: $?"
+
+> netpay-api@1.0.0 openapi:check
+> npm run build && API_BASE_DOMAIN=api.example.com node dist/docs/generate-openapi.js --check
+
+
+> netpay-api@1.0.0 prebuild
+> rimraf dist
+
+
+> netpay-api@1.0.0 build
+> tsc -p tsconfig.build.json
+
+exit code: 0

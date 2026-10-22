@@ -6,7 +6,10 @@ import { ApiKeyOnly, Roles } from './decorators/roles.decorator';
 import { Public } from './decorators/public.decorator';
 import { MinimumPlatformRole, MinimumTenantRole } from './decorators/tenant-role.decorator';
 import { RequireAllPermissions, RequirePermissions } from './decorators/permissions.decorator';
+import { RequireScopes } from './decorators/scopes.decorator';
 import { MemberRole } from '../generated/tenant-plane/enums';
+import { INTERNAL_ROUTE_KEY } from './decorators/internal-route.decorator';
+import { DeclaredRbac } from './decorators/roles.decorator';
 
 /** HTTP verb codes Nest assigns to `@Get`, `@Post`, … . */
 const GET = 0;
@@ -44,11 +47,45 @@ function auditOf(...controllers: unknown[]): RbacAuditService {
   const providers = controllers.map((metatype) => ({ metatype, instance: {} }) as unknown as InstanceWrapper);
   const discovery = {
     getProviders: (): InstanceWrapper[] => providers,
+    getControllers: (): InstanceWrapper[] => [],
   } as unknown as DiscoveryService;
   return new RbacAuditService(discovery, new MetadataScanner(), new Reflector());
 }
 
 describe('RbacAuditService', () => {
+  it('accepts an internal route that carries its own guard (BN-TASK-016)', () => {
+    class TickController {
+      tick(this: void): void {}
+    }
+    route(TickController.prototype, 'tick', 'tick', POST);
+    const handler = TickController.prototype.tick;
+    Reflect.defineMetadata(INTERNAL_ROUTE_KEY, true, handler);
+    (DeclaredRbac() as MethodDecorator)(TickController.prototype, 'tick', { value: handler });
+    Reflect.defineMetadata('__guards__', [class OidcGuard {}], handler);
+    Reflect.defineMetadata('path', 'internal', TickController);
+    Reflect.defineMetadata('__controller__', true, TickController);
+
+    const service = auditOf(TickController);
+    expect(() => service.onApplicationBootstrap()).not.toThrow();
+    expect(service.describePolicies()).toEqual([expect.stringContaining('internal (own guard)')]);
+  });
+
+  it('refuses an internal route without a guard of its own', () => {
+    class OpenTickController {
+      tick(this: void): void {}
+    }
+    route(OpenTickController.prototype, 'tick', 'tick', POST);
+    const handler = OpenTickController.prototype.tick;
+    Reflect.defineMetadata(INTERNAL_ROUTE_KEY, true, handler);
+    (DeclaredRbac() as MethodDecorator)(OpenTickController.prototype, 'tick', { value: handler });
+    Reflect.defineMetadata('path', 'internal', OpenTickController);
+    Reflect.defineMetadata('__controller__', true, OpenTickController);
+
+    expect(() => auditOf(OpenTickController).onApplicationBootstrap()).toThrow(
+      /internal route.*own guard[\s\S]*OpenTickController.tick/,
+    );
+  });
+
   it('reports a controller whose route declares no policy', () => {
     class UnguardedController {
       list(this: void): void {}
@@ -99,6 +136,9 @@ describe('RbacAuditService', () => {
     (RequirePermissions('api-keys:issue') as MethodDecorator)(PermissionController.prototype, 'issue', {
       value: PermissionController.prototype.issue,
     } as PropertyDescriptor);
+    (RequireScopes('admin:*') as MethodDecorator)(PermissionController.prototype, 'issue', {
+      value: PermissionController.prototype.issue,
+    } as PropertyDescriptor);
     Reflect.defineMetadata('path', 'permissions', PermissionController);
     Reflect.defineMetadata('__controller__', true, PermissionController);
 
@@ -115,6 +155,7 @@ describe('RbacAuditService', () => {
       'purge',
       { value: StrictController.prototype.purge } as PropertyDescriptor,
     );
+    (RequireScopes('admin:*') as ClassDecorator)(StrictController);
     Reflect.defineMetadata('path', 'strict', StrictController);
     Reflect.defineMetadata('__controller__', true, StrictController);
 
@@ -155,6 +196,46 @@ describe('RbacAuditService', () => {
     expect(auditOf(KeysController).findUndeclaredRoutes()).toEqual([]);
   });
 
+  it('refuses to start when a route declares @RequirePermissions without @RequireScopes (BN-REQ-SEC-001)', () => {
+    // A route with permissions but no scopes is open to every API key of the
+    // tenant: `ApiKeyScopesGuard` passes when no scope is declared, and API keys
+    // hold no RBAC permissions to check. That is how /t/webhooks was reachable
+    // with a `payments:read` key.
+    class WebhooksController {
+      create(this: void): void {}
+    }
+    route(WebhooksController.prototype, 'create', '', POST);
+    (RequirePermissions('webhooks:write') as MethodDecorator)(WebhooksController.prototype, 'create', {
+      value: WebhooksController.prototype.create,
+    } as PropertyDescriptor);
+    Reflect.defineMetadata('path', 't/webhooks', WebhooksController);
+    Reflect.defineMetadata('__controller__', true, WebhooksController);
+
+    const service = auditOf(WebhooksController);
+    expect(service.findUnscopedPermissionRoutes()).toEqual(['WebhooksController.create POST /t/webhooks']);
+    expect(() => service.onApplicationBootstrap()).toThrow(/@RequirePermissions without @RequireScopes/);
+    expect(() => service.onApplicationBootstrap()).toThrow(/WebhooksController.create POST \/t\/webhooks/);
+  });
+
+  it('applies the scope rule to class-level permissions too', () => {
+    class UsersController {
+      list(this: void): void {}
+      me(this: void): void {}
+    }
+    route(UsersController.prototype, 'list', '');
+    route(UsersController.prototype, 'me', 'me');
+    (RequirePermissions('users:read') as ClassDecorator)(UsersController);
+    (RequireScopes('users:read') as MethodDecorator)(UsersController.prototype, 'list', {
+      value: UsersController.prototype.list,
+    } as PropertyDescriptor);
+    Reflect.defineMetadata('path', 't/users', UsersController);
+    Reflect.defineMetadata('__controller__', true, UsersController);
+
+    expect(auditOf(UsersController).findUnscopedPermissionRoutes()).toEqual([
+      'UsersController.me GET /t/users/me',
+    ]);
+  });
+
   it('reports every offending route, not just the first', () => {
     class ManyController {
       one(this: void): void {}
@@ -185,6 +266,25 @@ describe('RbacAuditService', () => {
     expect(lines[0]).toContain('api-keys:issue');
     expect(lines[0]).toContain('platform role >= ADMIN');
     expect(lines[0]).not.toContain('NONE');
+  });
+
+  it('audits controllers listed by discovery.getControllers(), even without an instance (regression)', () => {
+    // Nest never lists controllers among providers, and request-scoped
+    // controllers have no static instance; the audit used to skip both and so
+    // passed vacuously at boot.
+    class RequestScopedController {
+      list(this: void): void {}
+    }
+    route(RequestScopedController.prototype, 'list', '');
+    Reflect.defineMetadata('path', 'scoped', RequestScopedController);
+    Reflect.defineMetadata('__controller__', true, RequestScopedController);
+    const wrapper = { metatype: RequestScopedController, instance: undefined } as unknown as InstanceWrapper;
+    const discovery = {
+      getProviders: (): InstanceWrapper[] => [],
+      getControllers: (): InstanceWrapper[] => [wrapper],
+    } as unknown as DiscoveryService;
+    const service = new RbacAuditService(discovery, new MetadataScanner(), new Reflector());
+    expect(service.findUndeclaredRoutes()).toEqual(['RequestScopedController.list GET /scoped']);
   });
 
   it('ignores providers that are not controllers', () => {

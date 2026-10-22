@@ -3,6 +3,8 @@
 > **Estado:** implementado en `src/payments/`. Las secciones 1–6 y 8–16 son el análisis de diseño original;
 > el comportamiento vigente, verificado contra el sandbox de Netpay, está en §7, §17 y §18. Ninguna clave real
 > aparece en este archivo.
+>
+> **Errores de la API:** códigos, status, `retryable` y `failureCode` en [ERRORS.md](./ERRORS.md).
 
 ---
 
@@ -604,16 +606,26 @@ catálogo, porque es la clase de privilegio que se reparte sin querer.
 
 ### 10.8 Configuración
 
-| Variable                                     | Para qué                                       |
-| -------------------------------------------- | ---------------------------------------------- |
-| `OUTBOUND_WEBHOOKS_ENABLED`                  | Interruptor global                             |
-| `OUTBOUND_WEBHOOK_REQUIRE_HTTPS`             | Por defecto `true`                             |
-| `OUTBOUND_WEBHOOK_TIMEOUT_MS`                | Límite por entrega                             |
-| `OUTBOUND_WEBHOOK_MAX_ATTEMPTS`              | Intentos antes de `dead`                       |
-| `OUTBOUND_WEBHOOK_BACKOFF_MS` / `_JITTER_MS` | Política de reintento                          |
-| `OUTBOUND_WEBHOOK_MAX_RESPONSE_BYTES`        | Tope de lectura de respuesta                   |
-| `OUTBOUND_WEBHOOK_ALLOWED_CIDRS`             | Allowlist de egreso, opcional pero recomendada |
-| `OUTBOUND_WEBHOOK_SIGNATURE_TOLERANCE_MS`    | Ventana de reloj, por defecto 300 000          |
+Todas validadas en `src/config/env.validation.ts` (bloque `outboundWebhooks`):
+
+| Variable                                | Por defecto | Para qué                                                         |
+| --------------------------------------- | ----------- | ---------------------------------------------------------------- |
+| `OUTBOUND_WEBHOOK_ENABLED`              | `false`     | Interruptor global del dispatcher                                |
+| `OUTBOUND_WEBHOOK_REQUIRE_HTTPS`        | `true`      | Rechaza destinos `http://`                                       |
+| `OUTBOUND_WEBHOOK_TIMEOUT_MS`           | `8000`      | Límite por entrega                                               |
+| `OUTBOUND_WEBHOOK_MAX_ATTEMPTS`         | `8`         | Intentos antes de `DEAD`                                         |
+| `OUTBOUND_WEBHOOK_BASE_BACKOFF_MS`      | `1000`      | Base del backoff exponencial                                     |
+| `OUTBOUND_WEBHOOK_MAX_BACKOFF_MS`       | `3600000`   | Tope del backoff                                                 |
+| `OUTBOUND_WEBHOOK_JITTER_MS`            | `250`       | Jitter sumado a cada espera                                      |
+| `OUTBOUND_WEBHOOK_POLL_INTERVAL_MS`     | `5000`      | Cada cuánto busca entregas pendientes (`0` lo apaga)             |
+| `OUTBOUND_WEBHOOK_BATCH_SIZE`           | `50`        | Entregas por ronda                                               |
+| `OUTBOUND_WEBHOOK_MAX_TENANTS_PER_TICK` | `200`       | Tenants visitados por ronda                                      |
+| `OUTBOUND_WEBHOOK_AUTO_DISABLE_AFTER`   | `20`        | Fallos seguidos antes de `AUTO_DISABLED`                         |
+| `OUTBOUND_WEBHOOK_ALLOWED_CIDRS`        | vacío       | Allowlist de egreso (CIDR por comas); vacía = cualquier pública  |
+
+No son configurables, son constantes del código: el tope de lectura de la respuesta del receptor (64 KiB,
+`src/payments/http.transport.ts`) y la tolerancia de reloj de la firma (300 000 ms, `DEFAULT_TOLERANCE_MS` en
+`src/payments/outbound/signature.ts`).
 
 ### 10.9 Operación
 
@@ -627,7 +639,7 @@ catálogo, porque es la clase de privilegio que se reparte sin querer.
 
 ### 10.10 Pruebas
 
-Se suman a la matriz de §13, sin red, con el transporte inyectado:
+Se suman a la matriz de §12, sin red, con el transporte inyectado:
 
 | Caso                                                                          | Expectativa                                                    |
 | ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
@@ -649,15 +661,23 @@ Las cinco primeras filas son **la prueba de que la firma sirve de algo**; convie
 
 ## 11. Configuración
 
-**Plataforma (env, `.env.example`):**
+**Plataforma (env, validada en `src/config/env.validation.ts`, plantilla en `.env.example`):**
 
-| Variable                                    | Para qué                                                         |
-| ------------------------------------------- | ---------------------------------------------------------------- |
-| `NETPAY_PLATFORM_ENCRYPTION_KEY`            | Cifra las `sk_` por tenant. **Clave propia, separada de PII**    |
-| `NETPAY_ALLOWED_HOSTS`                      | Allowlist de destinos: solo los dos hosts documentados           |
-| `NETPAY_TIMEOUT_MS`                         | Límite de tiempo por llamada                                     |
-| `NETPAY_MAX_ATTEMPTS` / `NETPAY_BACKOFF_MS` | Política de reintentos de verificación                           |
-| `PAYMENTS_ENABLED`                          | Interruptor global, para apagar el módulo entero sin despliegues |
+| Variable                | Para qué                                                                                                   |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `NETPAY_ENCRYPTION_KEY` | Cifra las `sk_` por tenant (AES-256-GCM, 32 bytes en base64). **Clave propia, separada de PII**            |
+| `PAYMENT_REDIRECT_URL`  | A dónde manda Netpay al comprador tras un Checkout Hosted. Obligatoria en producción                        |
+| `PAYMENT_CANCEL_URL`    | A dónde vuelve el comprador si abandona el checkout. Obligatoria en producción                             |
+| `OUTBOUND_WEBHOOK_*`    | Notificaciones salientes, ver §10.8                                                                        |
+
+Lo que el análisis original proponía como variables es, en la implementación, **código fijo**, a propósito:
+
+| Propuesta original                          | Implementación                                                                                                                                         |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Allowlist de hosts de Netpay                | `NETPAY_HOSTS` y `NETPAY_REPORTS_HOSTS` en `src/payments/netpay-endpoints.ts`: un host por ambiente (`SANDBOX`/`LIVE`). No se puede apuntar a otro host por configuración; solo los tests (`NODE_ENV=test`) pueden redirigir el sandbox |
+| Timeout por llamada                         | 10 s fijos en `NetpayClient`. Un timeout o un 5xx de Netpay es `504 PROVIDER_OUTCOME_UNKNOWN` (reintentable); un 4xx es `502 PROVIDER_DECLINED`        |
+| Reintentos de verificación                  | No hay reintentos internos. Reintenta quien llama (`POST /t/payments/orders/:id/verify`) o el propio reenvío del webhook de Netpay                    |
+| Interruptor global del módulo               | No existe. El módulo está siempre montado; un tenant sin configuración (o con `enabled = false`) no puede cobrar. Los envíos salientes sí tienen interruptor (`OUTBOUND_WEBHOOK_ENABLED`) |
 
 **Por tenant (base de datos, cifrada):** ambiente, `pk_`, `sk_` cifrada, prefijo de `order_reference`, token de
 webhook (hash).
@@ -701,30 +721,22 @@ Y un caso de **seguridad que conviene añadir al modelo existente**: ninguna rut
 
 ---
 
-## 13. Decisiones abiertas — necesito tus respuestas antes de implementar
+## 13. Decisiones tomadas (estado implementado)
 
-1. **¿Un comercio en Netpay por tenant, o una cuenta con `order_reference` por tenant?**
-   Recomendación fuerte: una cuenta por tenant (§4-B). Pero implica el proceso manual de alta y el certificado.
-   Si el negocio es un solo comercio que revende a varias marcas, la opción A es más simple — pero entonces
-   “cada tenant aísla su configuración” significa otra cosa y hay que redefinirlo.
+Las preguntas que este análisis dejó abiertas ya tienen respuesta en el código. Se listan con la evidencia
+para que nadie las reabra leyendo una versión vieja del documento.
 
-2. **¿Guardar tarjetas (`saveCard`) entra en esta fase?**
-   Recomiendo **no**. Añade tabla de clientes, tokens, y superficie PCI. Se puede sumar después sin rediseñar.
+| #   | Pregunta original                                         | Decisión implementada                                                                                                                                                                                                                 | Dónde                                                                     |
+| --- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| 1   | ¿Un comercio Netpay por tenant o una cuenta compartida?   | **Una cuenta por tenant (§4-B).** Cada tenant guarda su `pk_`/`sk_` y su ambiente en `payment_provider_config` dentro de su propio esquema; el webhook entrante se enruta por token opaco por tenant (`payment_webhook_registry`) | `payment-config.service.ts`, `POST /t/payments/config`                    |
+| 2   | ¿Guardar tarjetas (`saveCard`)?                           | **Sí.** Clientes Netpay en `payment_customers`; hasta 3 tarjetas por cliente; `cvv` obligatorio en cada cobro con tarjeta guardada. La tarjeta de un solo uso se borra en Netpay tras el cobro                                     | `GET/PUT/DELETE /t/payments/cards/...`, §17                               |
+| 3   | ¿Se guardan datos del tarjetahabiente?                    | **No.** Nombre y correo del comprador viajan a Netpay (OXXO y checkout los exigen) pero no se persisten en `payment_orders` ni se loguean, y no salen en los eventos salientes                                                   | `payment-orders.service.ts`, §19                                          |
+| 4   | ¿Comisión de plataforma por venta?                        | **No implementada.** El dinero se liquida en la cuenta Netpay del tenant; no hay cálculo ni segundo cobro. Si se requiere, es una decisión de producto con su propio requisito                                                   | —                                                                         |
+| 5   | ¿Dónde termina el TLS del webhook?                        | **En la plataforma, no en Nest.** Cloud Run (y el balanceador en producción) termina TLS; la app escucha HTTP en `0.0.0.0`. `POST /t/payments/config/webhook-register` rechaza URLs que no sean `https://`                       | `docs/DEPLOY-GCP.md`, `payment-orders.controller.ts`                      |
+| 6   | ¿Llaves de Sandbox en `.env`?                             | **No.** Sandbox se configura igual que producción: por tenant, cifrada, con `environment: SANDBOX`. Al guardar se prueban contra Netpay y se rechazan si pertenecen al otro ambiente (`CREDENTIALS_ENVIRONMENT_MISMATCH`)        | `PaymentConfigService.save`                                               |
 
-3. **¿Se guardan datos personales del tarjetero (`cardHolderName`, `customerEmail`)?**
-   Recomendación: no, salvo requerimiento explícito de comprobante. Si sí, pasan por el patrón de PII del
-   proyecto (cifrado + índice + máscara).
-
-4. **¿La plataforma cobra comisión sobre cada venta?**
-   Si sí, hay que decidir dónde se calcula: es dinero que sale de la cuenta Netpay **del tenant**, así que
-   implica un segundo cobro o un acuerdo de liquidación distinto. No es un detalle de configuración.
-
-5. **¿Dónde termina el TLS del webhook?**
-   Hoy no hay TLS en la app. Hace falta un proxy/ingress, y hay que documentarlo.
-
-6. **¿Se guardan las llaves de Sandbox en el entorno de desarrollo?**
-   Recomendación: no en `.env`. Sandbox también se configura por tenant, cifrado, igual que producción. Evita
-   que un entorno de desarrollo se convierta en una vía a una cuenta real.
+Siguen fuera de alcance, por necesitar decisión de producto: PreAuth/PostAuth (BN-TASK-054) y comisión de
+plataforma.
 
 ---
 
@@ -744,19 +756,29 @@ Y un caso de **seguridad que conviene añadir al modelo existente**: ninguna rut
 
 ---
 
-## 15. Fases sugeridas
+## 15. Estado de la implementación
 
-1. **Decisiones** (§13) y modelo de datos aprobado. Nada de código antes.
-2. **Infraestructura:** migraciones (`0004` de tenant), módulo de permisos `payments`, roles del sistema,
-   cifrado de la llave de pagos.
-3. **Núcleo sin red:** `NetpayHttpClient` con transporte inyectado, estado de órdenes, idempotencia,
-   comparación de importes. Todo cubierto por unit tests.
-4. **Checkout Hosted:** creación de orden, redirección, webhook con token opaco y verificación asíncrona.
-5. **Permisos y rutas**, con la auditoría RBAC verificando que cada ruta declara su política.
-6. **Script manual de E2E contra Sandbox**, fuera del CI.
-7. **Auditoría y docs:** eventos de estado en `AuditLogService`, y `docs/SECURITY.md` con el requisito de TLS
-   y el alcance de PCI real.
-8. **Checkout Custom**, solo si aparece el requerimiento (§3).
+Las fases que proponía este documento están completas. Lo que existe hoy en `src/payments/`:
+
+| Bloque                     | Implementado                                                                                                                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Modelo de datos            | Migraciones de tenant `0004_payments_and_webhooks` a `0010_inbound_dedupe_and_failure_code`: configuración, órdenes, clientes, eventos entrantes, endpoints y entregas salientes                             |
+| Permisos                   | Módulos `payments` (`read`, `write`, `refund`, `configure`) y `webhooks` (`read`, `write`, `rotate-secret`, `replay`); cada ruta declara `@RequirePermissions` y `@RequireScopes`                               |
+| Cifrado de la `sk_`        | `PaymentSecretBox` con `NETPAY_ENCRYPTION_KEY`, AAD por tenant; la `sk_` nunca sale por la API                                                                                                                 |
+| Cliente Netpay             | `NetpayClient` con transporte inyectado (`HttpTransport`), TLS estricto, sin seguir redirecciones, hosts fijos por ambiente                                                                                   |
+| Checkout                   | Hosted (`card`, `cep`), Custom con NetpayJS y 3DS 2.0 (`/charge`, `/confirm`) y referencia OXXO Pay                                                                                                          |
+| Webhook entrante           | `POST /api/v1/payments/webhook/:token` (202). Solo despierta: el estado se asienta tras verificar contra la API de Netpay (§5.2), con deduplicación por ventana                                                |
+| Reembolsos                 | Totales y parciales (`refundedAmount`), contra el servicio de reportes de Netpay                                                                                                                               |
+| Notificaciones salientes   | `/t/webhooks`: alta, rotación de secreto con solapamiento, activar/desactivar, historial de entregas y reenvío manual; firma `X-MTBPay-Signature`; protección SSRF (§10.4)                                     |
+| Pruebas                    | Unitarias sin red con transporte inyectado (opción B de §12) y `test/netpay-sandbox.e2e-spec.ts` contra Sandbox fuera del CI (opción C)                                                                      |
+| Operación                  | Procedimientos en `docs/RUNBOOK-PAYMENTS.md`                                                                                                                                                                   |
+| Conciliación               | `ReconciliationService` (BN-TASK-016): re-verifica órdenes no terminales, expira 3DS abandonado y OXXO vencido (`payment.expired`), aplica resultados pendientes; temporizador en proceso + `POST /internal/tick` (OIDC, staging con Cloud Scheduler) |
+| Ciclo de vida              | Listado por cursor con filtros (`GET /t/payments/orders`), cancelación (`POST …/cancel`, `payment.cancelled`, pago tardío como `payment.paid_after_cancel`), allowlists de retorno y moneda por tenant |
+| Configuración              | Versionada y append-only (`version`/`active`; la orden guarda `configId`); cambio de ambiente o `sk_` emite token nuevo; drift del webhook en `GET /t/payments/config/webhook` y en `/health/ready` autenticado |
+
+Pendiente, con tarea propia en `specs/netpay-core/04-tasks.md`: Checkout Custom con pre-autorización
+(BN-TASK-054) y las tareas de infraestructura que requieren aprobación (llaves propias por ambiente BN-TASK-027,
+Cloud Armor BN-TASK-049, scheduler de staging de BN-TASK-016).
 
 ---
 

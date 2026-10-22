@@ -1,0 +1,140 @@
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/http.transport.spec.ts
+
+ts-jest[config] (WARN) [94mmessage[0m[90m TS151002: [0mUsing hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) [94mmessage[0m[90m TS151002: [0mUsing hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+FAIL src/payments/http.transport.spec.ts
+  ● NodeOutboundTransport › sends to the exact subscribed path and query, with the original host and port
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:76:38)
+
+  ● NodeOutboundTransport › keeps the plain-http scheme when it was subscribed that way, instead of forcing https
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:92:17)
+
+  ● NodeOutboundTransport › connects to the pinned address and never resolves the name
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:102:17)
+
+  ● NodeOutboundTransport › falls back to the next validated address when connecting fails
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:111:17)
+
+  ● NodeOutboundTransport › does not try another address once the request reached the subscriber
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:125:17)
+
+  ● NodeOutboundTransport › returns a non-2xx status as an answer, not as a reason to try elsewhere
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:137:17)
+
+  ● NodeOutboundTransport › fails with the connect error when every address is dead
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:149:17)
+
+  ● NodeOutboundTransport › refuses to send without a validated address
+
+    TypeError: Invalid URL
+
+      117 |     },
+      118 |   ): Promise<{ status: number }> {
+    > 119 |     const target = new URL(url);
+          |                    ^
+      120 |     const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      121 |     return this.send(
+      122 |       `https://${init.hostHeader}${target.pathname}`,
+
+      at NodeHttpTransport.deliver (src/payments/http.transport.ts:119:20)
+      at NodeOutboundTransport.request (src/payments/http.transport.ts:151:22)
+      at Object.<anonymous> (src/payments/http.transport.spec.ts:155:28)
+
+Test Suites: 1 failed, 1 total
+Tests:       8 failed, 8 total
+Snapshots:   0 total
+Time:        2.118 s
+Ran all test suites matching src/payments/http.transport.spec.ts.

@@ -9,6 +9,7 @@ This document explains the complete migration strategy for the Vondi API, includ
 3. [Migration Validation](#migration-validation)
 4. [CI/CD Integration](#cicd-integration)
 5. [Production Deployment](#production-deployment)
+   - [Tenant migrations](#tenant-migrations)
 6. [Migration Best Practices](#migration-best-practices)
 7. [Rollback Strategy](#rollback-strategy)
 8. [Troubleshooting](#troubleshooting)
@@ -160,43 +161,41 @@ Existe **un solo** workflow que aplica migraciones y otro que despliega: el mism
 aplica la mitad de la migración.
 
 ```
-verify ─► build ─► migrate ─► deploy (canario + revisión sin tráfico) ─► smoke ─► promote
-                                                                          │         │
-                                                       falla: nada llega  ┘         └ falla: rollback
+ci ─► build ─► migrate ─► deploy (--no-traffic --tag rc-<sha8>) ─► smoke (URL del tag) ─► promote 10 → 50 → 100
 ```
 
 ```
-- verify
+- ci  (ci.yml, workflow_call; los despliegues lo esperan con `needs`)
   ├─ Secrets: set commiteable + histórico completo (gitleaks)
-  ├─ format:check, lint, typecheck, migrations:validate
-  ├─ test:cov
-  ├─ Roles de la base (mtb_control, mtb_app) sobre postgres:17-alpine
-  ├─ prisma:seed (catálogo RBAC: sin él toda ruta protegida responde 403)
-  └─ test:e2e  (non-blocking hasta que se arreglen los dos tests rojos)
+  ├─ format:check, lint, typecheck
+  ├─ migrations:validate  (plano de control + tenants; con MIGRATIONS_BASE_REF,
+  │                        falla si una migración ya mergeada cambió)
+  ├─ test:cov             (umbral de líneas en src/payments)
+  ├─ test:int             (runner de tenants: 3 esquemas, concurrencia, checksum)
+  ├─ prisma:seed, test:e2e
+  └─ scan: Trivy HIGH/CRITICAL bloqueante (árbol + imagen)
 
 - build
-  ├─ runtime + migrate por digest, con SBOM y provenance
-  └─ trivy HIGH/CRITICAL con exit-code 1
+  └─ runtime + migrate por digest, con SBOM y provenance
 
 - migrate
-  └─ Cloud Run Job: --tasks=1 --parallelism=1 --max-retries=0 (falla visible)
+  └─ Cloud Run Job `npm run db:migrate:all`: plano de control y después
+     tenants ACTIVE; --tasks=1 --parallelism=1 --max-retries=0
 
 - deploy
-  ├─ canario (privado, webhooks desactivados)
-  └─ revisión de producción con --no-traffic
+  └─ revisión con --no-traffic y tag rc-<sha8>, flags de .github/cloudrun/flags.json
 
 - smoke
-  ├─ /health/live y /health/ready contra el canario
-  └─ ruta protegida responde 401/403 (auth montado, BD alcanzable)
+  └─ /health/live, /health/ready y ruta protegida contra la URL del tag
 
 - promote
-  ├─ update-traffic 100% a la revisión nueva
-  └─ si la revisión no queda Ready=True, se devuelve el tráfico a la anterior
+  ├─ 10 → 50 → 100 (producción) / 100 (staging), 5xx de la revisión por escalón
+  └─ si algo falla, update-traffic --to-revisions=<anterior>=100
 ```
 
 **Key Features**:
 - Las migraciones corren **antes** del deploy, en un Job con una sola ejecución
-- Un deploy nunca entrega tráfico sin pasar por el canario y el smoke
+- Un deploy nunca entrega tráfico sin pasar por el smoke de su URL etiquetada
 - El rollback de código no revierte migraciones: las migraciones deben ser
   compatibles hacia atrás (docs/DEPLOY-GCP.md §12.4)
 - `concurrency` sin cancelación: cortar entre migrar y promover deja esquema y
@@ -397,10 +396,73 @@ Neon supports database branching. For complex migrations:
 neon branches create migration-test --parent-id main
 
 # Test migration on branch
-DATABASE_URL=branch-url npm run prisma:deploy
+CONTROL_PLANE_DATABASE_URL_UNPOOLED=<branch-url> npm run db:migrate:all
 
 # If successful, merge branch
 neon branches merge migration-test --into main
+```
+
+### Tenant migrations
+
+`prisma/tenant-migrations/<version>_<nombre>/migration.sql` se aplican a cada
+esquema `tenant_*`. Las renderiza `npm run prisma:tenant:diff` desde
+`prisma/schema.tenant.prisma`; los placeholders `__TENANT_SCHEMA__` (identificador)
+y `__TENANT_SCHEMA_LITERAL__` (literal) se sustituyen por esquema.
+
+**Quién las aplica.** Dos caminos con el mismo código
+(`src/tenancy/tenant-migrations.ts`):
+
+- **Release** — el Job de migraciones ejecuta `npm run db:migrate:all`:
+  `scripts/migrate.ts` (plano de control) y después `scripts/migrate-tenants.ts`
+  sobre **todo tenant ACTIVE**, antes de que la revisión nueva reciba tráfico.
+- **Alta o migración puntual** — `TenantProvisionerService` al aprovisionar y
+  `POST /tenants/:id/migrate` (p. ej. un tenant SUSPENDED que se reactiva).
+
+**Cómo.** Por esquema, en una transacción:
+
+1. `pg_advisory_xact_lock(hashtext('<esquema>'))`: dos ejecuciones concurrentes
+   se serializan; la segunda encuentra el trabajo hecho.
+2. Ledger `<esquema>.tenant_schema_migrations (version, name, checksum, baseline, appliedAt)`,
+   creado si falta. `checksum` es el SHA-256 del fichero (finales de línea
+   normalizados). Solo el rol dueño de la tabla (el que migra) puede leerla:
+   RLS forzado con política de dueño y sin privilegios para `mtb_app`.
+3. Se aplican, en orden, las versiones que no están en el ledger; cada una deja
+   su fila y `tenants.schemaVersion` se actualiza en la misma transacción.
+
+El script hace antes un **preflight** de solo lectura sobre todos los tenants
+y, al final, **verifica** que todos estén en la versión máxima. Aborta (exit 1,
+el pipeline se detiene) si:
+
+- un checksum registrado no coincide con el fichero → **una migración aplicada
+  se editó**. Nunca se editan migraciones aplicadas: se revierte la edición y se
+  añade una migración nueva;
+- hay una versión registrada sin fichero (se borró o renombró una migración);
+- una versión pendiente es menor que una ya aplicada (se insertó por debajo del
+  historial): renumerarla por encima de la última;
+- un tenant ACTIVE no queda en la versión máxima.
+
+Un esquema anterior al ledger se **adopta**: las versiones hasta su
+`schemaVersion` se registran con `baseline = true` sin ejecutarse.
+
+**Reglas para escribir una.** Sin `BEGIN`/`COMMIT` (el runner abre la
+transacción), sin nombres de esquema (`public.`, `tenant_x.`): usar nombres sin
+calificar o los placeholders; idempotente cuando sea barato (`IF NOT EXISTS`);
+expand/contract como las del plano de control. `npm run migrations:validate` lo
+comprueba, junto con versiones duplicadas y nombres mal formados.
+
+```bash
+# Local, contra la base de docker compose:
+CONTROL_PLANE_DATABASE_URL_UNPOOLED=postgresql://… npm run db:migrate:tenants
+# Integración (Postgres desechable en 55436, ver el test):
+docker run -d --name bn-e2e-c2 -p 127.0.0.1:55436:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
+npm run test:int
+```
+
+Diagnóstico de un esquema:
+
+```sql
+SELECT version, name, baseline, "appliedAt" FROM "tenant_acme_1a2b3c4d".tenant_schema_migrations ORDER BY version;
+SELECT slug, "schemaVersion", status FROM tenants ORDER BY "schemaVersion";
 ```
 
 ## Migration Best Practices
@@ -614,7 +676,7 @@ npx prisma migrate deploy
 **Solutions**:
 ```bash
 # Use unpooled connection string
-export DATABASE_URL_UNPOOLED="postgresql://user:pass@project-id.neon.tech/db"
+export CONTROL_PLANE_DATABASE_URL_UNPOOLED="postgresql://user:pass@project-id.neon.tech/db"
 
 # Increase timeout
 npx prisma migrate deploy --schema prisma/schema.prisma

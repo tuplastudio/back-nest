@@ -1,0 +1,70 @@
+# BN-TASK-044 wiring red (NetPay latency not logged) — 2026-10-21T19:07:28Z
+# npm test -- src/payments/netpay.client.spec.ts -t latency log
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/netpay.client.spec.ts -t latency log
+
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+(node:44011) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/payments/netpay.client.spec.ts
+  ● NetpayClient latency log (BN-TASK-044, BN-REQ-OPS-005) › logs netpay_request with a bounded operation name, the outcome and the latency
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: ObjectContaining {"event": "netpay_request", "httpStatus": 200, "latencyMs": Any<Number>, "operation": "GET /v3/transactions/:id", "outcome": "ok"}
+
+    Number of calls: 0
+
+      473 |     const { client } = clientAnswering({ status: 200, body: { transactionTokenId: 'tx', status: 'DONE' } });
+      474 |     await client.getTransaction('SANDBOX', SK, 'c4f1a9e2-0000-4000-8000-000000000001');
+    > 475 |     expect(log).toHaveBeenCalledWith(
+          |                 ^
+      476 |       expect.objectContaining({
+      477 |         event: 'netpay_request',
+      478 |         // The id is not part of the label: one series per endpoint, not per transaction.
+
+      at Object.<anonymous> (src/payments/netpay.client.spec.ts:475:17)
+
+  ● NetpayClient latency log (BN-TASK-044, BN-REQ-OPS-005) › logs a provider error at warn with its status
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: ObjectContaining {"event": "netpay_request", "httpStatus": 502, "outcome": "error"}
+    Received: "Netpay GET /v3/transactions/tx-1 returned status 502"
+
+    Number of calls: 1
+
+      489 |     const { client } = clientAnswering({ status: 502, body: { message: 'down' } });
+      490 |     await expect(client.getTransaction('SANDBOX', SK, 'tx-1')).rejects.toBeInstanceOf(NetpayRequestError);
+    > 491 |     expect(warn).toHaveBeenCalledWith(
+          |                  ^
+      492 |       expect.objectContaining({ event: 'netpay_request', outcome: 'error', httpStatus: 502 }),
+      493 |     );
+      494 |   });
+
+      at Object.<anonymous> (src/payments/netpay.client.spec.ts:491:18)
+
+  ● NetpayClient latency log (BN-TASK-044, BN-REQ-OPS-005) › logs a timeout as such, and never the secret key
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: ObjectContaining {"event": "netpay_request", "operation": "POST /v3.5/charges/:id/confirm", "outcome": "timeout"}
+
+    Number of calls: 0
+
+      501 |       client.confirmCharge('SANDBOX', SK, 'tx-9', 'proc-1'),
+      502 |     ).rejects.toBeInstanceOf(NetpayTransportError);
+    > 503 |     expect(warn).toHaveBeenCalledWith(
+          |                  ^
+      504 |       expect.objectContaining({
+      505 |         event: 'netpay_request',
+      506 |         operation: 'POST /v3.5/charges/:id/confirm',
+
+      at Object.<anonymous> (src/payments/netpay.client.spec.ts:503:18)
+
+Test Suites: 1 failed, 1 total
+Tests:       3 failed, 42 skipped, 45 total
+Snapshots:   0 total
+Time:        2.494 s
+Ran all test suites matching src/payments/netpay.client.spec.ts with tests matching "latency log".

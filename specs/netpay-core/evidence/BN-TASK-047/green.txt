@@ -1,0 +1,10 @@
+$ jest scripts/ci/workflow-policy --verbose
+Test Suites: 1 passed, 1 total
+Tests:       14 passed, 14 total
+Snapshots:   0 total
+Time:        2.295 s, estimated 9 s
+Ran all test suites matching scripts/ci/workflow-policy.
+
+$ GCP_PROJECT_ID=demo scripts/gcp/apply-artifact-cleanup.sh   # print only
+gcloud artifacts repositories set-cleanup-policies netpay-api --project=demo --location=us-east5 --policy=/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/scripts/gcp/artifact-cleanup-policy.json --dry-run
+(solo impreso; --dry-run o --apply para ejecutarlo)

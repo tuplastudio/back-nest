@@ -154,6 +154,12 @@ Keys are derived per purpose from distinct domain labels, so the blind-index key
 and the encryption key can never be confused, and compromising one does not
 compromise the other.
 
+**Keyring versionado** (`src/pii/keyring.ts`): los secretos de PII y de NetPay se cifran con un
+anillo de llaves (`PII_KEYS_JSON`, `NETPAY_KEYS_JSON`; sin definir, una sola llave
+`PII_ENCRYPTION_KEY` / `NETPAY_ENCRYPTION_KEY`). El ciphertext lleva el prefijo `v<n>:`: se descifra
+con cualquier llave del anillo y se cifra con la `current`. `node dist/pii/reencrypt.command.js`
+reescribe los valores con la llave vigente. Detalle de la rotación en `SECURITY.md` §3.
+
 ---
 
 ## 6. SQL injection
@@ -200,12 +206,20 @@ namespace check.
   CPU on an unknown prefix, so response timing cannot be used to discover which
   prefixes exist.
 - **Brute force** is handled by two independent layers: per-account lockout
-  stored on the row, and a per-IP throttle on the sign-in route. Failure
+  stored on the row, and the per-IP `auth` throttler on the routes marked
+  `@AuthThrottle()` (shared across instances with `THROTTLER_REDIS_URL`). Failure
   responses are identical for an unknown account, a wrong password and a locked
   account.
 - **Passwords** use Argon2id (RFC 9106). `needsRehash` is checked on every
   successful verification, so raising the cost parameters upgrades hashes
   incrementally instead of forcing a global reset.
+- **Admins de plataforma**: MFA TOTP (`MFA_REQUIRED_FOR_ADMINS`; por defecto obligatorio en
+  producción) vía `/auth/mfa/*`, cambio de contraseña forzado (`mustChangePassword` →
+  solo `POST /auth/change-password`) y step-up: escribir pagos exige una verificación MFA de menos de
+  5 minutos. Ver `SECURITY.md` §4.
+- **Invitaciones**: un miembro creado sin contraseña queda `INVITED` y la activa con
+  `POST /t/auth/accept-invitation`. Las llaves de API no pueden fijar contraseñas ni otorgar roles por
+  encima de `MEMBER`; `/t/webhooks*` exige los scopes `webhooks:read` / `webhooks:write`.
 
 ---
 

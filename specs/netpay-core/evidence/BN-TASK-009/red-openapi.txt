@@ -1,0 +1,21 @@
+# BN-TASK-009 red (OpenAPI without x-webhooks / error envelope) — 2026-10-21T19:11:51Z
+# npm test -- src/docs/openapi-contract.spec.ts
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/docs/openapi-contract.spec.ts
+
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+FAIL src/docs/openapi-contract.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './openapi-contract' from 'src/docs/openapi-contract.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        2.324 s
+Ran all test suites matching src/docs/openapi-contract.spec.ts.
+(node:45843) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

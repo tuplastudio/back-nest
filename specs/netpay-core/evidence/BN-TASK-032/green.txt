@@ -1,0 +1,52 @@
+# BN-TASK-032 green — 2026-10-21T18:32:34Z
+# npm test -- src/auth/throttling.spec.ts src/auth/redis-throttler.storage.spec.ts
+PASS src/auth/throttling.spec.ts
+  throttler configuration (BN-REQ-SEC-004)
+    ✓ declares a default and an auth throttler with the configured budgets (2 ms)
+    ✓ applies the auth throttler only to routes marked @AuthThrottle (sign-in / refresh) (1 ms)
+    ✓ exempts health routes from every throttler (1 ms)
+    ✓ recognises health paths precisely
+    ✓ uses the shared storage when one is supplied, in-memory otherwise
+
+[33m[Nest] 27246  - [39m10/21/2026, 11:32:37 AM [33m   WARN[39m [38;5;3m[RedisThrottlerStorage] [39m[33mShared throttler storage unavailable; failing open: ECONNREFUSED[39m
+PASS src/auth/redis-throttler.storage.spec.ts
+  RedisThrottlerStorage (BN-REQ-SEC-004 shared storage)
+    ✓ maps the script reply into a throttler record (2 ms)
+    ✓ reports a block while the block key lives (1 ms)
+    ✓ fails open when Redis is unreachable, so an outage does not take the API down (1 ms)
+  RESP framing
+    ✓ encodes a command as an array of bulk strings
+    ✓ decodes integers, bulk strings, arrays and errors across chunk boundaries (1 ms)
+
+Test Suites: 2 passed, 2 total
+Tests:       10 passed, 10 total
+Snapshots:   0 total
+Time:        2.569 s
+Ran all test suites matching src/auth/throttling.spec.ts|src/auth/redis-throttler.storage.spec.ts.
+
+# Integration: RedisThrottlerStorage + RespClient against real redis:7-alpine (temporary container, 12 hits, limit 10) — [totalHits,isBlocked,timeToExpire,timeToBlockExpire]
+[[1,false,60,0],[2,false,60,0],[3,false,60,0],[4,false,60,0],[5,false,60,0],[6,false,60,0],[7,false,60,0],[8,false,60,0],[9,false,60,0],[10,false,60,0],[11,true,60,60],[12,true,60,60]]
+
+================ e2e ================
+# BN-TASK-029/031/032/034/038/039 e2e — test/security.e2e-spec.ts against compiled app (Postgres bn-e2e-b:55432)
+PASS test/security.e2e-spec.ts
+  Security hardening (e2e)
+    ✓ never answers 429 to 30 readiness probes a minute, and does not count them (52 ms)
+    ✓ refuses an admin without MFA with 403 MFA_REQUIRED (86 ms)
+    ✓ enrols TOTP, confirms it and unlocks the control plane (61 ms)
+    ✓ requires the second factor at sign-in once enrolled (62 ms)
+    ✓ provisions the tenant used below (113 ms)
+    ✓ requires a step-up (MFA within 5 min) for a cross-tenant payment write (41 ms)
+    ✓ refuses /t/webhooks to a key holding only payments:read, and admits webhooks:* keys (143 ms)
+    ✓ caps API-key member creation at MEMBER, refuses a password and invites instead (217 ms)
+    ✓ refuses POST /t/users to a VIEWER (method-level users:write) (101 ms)
+    ✓ restricts an admin with mustChangePassword to the password change endpoint (70 ms)
+    ✓ answers an allowed preflight with 204 and a disallowed one with 403 (1 ms)
+    ✓ sends no X-Powered-By header (12 ms)
+    ✓ answers 429 on the 11th sign-in within a minute (242 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       13 passed, 13 total
+Snapshots:   0 total
+Time:        5.093 s, estimated 6 s
+Ran all test suites matching test/security.e2e-spec.ts.

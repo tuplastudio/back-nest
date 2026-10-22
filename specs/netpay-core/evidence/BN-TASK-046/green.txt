@@ -1,0 +1,29 @@
+$ jest scripts/ci/workflow-policy --verbose
+Test Suites: 1 passed, 1 total
+Tests:       14 passed, 14 total
+Snapshots:   0 total
+Time:        2.295 s, estimated 9 s
+Ran all test suites matching scripts/ci/workflow-policy.
+
+$ bash scripts/ci/test-pipeline-scripts.sh
+PASS  promoción: 0.2 % de 5xx pasa
+PASS  promoción: 10 % de 5xx al 10 % de tráfico revierte
+PASS  promoción: un 5xx con poco tráfico revierte
+PASS  promoción: sin tráfico aún no bloquea
+PASS  drift: producción como se declaró
+PASS  drift: revisión manual con min-instances 0 y throttling falla
+PASS  args: producción lleva --no-cpu-throttling
+PASS  args: entorno desconocido
+Todas las pruebas pasaron.
+
+$ scripts/gcp/cloudrun-flags.sh args production
+--min-instances=1
+--max-instances=4
+--no-cpu-throttling
+--ingress=all
+--vpc-egress=all-traffic
+--concurrency=15
+--timeout=60
+--cpu=1
+--memory=512Mi
+--execution-environment=gen2

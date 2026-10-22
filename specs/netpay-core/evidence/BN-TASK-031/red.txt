@@ -1,0 +1,191 @@
+# BN-TASK-031 red — 2026-10-21T18:12:07Z
+# npm test -- src/tenant-api/tenant-users.service.spec.ts src/common/rbac-audit.routes.spec.ts
+FAIL src/tenant-api/tenant-users.service.spec.ts
+  TenantUsersService.create (regression: role grant is authorized)
+    ✓ refuses to grant OWNER from a VIEWER session (7 ms)
+    ✓ refuses to grant OWNER even from an ADMIN session (1 ms)
+    ✓ refuses a VIEWER granting ADMIN, which is above its own role
+    ✓ allows a MEMBER granting MEMBER (1 ms)
+    ✓ allows an ADMIN granting ADMIN (1 ms)
+    ✓ defaults an omitted role to MEMBER for a MEMBER caller
+    ✓ refuses a VIEWER even with no role requested, because the default MEMBER exceeds it
+    ✓ refuses a MEMBER granting ADMIN
+    ✓ grants the ADMIN member the tenant-admin system role (2 ms)
+    ✓ grants the MEMBER member the tenant-member system role (1 ms)
+    ✓ grants nothing when the request is refused
+    ✓ activates the row and records the caller
+    ✓ refuses to create a member when no principal is present (1 ms)
+    ✕ caps an api-key principal at MEMBER: ADMIN is refused (BN-REQ-SEC-002) (1 ms)
+    ✕ refuses a caller-supplied password from an api-key principal with 422 (BN-REQ-SEC-002) (1 ms)
+    ✕ invites the member created by an api-key: INVITED, no password, one-time token returned (1 ms)
+    ✕ returns no invitation for a member created active with a password (1 ms)
+    ✓ still refuses OWNER from an api-key principal
+  TenantUsersService.acceptInvitation (BN-REQ-SEC-002 invitation flow)
+    ✕ activates the invited member with the chosen password
+    ✕ is one-time: an already active member cannot be re-activated with the same token
+    ✕ refuses a token minted for another tenant (1 ms)
+    ✕ refuses a forged or expired token
+
+  ● TenantUsersService.create (regression: role grant is authorized) › caps an api-key principal at MEMBER: ADMIN is refused (BN-REQ-SEC-002)
+
+    expect(received).rejects.toBeInstanceOf()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"createdById": "key-1", "displayName": "Escalated", "emailCiphertext": "ciphertext", "emailLookup": "blind-index", "emailMasked": "a******r@dummy.test", "id": "new-member", "passwordHash": null, "phoneCiphertext": null, "role": "ADMIN", "status": "INVITED"}
+
+      230 |     const { password: _password, ...invite } = base;
+      231 |     void _password;
+    > 232 |     await expect(
+          |           ^
+      233 |       run(context, principal, () => service.create({ ...invite, role: MemberRole.ADMIN })),
+      234 |     ).rejects.toBeInstanceOf(AuthorizationException);
+      235 |     expect(created).toHaveLength(0);
+
+      at expect (node_modules/expect/build/index.js:2116:15)
+      at Object.<anonymous> (src/tenant-api/tenant-users.service.spec.ts:232:11)
+
+  ● TenantUsersService.create (regression: role grant is authorized) › refuses a caller-supplied password from an api-key principal with 422 (BN-REQ-SEC-002)
+
+    expect(received).rejects.toBeInstanceOf()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"createdById": "key-1", "displayName": "Escalated", "emailCiphertext": "ciphertext", "emailLookup": "blind-index", "emailMasked": "a******r@dummy.test", "id": "new-member", "passwordHash": "argon2-hash", "phoneCiphertext": null, "role": "MEMBER", "status": "ACTIVE"}
+
+      239 |     const { service, context, created, principal } = serviceFor(apiKey);
+      240 |     const attempt = run(context, principal, () => service.create({ ...base, role: MemberRole.MEMBER }));
+    > 241 |     await expect(attempt).rejects.toBeInstanceOf(AppException);
+          |           ^
+      242 |     await expect(attempt).rejects.toMatchObject({ status: 422, code: 'PASSWORD_NOT_ACCEPTED' });
+      243 |     expect(created).toHaveLength(0);
+      244 |   });
+
+      at expect (node_modules/expect/build/index.js:2116:15)
+      at Object.<anonymous> (src/tenant-api/tenant-users.service.spec.ts:241:11)
+
+  ● TenantUsersService.create (regression: role grant is authorized) › invites the member created by an api-key: INVITED, no password, one-time token returned
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "invitation-token"
+    Received: undefined
+
+      253 |     expect(created[0]?.passwordHash).toBeNull();
+      254 |     expect(created[0]?.createdById).toBe('key-1');
+    > 255 |     expect(result.invitation?.token).toBe('invitation-token');
+          |                                      ^
+      256 |   });
+      257 |
+      258 |   it('returns no invitation for a member created active with a password', async () => {
+
+      at Object.<anonymous> (src/tenant-api/tenant-users.service.spec.ts:255:38)
+
+  ● TenantUsersService.create (regression: role grant is authorized) › returns no invitation for a member created active with a password
+
+    expect(received).toBeNull()
+
+    Received: undefined
+
+      259 |     const { service, context, principal } = serviceFor(tenantUser(MemberRole.ADMIN));
+      260 |     const result = await run(context, principal, () => service.create({ ...base, role: MemberRole.MEMBER }));
+    > 261 |     expect(result.invitation).toBeNull();
+          |                               ^
+      262 |   });
+      263 |
+      264 |   it('still refuses OWNER from an api-key principal', async () => {
+
+      at Object.<anonymous> (src/tenant-api/tenant-users.service.spec.ts:261:31)
+
+  ● TenantUsersService.acceptInvitation (BN-REQ-SEC-002 invitation flow) › activates the invited member with the chosen password
+
+    TypeError: service.acceptInvitation is not a function
+
+      315 |   it('activates the invited member with the chosen password', async () => {
+      316 |     const { service, context, updates } = invitationService(invited, { sub: 'member-9', tid: TENANT_A });
+    > 317 |     await context.run({ tenant: tenantContext() }, () => service.acceptInvitation('tok', 'Chosen-Password-1'));
+          |                                                                  ^
+      318 |     expect(updates).toHaveLength(1);
+      319 |     expect(JSON.stringify(updates[0])).toContain('"status":"ACTIVE"');
+      320 |     expect(JSON.stringify(updates[0])).toContain('argon2-hash');
+
+      at src/tenant-api/tenant-users.service.spec.ts:317:66
+      at RequestContextService.run (src/tenancy/request-context.service.ts:34:25)
+      at Object.<anonymous> (src/tenant-api/tenant-users.service.spec.ts:317:19)
+
+  ● TenantUsersService.acceptInvitation (BN-REQ-SEC-002 invitation flow) › is one-time: an already active member cannot be re-activated with the same token
+
+    TypeError: service.acceptInvitation is not a function
+
+      325 |     const { service, context, updates } = invitationService(active, { sub: 'member-9', tid: TENANT_A });
+      326 |     await expect(
+    > 327 |       context.run({ tenant: tenantContext() }, () => service.acceptInvitation('tok', 'Chosen-Password-1')),
+          |                                                              ^
+      328 |     ).rejects.toMatchObject({ code: 'INVALID_INVITATION' });
+      329 |     expect(updates).toHaveLength(0);
+      330 |   });
+
+      at src/tenant-api/tenant-users.service.spec.ts:327:62
+      at RequestContextService.run (src/tenancy/request-context.service.ts:34:25)
+      at Object.<anonymous> (src/tenant-api/tenant-users.service.spec.ts:327:15)
+
+  ● TenantUsersService.acceptInvitation (BN-REQ-SEC-002 invitation flow) › refuses a token minted for another tenant
+
+    TypeError: service.acceptInvitation is not a function
+
+      333 |     const { service, context } = invitationService(invited, { sub: 'member-9', tid: 'other-tenant' });
+      334 |     await expect(
+    > 335 |       context.run({ tenant: tenantContext() }, () => service.acceptInvitation('tok', 'Chosen-Password-1')),
+          |                                                              ^
+      336 |     ).rejects.toMatchObject({ code: 'INVALID_INVITATION' });
+      337 |   });
+      338 |
+
+      at src/tenant-api/tenant-users.service.spec.ts:335:62
+      at RequestContextService.run (src/tenancy/request-context.service.ts:34:25)
+      at Object.<anonymous> (src/tenant-api/tenant-users.service.spec.ts:335:15)
+
+  ● TenantUsersService.acceptInvitation (BN-REQ-SEC-002 invitation flow) › refuses a forged or expired token
+
+    TypeError: service.acceptInvitation is not a function
+
+      340 |     const { service, context } = invitationService(invited, new Error('jwt expired'));
+      341 |     await expect(
+    > 342 |       context.run({ tenant: tenantContext() }, () => service.acceptInvitation('tok', 'Chosen-Password-1')),
+          |                                                              ^
+      343 |     ).rejects.toMatchObject({ code: 'INVALID_INVITATION' });
+      344 |   });
+      345 | });
+
+      at src/tenant-api/tenant-users.service.spec.ts:342:62
+      at RequestContextService.run (src/tenancy/request-context.service.ts:34:25)
+      at Object.<anonymous> (src/tenant-api/tenant-users.service.spec.ts:342:15)
+
+FAIL src/common/rbac-audit.routes.spec.ts
+  RBAC route table (BN-REQ-SEC-001)
+    ✓ has no route with @RequirePermissions and no @RequireScopes (9 ms)
+    ✓ boots: every route declares a policy and a scope where it declares permissions (1 ms)
+    ✓ makes webhooks:read and webhooks:write grantable to API keys (1 ms)
+    ✓ requires a webhooks scope on every /t/webhooks route (1 ms)
+    ✕ requires users:write at method level on POST /t/users, so VIEWER is refused (BN-REQ-SEC-003) (2 ms)
+
+  ● RBAC route table (BN-REQ-SEC-001) › requires users:write at method level on POST /t/users, so VIEWER is refused (BN-REQ-SEC-003)
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: ["users:write"]
+    Received: undefined
+
+      89 |   it('requires users:write at method level on POST /t/users, so VIEWER is refused (BN-REQ-SEC-003)', () => {
+      90 |     const create = (TenantUsersController.prototype as unknown as Record<string, object>)['create'];
+    > 91 |     expect(Reflect.getMetadata(PERMISSIONS_KEY, create)).toEqual(['users:write']);
+         |                                                          ^
+      92 |     const list = (TenantUsersController.prototype as unknown as Record<string, object>)['list'];
+      93 |     expect(Reflect.getMetadata(PERMISSIONS_KEY, list)).toEqual(['users:read']);
+      94 |   });
+
+      at Object.<anonymous> (src/common/rbac-audit.routes.spec.ts:91:58)
+
+Test Suites: 2 failed, 2 total
+Tests:       9 failed, 18 passed, 27 total
+Snapshots:   0 total
+Time:        5.174 s, estimated 9 s
+Ran all test suites matching src/tenant-api/tenant-users.service.spec.ts|src/common/rbac-audit.routes.spec.ts.

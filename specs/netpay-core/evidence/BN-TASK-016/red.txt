@@ -1,0 +1,277 @@
+# BN-TASK-016 red (reconciliation worker, /internal/tick OIDC guard, throttler exemption, RBAC audit, reconcile_* events) — 2026-10-21T20:44:46Z
+# npm test -- src/payments/reconciliation src/internal src/common/rbac-audit src/auth/throttling.spec.ts src/common/logging/payment-log-events.spec.ts src/payments/payment-events.spec.ts src/payments/event-contract.spec.ts
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/reconciliation src/internal src/common/rbac-audit src/auth/throttling.spec.ts src/common/logging/payment-log-events.spec.ts src/payments/payment-events.spec.ts src/payments/event-contract.spec.ts
+
+FAIL src/internal/google-id-token.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './google-id-token' from 'src/internal/google-id-token.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+FAIL src/internal/internal-invoker.guard.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './internal-invoker.guard' from 'src/internal/internal-invoker.guard.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+FAIL src/common/logging/payment-log-events.spec.ts
+  ● Test suite failed to run
+
+    SyntaxError: The requested module './payment-log-events' does not provide an export named 'logReconcileChecked'
+
+      at EsmLoader.linkAndEvaluateModule (node_modules/jest-runtime/build/index.js:1989:7)
+
+FAIL src/auth/throttling.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module '../common/decorators/internal-route.decorator' from 'src/auth/throttling.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+
+ReferenceError: You are trying to `require` a file after the Jest environment has been torn down. From src/payments/reconciliation/reconciliation.service.spec.ts.
+
+ReferenceError: You are trying to `import` a file after the Jest environment has been torn down. From src/payments/reconciliation/reconciliation.service.spec.ts.
+FAIL src/payments/reconciliation/reconciliation.service.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './reconciliation.service' from 'src/payments/reconciliation/reconciliation.service.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+
+ReferenceError: You are trying to `require` a file after the Jest environment has been torn down. From src/common/rbac-audit.service.spec.ts.
+
+ReferenceError: You are trying to `import` a file after the Jest environment has been torn down. From src/common/rbac-audit.service.spec.ts.
+FAIL src/common/rbac-audit.service.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './decorators/internal-route.decorator' from 'src/common/rbac-audit.service.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+FAIL src/payments/payment-events.spec.ts (7.704 s)
+  ● eventForTransition › PENDING → CANCELLED emits undefined
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: undefined
+    Received: null
+
+      79 |     ['PENDING_VERIFICATION', 'EXPIRED', PAYMENT_EVENTS.EXPIRED],
+      80 |   ])('%s → %s emits %s', (from, to, expected) => {
+    > 81 |     expect(eventForTransition(from, to)).toBe(expected);
+         |                                          ^
+      82 |   });
+      83 |
+      84 |   it('emits nothing for a pending state or for no change', () => {
+
+      at src/payments/payment-events.spec.ts:81:42
+
+  ● eventForTransition › FAILED → CANCELLED emits undefined
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: undefined
+    Received: null
+
+      79 |     ['PENDING_VERIFICATION', 'EXPIRED', PAYMENT_EVENTS.EXPIRED],
+      80 |   ])('%s → %s emits %s', (from, to, expected) => {
+    > 81 |     expect(eventForTransition(from, to)).toBe(expected);
+         |                                          ^
+      82 |   });
+      83 |
+      84 |   it('emits nothing for a pending state or for no change', () => {
+
+      at src/payments/payment-events.spec.ts:81:42
+
+  ● eventForTransition › PENDING_VERIFICATION → EXPIRED emits undefined
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: undefined
+    Received: null
+
+      79 |     ['PENDING_VERIFICATION', 'EXPIRED', PAYMENT_EVENTS.EXPIRED],
+      80 |   ])('%s → %s emits %s', (from, to, expected) => {
+    > 81 |     expect(eventForTransition(from, to)).toBe(expected);
+         |                                          ^
+      82 |   });
+      83 |
+      84 |   it('emits nothing for a pending state or for no change', () => {
+
+      at src/payments/payment-events.spec.ts:81:42
+
+FAIL src/payments/event-contract.spec.ts (7.781 s)
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › payment.cancelled (BN-REQ-PAY-004) validates
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/undefined.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at src/payments/event-contract.spec.ts:216:20
+
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › payment.expired, 3-D Secure abandoned (BN-REQ-REC-002) validates
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/undefined.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at src/payments/event-contract.spec.ts:216:20
+
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › payment.expired, cash reference past its expiry (BN-REQ-REC-003) validates
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/undefined.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at src/payments/event-contract.spec.ts:216:20
+
+  ● real payloads against the published schemas (BN-REQ-EVT-011) › payment.paid_after_cancel (BN-REQ-PAY-004) validates
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/docs/events/undefined.schema.json'
+
+      31 | /** The schema as published, compiled from the file rather than from the source. */
+      32 | function published(eventType: string): z.ZodType {
+    > 33 |   const json = JSON.parse(readFileSync(join(EVENTS_DIR, `${eventType}.schema.json`), 'utf8')) as Record<
+         |                           ^
+      34 |     string,
+      35 |     unknown
+      36 |   >;
+
+      at published (src/payments/event-contract.spec.ts:33:27)
+      at src/payments/event-contract.spec.ts:216:20
+
+FAIL src/common/rbac-audit.routes.spec.ts (9.801 s)
+  ● RBAC route table (BN-REQ-SEC-001) › has no route with @RequirePermissions and no @RequireScopes
+
+    Configuration error:
+
+    Could not locate module ../internal/internal.controller.js mapped as:
+    $1.
+
+    Please check your configuration for these entries:
+    {
+      "moduleNameMapper": {
+        "/^(\.{1,2}\/.*)\.js$/": "$1"
+      },
+      "resolver": undefined
+    }
+
+      at createNoMappedModuleFoundError (node_modules/jest-resolve/build/index.js:1322:17)
+
+  ● RBAC route table (BN-REQ-SEC-001) › boots: every route declares a policy and a scope where it declares permissions
+
+    Configuration error:
+
+    Could not locate module ../internal/internal.controller.js mapped as:
+    $1.
+
+    Please check your configuration for these entries:
+    {
+      "moduleNameMapper": {
+        "/^(\.{1,2}\/.*)\.js$/": "$1"
+      },
+      "resolver": undefined
+    }
+
+      at createNoMappedModuleFoundError (node_modules/jest-resolve/build/index.js:1322:17)
+
+  ● RBAC route table (BN-REQ-SEC-001) › declares POST /internal/tick as an internal route with the OIDC guard (BN-TASK-016)
+
+    Configuration error:
+
+    Could not locate module ../internal/internal.controller.js mapped as:
+    $1.
+
+    Please check your configuration for these entries:
+    {
+      "moduleNameMapper": {
+        "/^(\.{1,2}\/.*)\.js$/": "$1"
+      },
+      "resolver": undefined
+    }
+
+      at createNoMappedModuleFoundError (node_modules/jest-resolve/build/index.js:1322:17)
+
+  ● RBAC route table (BN-REQ-SEC-001) › makes webhooks:read and webhooks:write grantable to API keys
+
+    Configuration error:
+
+    Could not locate module ../internal/internal.controller.js mapped as:
+    $1.
+
+    Please check your configuration for these entries:
+    {
+      "moduleNameMapper": {
+        "/^(\.{1,2}\/.*)\.js$/": "$1"
+      },
+      "resolver": undefined
+    }
+
+      at createNoMappedModuleFoundError (node_modules/jest-resolve/build/index.js:1322:17)
+
+  ● RBAC route table (BN-REQ-SEC-001) › requires a webhooks scope on every /t/webhooks route
+
+    Configuration error:
+
+    Could not locate module ../internal/internal.controller.js mapped as:
+    $1.
+
+    Please check your configuration for these entries:
+    {
+      "moduleNameMapper": {
+        "/^(\.{1,2}\/.*)\.js$/": "$1"
+      },
+      "resolver": undefined
+    }
+
+      at createNoMappedModuleFoundError (node_modules/jest-resolve/build/index.js:1322:17)
+
+  ● RBAC route table (BN-REQ-SEC-001) › requires users:write at method level on POST /t/users, so VIEWER is refused (BN-REQ-SEC-003)
+
+    Configuration error:
+
+    Could not locate module ../internal/internal.controller.js mapped as:
+    $1.
+
+    Please check your configuration for these entries:
+    {
+      "moduleNameMapper": {
+        "/^(\.{1,2}\/.*)\.js$/": "$1"
+      },
+      "resolver": undefined
+    }
+
+      at createNoMappedModuleFoundError (node_modules/jest-resolve/build/index.js:1322:17)
+
+Test Suites: 9 failed, 9 total
+Tests:       13 failed, 25 passed, 38 total
+Snapshots:   0 total
+Time:        10.563 s
+Ran all test suites matching src/payments/reconciliation|src/internal|src/common/rbac-audit|src/auth/throttling.spec.ts|src/common/logging/payment-log-events.spec.ts|src/payments/payment-events.spec.ts|src/payments/event-contract.spec.ts.

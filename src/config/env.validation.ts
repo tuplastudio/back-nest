@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { keyringJsonProblem } from '../pii/keyring';
+import { DEV_PAYMENT_URL_FALLBACK, paymentUrlFields, setPaymentUrls } from './payment-urls';
 
 /**
  * Duration string accepted by the configuration, e.g. `900ms`, `15m`, `30d`.
@@ -98,14 +100,10 @@ export const envSchema = z
       .refine((value) => value !== 'seed-only-blind-index-key', {
         message: 'PII_HMAC_KEY holds a value committed to this repository.',
       }),
-    PAYMENT_REDIRECT_URL: z
-      .string()
-      .url('PAYMENT_REDIRECT_URL must be an absolute URL.')
-      .default('https://localhost/'),
-    PAYMENT_CANCEL_URL: z
-      .string()
-      .url('PAYMENT_CANCEL_URL must be an absolute URL.')
-      .default('https://localhost/'),
+    // Where Netpay sends the buyer after a hosted checkout. No default: the
+    // superRefine below requires both in production (BN-REQ-CFG-006), and
+    // validateEnv substitutes a localhost placeholder only outside it.
+    ...paymentUrlFields,
     NETPAY_ENCRYPTION_KEY: z
       .string()
       .min(40, 'NETPAY_ENCRYPTION_KEY must be a base64 encoded 32-byte key.')
@@ -128,9 +126,19 @@ export const envSchema = z
       .default('true')
       .transform((value) => value === 'true'),
     OUTBOUND_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(8000),
-    OUTBOUND_WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(8),
+    // A safety cap only: the retry window (OUTBOUND_WEBHOOK_MAX_AGE_HOURS) is what
+    // normally ends a delivery, and with the backoff capped at an hour a 24 h
+    // window takes a few dozen attempts. A low cap would end it early.
+    OUTBOUND_WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(1000).default(100),
     OUTBOUND_WEBHOOK_BASE_BACKOFF_MS: z.coerce.number().int().min(100).max(3_600_000).default(1000),
-    OUTBOUND_WEBHOOK_MAX_BACKOFF_MS: z.coerce.number().int().min(1000).max(86_400_000).default(3_600_000),
+    // Capped at an hour (BN-REQ-EVT-007): a longer wait would leave fewer
+    // attempts in the window than the contract promises subscribers.
+    OUTBOUND_WEBHOOK_MAX_BACKOFF_MS: z.coerce.number().int().min(1000).max(3_600_000).default(3_600_000),
+    // How long a delivery is retried before it is DEAD, and how long an endpoint
+    // must fail continuously before it is disabled automatically.
+    OUTBOUND_WEBHOOK_MAX_AGE_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+    // Deliveries in flight at once per instance.
+    OUTBOUND_WEBHOOK_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(8),
     OUTBOUND_WEBHOOK_JITTER_MS: z.coerce.number().int().min(0).max(60_000).default(250),
     OUTBOUND_WEBHOOK_POLL_INTERVAL_MS: z.coerce.number().int().min(0).max(600_000).default(5000),
     OUTBOUND_WEBHOOK_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
@@ -145,10 +153,60 @@ export const envSchema = z
           .map((entry) => entry.trim())
           .filter((entry) => entry.length > 0),
       ),
+    // On unless switched off (BN-REQ-EVT-003): a tenant with an ACTIVE endpoint
+    // expects deliveries. Off is still possible (a canary, for instance), and
+    // /health/ready then reports `degraded` while ACTIVE endpoints exist.
     OUTBOUND_WEBHOOK_ENABLED: z
       .enum(['true', 'false'])
-      .default('false')
+      .default('true')
       .transform((value) => value === 'true'),
+
+    // This deployment's public origin (`https://netpay-api-staging-….run.app`, no
+    // path). The inbound webhook URL Netpay should call is
+    // `${PUBLIC_BASE_URL}/api/v1/payments/webhook/{token}`; the drift check
+    // (BN-REQ-CFG-004) compares Netpay's registration against it. Unset: only the
+    // token is compared, and the origin is reported as unknown.
+    PUBLIC_BASE_URL: z
+      .string()
+      .regex(/^https?:\/\/[^/\s?#]+$/, 'PUBLIC_BASE_URL must be an origin such as https://api.example.com.')
+      .optional(),
+
+    // Reconciliation of non-terminal orders (BN-REQ-REC-001…004). The in-process
+    // timer runs while an instance is alive; with min-instances 0 that means only
+    // while there is traffic, so staging also gets a Cloud Scheduler call to
+    // POST /internal/tick (scripts/gcp/scheduler-internal-tick.sh).
+    RECONCILE_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((value) => value === 'true'),
+    RECONCILE_INTERVAL_MS: z.coerce.number().int().min(0).max(3_600_000).default(300_000),
+    // Orders untouched for less than this are left to the request, the webhook or
+    // the storefront; also the lease one worker holds on an order it checked.
+    RECONCILE_MIN_AGE_MS: z.coerce.number().int().min(10_000).max(86_400_000).default(300_000),
+    RECONCILE_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
+    // A charge waiting for 3-D Secure this long is EXPIRED (BN-REQ-REC-002).
+    RECONCILE_THREEDS_TIMEOUT_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(1_800_000),
+    // A CHARGE_UNKNOWN order with no transaction known to Netpay goes back to PENDING
+    // after this long (docs/RUNBOOK-PAYMENTS.md §1.1).
+    RECONCILE_CHARGE_UNKNOWN_GRACE_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(7 * 86_400_000)
+      .default(3_600_000),
+    // Calls to Netpay per second and tenant, at most.
+    RECONCILE_NETPAY_RATE_PER_SECOND: z.coerce.number().int().min(1).max(50).default(5),
+
+    // POST /internal/tick (Cloud Scheduler): only a Google-signed OIDC ID token
+    // for this service account, minted for this audience, is accepted. Unset
+    // e-mail: the endpoint refuses every call.
+    INTERNAL_TICK_SA_EMAIL: z.email('INTERNAL_TICK_SA_EMAIL must be a service account e-mail.').optional(),
+    // Audience the token must carry: the service URL the scheduler calls. Defaults
+    // to PUBLIC_BASE_URL.
+    INTERNAL_TICK_AUDIENCE: z
+      .string()
+      .regex(/^https:\/\/[^\s]+$/, 'INTERNAL_TICK_AUDIENCE must be an https URL.')
+      .optional(),
 
     PII_ENCRYPTION_KEY: z
       .string()
@@ -188,6 +246,36 @@ export const envSchema = z
 
     THROTTLE_LIMIT: z.coerce.number().int().min(1).max(100_000).default(300),
     THROTTLE_TTL: duration.default('60s'),
+    // Shared rate-limit storage (Redis / Memorystore) so every instance counts
+    // against one budget (BN-REQ-SEC-004). Unset: per-instance memory.
+    THROTTLER_REDIS_URL: z
+      .string()
+      .regex(/^rediss?:\/\/[^\s]+$/, 'THROTTLER_REDIS_URL must be a redis:// or rediss:// URL.')
+      .optional(),
+
+    // TOTP for platform administrators (BN-REQ-SEC-006). Unset means: required
+    // in production (which staging also runs as), optional elsewhere.
+    MFA_REQUIRED_FOR_ADMINS: z.enum(['true', 'false']).optional(),
+
+    // Tenant status / role caches (BN-REQ-SEC-012): a suspension or role
+    // revocation reaches every instance within this window. Capped at 5 s.
+    AUTHZ_CACHE_TTL_MS: z.coerce.number().int().min(0).max(5_000).default(5_000),
+
+    // Versioned keyrings (BN-REQ-SEC-007): {"current":"2","keys":{"1":"<b64>","2":"<b64>"}}.
+    // Unset: a one-key ring made of PII_ENCRYPTION_KEY / NETPAY_ENCRYPTION_KEY,
+    // which also keep reading values written before the keyring existed.
+    PII_KEYS_JSON: z
+      .string()
+      .refine((value) => keyringJsonProblem(value) === null, {
+        message: 'PII_KEYS_JSON must be {"current":"<n>","keys":{"<n>":"<base64 32-byte key>"}}.',
+      })
+      .optional(),
+    NETPAY_KEYS_JSON: z
+      .string()
+      .refine((value) => keyringJsonProblem(value) === null, {
+        message: 'NETPAY_KEYS_JSON must be {"current":"<n>","keys":{"<n>":"<base64 32-byte key>"}}.',
+      })
+      .optional(),
 
     API_KEY_PREFIX: z
       .string()
@@ -202,6 +290,15 @@ export const envSchema = z
       .default('true')
       .transform((value) => value === 'true'),
     LOG_LEVEL: z.enum(['error', 'warn', 'log', 'debug', 'verbose']).default('log'),
+    // GCP project that owns the request traces. Cloud Logging only links a log
+    // line to its trace when `logging.googleapis.com/trace` is the full
+    // `projects/<id>/traces/<trace>` name; without it the logger emits the bare
+    // trace id instead. Cloud Run does not expose the project id to the
+    // container, so it is configuration.
+    GCP_PROJECT_ID: z
+      .string()
+      .regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/, 'GCP_PROJECT_ID must be a GCP project id.')
+      .optional(),
 
     DOCS_ENABLED: z
       .enum(['true', 'false'])
@@ -266,6 +363,20 @@ export const envSchema = z
       });
     }
 
+    // A checkout created without these would send the buyer to a placeholder
+    // host after paying, so production refuses to boot rather than create one.
+    if (env.NODE_ENV === 'production') {
+      for (const key of ['PAYMENT_REDIRECT_URL', 'PAYMENT_CANCEL_URL'] as const) {
+        if (!env[key]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${key} is required in production: hosted checkout cannot return the buyer without it.`,
+          });
+        }
+      }
+    }
+
     if (env.NODE_ENV === 'production' && env.CORS_ORIGINS.includes('*')) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -297,6 +408,13 @@ export function validateEnv(raw: NodeJS.ProcessEnv = process.env): Record<string
 
   const env = parsed.data;
 
+  // Production cannot get here without both (superRefine above).
+  const paymentUrls = {
+    redirectUrl: env.PAYMENT_REDIRECT_URL ?? DEV_PAYMENT_URL_FALLBACK,
+    cancelUrl: env.PAYMENT_CANCEL_URL ?? DEV_PAYMENT_URL_FALLBACK,
+  };
+  setPaymentUrls(paymentUrls);
+
   return {
     app: {
       nodeEnv: env.NODE_ENV,
@@ -304,7 +422,9 @@ export function validateEnv(raw: NodeJS.ProcessEnv = process.env): Record<string
       apiPrefix: env.API_PREFIX,
       corsOrigins: env.CORS_ORIGINS,
       apiBaseDomain: env.API_BASE_DOMAIN.toLowerCase(),
+      publicBaseUrl: env.PUBLIC_BASE_URL ?? null,
       trustProxyHops: env.TRUST_PROXY_HOPS,
+      gcpProjectId: env.GCP_PROJECT_ID,
     },
     database: {
       url: env.CONTROL_PLANE_DATABASE_URL,
@@ -317,8 +437,8 @@ export function validateEnv(raw: NodeJS.ProcessEnv = process.env): Record<string
     },
     payments: {
       encryptionKey: env.NETPAY_ENCRYPTION_KEY,
-      redirectUrl: env.PAYMENT_REDIRECT_URL,
-      cancelUrl: env.PAYMENT_CANCEL_URL,
+      keysJson: env.NETPAY_KEYS_JSON ?? null,
+      ...paymentUrls,
     },
     outboundWebhooks: {
       enabled: env.OUTBOUND_WEBHOOK_ENABLED,
@@ -332,7 +452,22 @@ export function validateEnv(raw: NodeJS.ProcessEnv = process.env): Record<string
       batchSize: env.OUTBOUND_WEBHOOK_BATCH_SIZE,
       autoDisableAfter: env.OUTBOUND_WEBHOOK_AUTO_DISABLE_AFTER,
       maxTenantsPerTick: env.OUTBOUND_WEBHOOK_MAX_TENANTS_PER_TICK,
+      maxAgeMs: env.OUTBOUND_WEBHOOK_MAX_AGE_HOURS * 3_600_000,
+      concurrency: env.OUTBOUND_WEBHOOK_CONCURRENCY,
       allowedCidrs: env.OUTBOUND_WEBHOOK_ALLOWED_CIDRS,
+    },
+    reconciliation: {
+      enabled: env.RECONCILE_ENABLED,
+      intervalMs: env.RECONCILE_INTERVAL_MS,
+      minAgeMs: env.RECONCILE_MIN_AGE_MS,
+      batchSize: env.RECONCILE_BATCH_SIZE,
+      threeDsTimeoutMs: env.RECONCILE_THREEDS_TIMEOUT_MS,
+      chargeUnknownGraceMs: env.RECONCILE_CHARGE_UNKNOWN_GRACE_MS,
+      providerRatePerSecond: env.RECONCILE_NETPAY_RATE_PER_SECOND,
+    },
+    internalTick: {
+      serviceAccountEmail: env.INTERNAL_TICK_SA_EMAIL ?? null,
+      audience: env.INTERNAL_TICK_AUDIENCE ?? env.PUBLIC_BASE_URL ?? null,
     },
     auth: {
       jwtAccessSecret: env.JWT_ACCESS_SECRET,
@@ -347,6 +482,12 @@ export function validateEnv(raw: NodeJS.ProcessEnv = process.env): Record<string
       lockoutDuration: env.AUTH_LOCKOUT_DURATION,
       throttleLimit: env.AUTH_THROTTLE_LIMIT,
       throttleTtl: env.AUTH_THROTTLE_TTL,
+      mfaRequiredForAdmins:
+        env.MFA_REQUIRED_FOR_ADMINS === undefined
+          ? env.NODE_ENV === 'production'
+          : env.MFA_REQUIRED_FOR_ADMINS === 'true',
+      authzCacheTtlMs: env.AUTHZ_CACHE_TTL_MS,
+      piiKeysJson: env.PII_KEYS_JSON ?? null,
     },
     argon2: {
       memoryCost: env.ARGON2_MEMORY_COST,
@@ -356,6 +497,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv = process.env): Record<string
     throttle: {
       limit: env.THROTTLE_LIMIT,
       ttl: env.THROTTLE_TTL,
+      redisUrl: env.THROTTLER_REDIS_URL ?? null,
     },
     apiKeys: {
       prefix: env.API_KEY_PREFIX,

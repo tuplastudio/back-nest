@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { jest } from '@jest/globals';
-import { AuthorizationException } from '../common/errors/app.exception';
+import { AppException, AuthorizationException } from '../common/errors/app.exception';
 import { RequestContextService } from '../tenancy/request-context.service';
 import { MemberRole } from '../generated/tenant-plane/enums';
 import type { Principal, TenantContext } from '../tenancy/tenant-context.interface';
@@ -57,7 +57,13 @@ function serviceFor(principal: Principal | null) {
   const service = new TenantUsersService(
     tenantPrisma as never,
     { hash: jest.fn<() => Promise<string>>().mockResolvedValue('argon2-hash') } as never,
-    { verifyAccessToken: jest.fn(), issuePair: jest.fn() } as never,
+    {
+      verifyAccessToken: jest.fn(),
+      issuePair: jest.fn(),
+      issueInvitationToken: jest
+        .fn()
+        .mockReturnValue({ token: 'invitation-token', expiresAt: Date.now() + 60_000 }),
+    } as never,
     {
       blindIndex: jest.fn().mockReturnValue('blind-index'),
       encrypt: jest.fn().mockReturnValue('ciphertext'),
@@ -219,18 +225,125 @@ describe('TenantUsersService.create (regression: role grant is authorized)', () 
     expect(created).toHaveLength(0);
   });
 
-  it('treats an api-key principal as able to grant any grantable role', async () => {
+  it('caps an api-key principal at MEMBER: ADMIN is refused (BN-REQ-SEC-002)', async () => {
     const { service, context, created, principal } = serviceFor(apiKey);
-    await run(context, principal, () => service.create({ ...base, role: MemberRole.ADMIN }));
-    expect(created[0]?.role).toBe(MemberRole.ADMIN);
+    const { password: _password, ...invite } = base;
+    void _password;
+    await expect(
+      run(context, principal, () => service.create({ ...invite, role: MemberRole.ADMIN })),
+    ).rejects.toBeInstanceOf(AuthorizationException);
+    expect(created).toHaveLength(0);
+  });
+
+  it('refuses a caller-supplied password from an api-key principal with 422 (BN-REQ-SEC-002)', async () => {
+    const { service, context, created, principal } = serviceFor(apiKey);
+    const attempt = run(context, principal, () => service.create({ ...base, role: MemberRole.MEMBER }));
+    await expect(attempt).rejects.toBeInstanceOf(AppException);
+    await expect(attempt).rejects.toMatchObject({ status: 422, code: 'PASSWORD_NOT_ACCEPTED' });
+    expect(created).toHaveLength(0);
+  });
+
+  it('invites the member created by an api-key: INVITED, no password, one-time token returned', async () => {
+    const { service, context, created, principal } = serviceFor(apiKey);
+    const { password: _password, ...invite } = base;
+    void _password;
+    const result = await run(context, principal, () =>
+      service.create({ ...invite, role: MemberRole.MEMBER }),
+    );
+    expect(created[0]?.role).toBe(MemberRole.MEMBER);
+    expect(created[0]?.status).toBe('INVITED');
+    expect(created[0]?.passwordHash).toBeNull();
     expect(created[0]?.createdById).toBe('key-1');
+    expect(result.invitation?.token).toBe('invitation-token');
+  });
+
+  it('returns no invitation for a member created active with a password', async () => {
+    const { service, context, principal } = serviceFor(tenantUser(MemberRole.ADMIN));
+    const result = await run(context, principal, () => service.create({ ...base, role: MemberRole.MEMBER }));
+    expect(result.invitation).toBeNull();
   });
 
   it('still refuses OWNER from an api-key principal', async () => {
     const { service, context, created, principal } = serviceFor(apiKey);
+    const { password: _password, ...invite } = base;
+    void _password;
     await expect(
-      run(context, principal, () => service.create({ ...base, role: MemberRole.OWNER })),
+      run(context, principal, () => service.create({ ...invite, role: MemberRole.OWNER })),
     ).rejects.toBeInstanceOf(AuthorizationException);
     expect(created).toHaveLength(0);
+  });
+});
+
+describe('TenantUsersService.acceptInvitation (BN-REQ-SEC-002 invitation flow)', () => {
+  type Row = { id: string; status: string; passwordHash: string | null; deletedAt: Date | null };
+
+  function invitationService(row: Row | null, claims: { sub: string; tid: string } | Error) {
+    const updates: unknown[] = [];
+    const context = new RequestContextService();
+    const tenantPrisma = {
+      forCurrentTenantTransaction: <T>(cb: (client: unknown) => Promise<T>): Promise<T> =>
+        cb({
+          user: {
+            findUnique: jest.fn<() => Promise<Row | null>>().mockResolvedValue(row),
+            updateMany: jest
+              .fn<(args: unknown) => Promise<{ count: number }>>()
+              .mockImplementation((args) => {
+                updates.push(args);
+                return Promise.resolve({ count: row?.status === 'INVITED' ? 1 : 0 });
+              }),
+          },
+        }),
+    };
+    const verifyInvitationToken = jest.fn(() => {
+      if (claims instanceof Error) {
+        throw claims;
+      }
+      return claims;
+    });
+    const service = new TenantUsersService(
+      tenantPrisma as never,
+      { hash: jest.fn<() => Promise<string>>().mockResolvedValue('argon2-hash') } as never,
+      { verifyInvitationToken } as never,
+      {} as never,
+      { record: jest.fn<() => Promise<void>>().mockResolvedValue(undefined) } as never,
+      context,
+      {} as never,
+    );
+    return { service, context, updates };
+  }
+
+  const invited: Row = { id: 'member-9', status: 'INVITED', passwordHash: null, deletedAt: null };
+
+  it('activates the invited member with the chosen password', async () => {
+    const { service, context, updates } = invitationService(invited, { sub: 'member-9', tid: TENANT_A });
+    await context.run({ tenant: tenantContext() }, () =>
+      service.acceptInvitation('tok', 'Chosen-Password-1'),
+    );
+    expect(updates).toHaveLength(1);
+    expect(JSON.stringify(updates[0])).toContain('"status":"ACTIVE"');
+    expect(JSON.stringify(updates[0])).toContain('argon2-hash');
+  });
+
+  it('is one-time: an already active member cannot be re-activated with the same token', async () => {
+    const active: Row = { ...invited, status: 'ACTIVE', passwordHash: 'existing' };
+    const { service, context, updates } = invitationService(active, { sub: 'member-9', tid: TENANT_A });
+    await expect(
+      context.run({ tenant: tenantContext() }, () => service.acceptInvitation('tok', 'Chosen-Password-1')),
+    ).rejects.toMatchObject({ code: 'INVALID_INVITATION' });
+    expect(updates).toHaveLength(0);
+  });
+
+  it('refuses a token minted for another tenant', async () => {
+    const { service, context } = invitationService(invited, { sub: 'member-9', tid: 'other-tenant' });
+    await expect(
+      context.run({ tenant: tenantContext() }, () => service.acceptInvitation('tok', 'Chosen-Password-1')),
+    ).rejects.toMatchObject({ code: 'INVALID_INVITATION' });
+  });
+
+  it('refuses a forged or expired token', async () => {
+    const { service, context } = invitationService(invited, new Error('jwt expired'));
+    await expect(
+      context.run({ tenant: tenantContext() }, () => service.acceptInvitation('tok', 'Chosen-Password-1')),
+    ).rejects.toMatchObject({ code: 'INVALID_INVITATION' });
   });
 });

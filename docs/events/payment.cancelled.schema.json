@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "pattern": "^evt_[0-9a-f]{32}$",
+      "description": "Stable across retries; also sent as X-MTBPay-Event-Id. Deduplicate on it."
+    },
+    "eventType": { "type": "string", "const": "payment.cancelled" },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+      "description": "When the order changed, not when it was delivered."
+    },
+    "sequence": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Per order, strictly increasing. A gap means an event is still to come."
+    },
+    "tenantId": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "orderId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Order id in this platform."
+        },
+        "orderReference": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Reference sent to Netpay as the merchant reference code."
+        },
+        "merchantReferenceCode": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The tenant's own business code."
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d{2}$",
+          "description": "Amount with two decimals, as a string (e.g. \"650.00\").",
+          "examples": ["650.00"]
+        },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "status": {
+          "type": "string",
+          "enum": [
+            "PENDING",
+            "PENDING_VERIFICATION",
+            "CHARGE_UNKNOWN",
+            "PAID",
+            "PARTIALLY_REFUNDED",
+            "FAILED",
+            "REFUNDED",
+            "AMOUNT_MISMATCH",
+            "CANCELLED",
+            "EXPIRED"
+          ],
+          "description": "Status after the change."
+        },
+        "previousStatus": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "PENDING_VERIFICATION",
+                "CHARGE_UNKNOWN",
+                "PAID",
+                "PARTIALLY_REFUNDED",
+                "FAILED",
+                "REFUNDED",
+                "AMOUNT_MISMATCH",
+                "CANCELLED",
+                "EXPIRED"
+              ]
+            },
+            { "type": "null" }
+          ],
+          "description": "Status before the change."
+        },
+        "refundedAmount": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d{2}$",
+          "description": "Total returned to the buyer so far.",
+          "examples": ["650.00"]
+        },
+        "refunded": {
+          "description": "Amount of this refund. Only on payment.refunded.",
+          "type": "string",
+          "pattern": "^\\d+\\.\\d{2}$",
+          "examples": ["650.00"]
+        },
+        "fullyRefunded": { "type": "boolean", "description": "True once the whole amount went back." },
+        "netpayTransactionId": { "type": ["string", "null"] },
+        "paymentMethod": { "anyOf": [{ "type": "string", "enum": ["CARD", "OXXO"] }, { "type": "null" }] },
+        "paymentReference": { "description": "Cash reference (OXXO Pay).", "type": ["string", "null"] },
+        "failureCode": {
+          "anyOf": [{ "type": "string", "pattern": "^[A-Z_]+$" }, { "type": "null" }],
+          "description": "Stable decline code (docs/ERRORS.md §5), e.g. INSUFFICIENT_FUNDS."
+        },
+        "failureReason": { "type": ["string", "null"] }
+      },
+      "required": [
+        "orderId",
+        "orderReference",
+        "merchantReferenceCode",
+        "amount",
+        "currency",
+        "status",
+        "previousStatus",
+        "refundedAmount",
+        "fullyRefunded",
+        "netpayTransactionId",
+        "paymentMethod",
+        "paymentReference",
+        "failureCode",
+        "failureReason"
+      ],
+      "additionalProperties": false,
+      "description": "The order at the moment of the change. No cardholder data of any kind."
+    }
+  },
+  "required": ["eventId", "eventType", "occurredAt", "sequence", "tenantId", "data"],
+  "additionalProperties": false,
+  "title": "payment.cancelled",
+  "description": "The merchant cancelled an unpaid order (PENDING, PENDING_VERIFICATION or FAILED → CANCELLED). Netpay cannot expire a hosted session or a cash reference, so a later payment is still possible: it arrives as payment.paid_after_cancel.",
+  "$id": "payment.cancelled.schema.json"
+}

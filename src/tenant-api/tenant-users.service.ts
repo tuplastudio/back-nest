@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { MemberRole, MemberStatus } from '../generated/tenant-plane/enums';
 import type { UserModel as User } from '../generated/tenant-plane/models/User';
 import { AuditActorType, AuditOutcome } from '../generated/control-plane/enums';
@@ -10,6 +10,7 @@ import { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import { TokenService } from '../auth/token.service';
 import { RequestContextService } from '../tenancy/request-context.service';
 import {
+  AppException,
   AccountLockedException,
   AuthorizationException,
   ConflictException,
@@ -59,6 +60,22 @@ export interface CreateUserInput {
   /** Tenant-scoped role. */
   readonly role?: MemberRole;
 }
+
+/**
+ * A newly created member, plus the one-time invitation when it was invited.
+ */
+export interface CreatedMember {
+  /** The persisted member. */
+  readonly user: User;
+  /**
+   * Invitation for an `INVITED` member, returned exactly once. `null` when the
+   * member was created active with a password.
+   */
+  readonly invitation: { readonly token: string; readonly expiresAt: number } | null;
+}
+
+/** Highest role an API key may grant (BN-REQ-SEC-002). */
+const API_KEY_ROLE_CEILING = MemberRole.MEMBER;
 
 /**
  * Ordering used to bound which tenant roles a caller may grant.
@@ -323,7 +340,7 @@ export class TenantUsersService {
    * @throws {AuthorizationException} When the requested role exceeds the caller's authority.
    * @throws {ConflictException} When the e-mail is already registered.
    */
-  async create(input: CreateUserInput): Promise<User> {
+  async create(input: CreateUserInput): Promise<CreatedMember> {
     const tenant = this.requestContext.requireTenant();
 
     const principal = this.requestContext.principal;
@@ -341,6 +358,24 @@ export class TenantUsersService {
       throw new AuthorizationException(
         `Role "${requestedRole}" exceeds the caller's own role "${principal.role}".`,
       );
+    }
+    // A machine credential mints members through the invitation flow only: it
+    // never chooses a password a human then signs in with, and it never grants
+    // more than MEMBER, so a leaked `users:write` key cannot create an
+    // administrator it controls (BN-REQ-SEC-002).
+    if (principal.kind === 'api-key') {
+      if (input.password !== undefined) {
+        throw new AppException(
+          'API keys cannot set a member password; the member is created INVITED and receives an invitation token.',
+          'PASSWORD_NOT_ACCEPTED',
+          HttpStatus.UNPROCESSABLE_ENTITY,
+        );
+      }
+      if (MEMBER_ROLE_RANK[requestedRole] > MEMBER_ROLE_RANK[API_KEY_ROLE_CEILING]) {
+        throw new AuthorizationException(
+          `API keys may grant at most ${API_KEY_ROLE_CEILING}; "${requestedRole}" requires a member session.`,
+        );
+      }
     }
 
     const email = PiiCryptoService.normalizeEmail(input.email);
@@ -393,7 +428,66 @@ export class TenantUsersService {
       ...this.requestMeta(),
     });
 
-    return user;
+    const invitation =
+      user.status === MemberStatus.INVITED ? this.tokens.issueInvitationToken(user.id, tenant.id) : null;
+    return { user, invitation };
+  }
+
+  /**
+   * Accepts an invitation: sets the member's password and activates the account.
+   *
+   * Single use by construction: the update only matches a member that is still
+   * `INVITED` without a password, so a second presentation of the same token
+   * finds nothing to update.
+   *
+   * @param token Invitation token returned when the member was created.
+   * @param password Password the invited member chose.
+   * @throws {AppException} `INVALID_INVITATION` when the token is unusable.
+   */
+  async acceptInvitation(token: string, password: string): Promise<void> {
+    const tenant = this.requestContext.requireTenant();
+    const invalid = (): AppException =>
+      new AppException(
+        'The invitation is invalid or has already been used.',
+        'INVALID_INVITATION',
+        HttpStatus.BAD_REQUEST,
+      );
+
+    let claims;
+    try {
+      claims = this.tokens.verifyInvitationToken(token);
+    } catch {
+      throw invalid();
+    }
+    if (claims.tid !== tenant.id) {
+      throw invalid();
+    }
+
+    const passwordHash = await this.passwords.hash(password);
+    const activated = await this.tenantPrisma.forCurrentTenantTransaction(async (client) => {
+      const user = await client.user.findUnique({ where: { id: claims.sub } });
+      if (!user || user.status !== MemberStatus.INVITED || user.passwordHash !== null || user.deletedAt) {
+        return false;
+      }
+      const result = await client.user.updateMany({
+        where: { id: user.id, status: MemberStatus.INVITED, passwordHash: null },
+        data: { passwordHash, status: MemberStatus.ACTIVE, passwordChangedAt: new Date() },
+      });
+      return result.count === 1;
+    });
+    if (!activated) {
+      throw invalid();
+    }
+
+    await this.audit.record({
+      tenantId: tenant.id,
+      actorType: AuditActorType.TENANT_USER,
+      actorId: claims.sub,
+      action: 'tenant.user.invitation-accepted',
+      resourceType: 'user',
+      resourceId: claims.sub,
+      ...this.requestMeta(),
+    });
   }
 
   /**

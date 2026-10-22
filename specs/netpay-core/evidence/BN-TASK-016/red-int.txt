@@ -1,0 +1,13 @@
+# BN-TASK-016 red (integration against PostgreSQL 17, container bn-e2e-w3) — 2026-10-21T20:45:03Z
+# npm run test:int -- test/reconciliation.int-spec.ts
+> node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-int.json --runInBand test/reconciliation.int-spec.ts
+ReferenceError: You are trying to `import` a file after the Jest environment has been torn down. From test/reconciliation.int-spec.ts.
+FAIL test/reconciliation.int-spec.ts
+  ● Test suite failed to run
+    Cannot find module '../src/payments/reconciliation/reconciliation.service' from 'test/reconciliation.int-spec.ts'
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        2.88 s
+Ran all test suites matching test/reconciliation.int-spec.ts.

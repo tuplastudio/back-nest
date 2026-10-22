@@ -1,0 +1,39 @@
+# BN-TASK-038 green — 2026-10-21T18:26:06Z
+# npm test -- src/bootstrap/apply-http-settings.spec.ts
+PASS src/bootstrap/apply-http-settings.spec.ts
+  HTTP settings: CORS and fingerprinting headers
+    ✓ answers an allowed preflight with 204 and the origin echoed (BN-REQ-SEC-010) (16 ms)
+    ✓ refuses a preflight from a disallowed origin with 403, not 404 (BN-REQ-SEC-010) (4 ms)
+    ✓ still serves non-browser clients that send no Origin (5 ms)
+    ✓ sends no X-Powered-By header at all (BN-REQ-SEC-011) (2 ms)
+    ✓ matches origins exactly
+
+Test Suites: 1 passed, 1 total
+Tests:       5 passed, 5 total
+Snapshots:   0 total
+Time:        2.694 s, estimated 3 s
+Ran all test suites matching src/bootstrap/apply-http-settings.spec.ts.
+
+================ e2e ================
+# BN-TASK-029/031/032/034/038/039 e2e — test/security.e2e-spec.ts against compiled app (Postgres bn-e2e-b:55432)
+PASS test/security.e2e-spec.ts
+  Security hardening (e2e)
+    ✓ never answers 429 to 30 readiness probes a minute, and does not count them (52 ms)
+    ✓ refuses an admin without MFA with 403 MFA_REQUIRED (86 ms)
+    ✓ enrols TOTP, confirms it and unlocks the control plane (61 ms)
+    ✓ requires the second factor at sign-in once enrolled (62 ms)
+    ✓ provisions the tenant used below (113 ms)
+    ✓ requires a step-up (MFA within 5 min) for a cross-tenant payment write (41 ms)
+    ✓ refuses /t/webhooks to a key holding only payments:read, and admits webhooks:* keys (143 ms)
+    ✓ caps API-key member creation at MEMBER, refuses a password and invites instead (217 ms)
+    ✓ refuses POST /t/users to a VIEWER (method-level users:write) (101 ms)
+    ✓ restricts an admin with mustChangePassword to the password change endpoint (70 ms)
+    ✓ answers an allowed preflight with 204 and a disallowed one with 403 (1 ms)
+    ✓ sends no X-Powered-By header (12 ms)
+    ✓ answers 429 on the 11th sign-in within a minute (242 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       13 passed, 13 total
+Snapshots:   0 total
+Time:        5.093 s, estimated 6 s
+Ran all test suites matching test/security.e2e-spec.ts.

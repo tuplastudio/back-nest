@@ -1,0 +1,31 @@
+$ grep -nE '^## ' docs/RUNBOOK-PAYMENTS.md   # 2026-10-21T18:27:02Z
+13:## 0. Convenciones
+40:## 1. Conciliación manual
+96:## 2. Reproceso de outbox / reenvío de webhooks salientes
+153:## 3. Rotación de llaves
+219:## 4. Alta de tenant
+263:## 5. Respuesta a incidentes de pago
+335:## 6. Rollback de despliegue
+354:## 7. Fallo de migración de tenant
+397:## 8. Observabilidad de pagos
+
+# Secciones requeridas (BN-REQ-DOC-005 + BN-TASK-052):
+OK   Conciliación manual
+OK   Reproceso de outbox
+OK   Rotación de llaves
+OK   Re-registro del webhook|re-registro del webhook
+OK   Alta de tenant
+OK   Respuesta a incidentes de pago
+OK   NetPay caído
+OK   PROVIDER_OUTCOME_UNKNOWN
+OK   Drift del webhook
+OK   Pico de 5xx
+OK   Rollback de despliegue
+OK   update-traffic
+OK   Fallo de migración de tenant
+OK   tenant_schema_migrations
+OK   payment_status_change
+exit=0
+
+$ npm run docs:lint (incluye RUNBOOK-PAYMENTS.md: rutas y variables verificadas)
+hallazgos en RUNBOOK-PAYMENTS.md: 0

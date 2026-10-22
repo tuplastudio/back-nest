@@ -1,0 +1,18 @@
+$ npx tsx scripts/docs-lint.ts   # 2026-10-21T18:20:57Z, antes de corregir docs
+docs/DEPLOY-GCP.md:706: ruta /api/v1/payments/return no corresponde a ningún controlador
+docs/DEPLOY-GCP.md:1589: ruta /api/v1/payments/return no corresponde a ningún controlador
+docs/DEPLOYMENT.md:419: variable DATABASE_URL no existe en src/config/env.validation.ts
+docs/MIGRATIONS.md:400: variable DATABASE_URL no existe en src/config/env.validation.ts
+docs/MIGRATIONS.md:617: variable DATABASE_URL_UNPOOLED no existe en src/config/env.validation.ts
+docs/NETPAY-INTEGRATION.md:609: variable OUTBOUND_WEBHOOKS_ENABLED no existe en src/config/env.validation.ts
+docs/NETPAY-INTEGRATION.md:613: variable OUTBOUND_WEBHOOK_BACKOFF_MS no existe en src/config/env.validation.ts
+docs/NETPAY-INTEGRATION.md:614: variable OUTBOUND_WEBHOOK_MAX_RESPONSE_BYTES no existe en src/config/env.validation.ts
+docs/NETPAY-INTEGRATION.md:616: variable OUTBOUND_WEBHOOK_SIGNATURE_TOLERANCE_MS no existe en src/config/env.validation.ts
+docs/NETPAY-INTEGRATION.md:656: variable NETPAY_PLATFORM_ENCRYPTION_KEY no existe en src/config/env.validation.ts
+docs/NETPAY-INTEGRATION.md:657: variable NETPAY_ALLOWED_HOSTS no existe en src/config/env.validation.ts
+docs/NETPAY-INTEGRATION.md:658: variable NETPAY_TIMEOUT_MS no existe en src/config/env.validation.ts
+docs/NETPAY-INTEGRATION.md:659: variable NETPAY_MAX_ATTEMPTS no existe en src/config/env.validation.ts
+docs/NETPAY-INTEGRATION.md:659: variable NETPAY_BACKOFF_MS no existe en src/config/env.validation.ts
+docs/NETPAY-INTEGRATION.md:660: variable PAYMENTS_ENABLED no existe en src/config/env.validation.ts
+docs-lint: 15 problema(s).
+exit=1

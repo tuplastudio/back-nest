@@ -1,0 +1,25 @@
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/common/logging/payment-log-events
+
+FAIL src/common/logging/payment-log-events.spec.ts
+  ● Test suite failed to run
+
+    ENOENT: no such file or directory, open '/Users/carlosalexisgalavizrosas/Documents/tupla_studio/parlo/back-nest/scripts/gcp/monitoring/log-metrics.sh'
+
+      12 |   const lines: Array<Record<string, unknown>> = [];
+      13 |   const logger = new JsonLogger({ level: 'log', write: (l) => lines.push(JSON.parse(l) as Record<string, unknown>) });
+    > 14 |   const script = readFileSync(join(process.cwd(), 'scripts/gcp/monitoring/log-metrics.sh'), 'utf8');
+         |                  ^
+      15 |
+      16 |   beforeEach(() => {
+      17 |     lines.length = 0;
+
+      at src/common/logging/payment-log-events.spec.ts:14:18
+      at src/common/logging/payment-log-events.spec.ts:11:1
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        2.116 s
+Ran all test suites matching src/common/logging/payment-log-events.

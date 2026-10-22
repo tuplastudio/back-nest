@@ -1,0 +1,27 @@
+{
+  "$comment": "Single source of the Cloud Run runtime flags (BN-REQ-OPS-007). Applied by deploy-environment.yml through scripts/gcp/cloudrun-flags.sh and checked daily by drift-check.yml. Must match docs/DEPLOY-GCP.md §11.3. Production ingress stays 'all' until the HTTPS load balancer exists (BN-TASK-049); switching it earlier makes run.app unreachable. Production runs scale-to-zero with CPU throttling by owner decision (2026-10-21): background work (outbound dispatch, reconciliation) only advances while there is traffic.",
+  "staging": {
+    "minInstances": 0,
+    "maxInstances": 2,
+    "cpuThrottling": true,
+    "ingress": "all",
+    "vpcEgress": "all-traffic",
+    "concurrency": 15,
+    "timeoutSeconds": 300,
+    "cpu": "1",
+    "memory": "512Mi",
+    "executionEnvironment": "gen2"
+  },
+  "production": {
+    "minInstances": 0,
+    "maxInstances": 4,
+    "cpuThrottling": true,
+    "ingress": "all",
+    "vpcEgress": "all-traffic",
+    "concurrency": 15,
+    "timeoutSeconds": 60,
+    "cpu": "1",
+    "memory": "512Mi",
+    "executionEnvironment": "gen2"
+  }
+}

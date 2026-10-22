@@ -1,0 +1,189 @@
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/config/payment-urls
+
+FAIL src/config/payment-urls.spec.ts
+  ● payment redirect/cancel URLs come only from validated config (BN-TASK-028) › refuses to boot in production when PAYMENT_REDIRECT_URL is missing, with a clear message
+
+    expect(received).toThrow(expected)
+
+    Expected pattern: /PAYMENT_REDIRECT_URL is required in production/
+
+    Received function did not throw
+
+      25 |     expect(() =>
+      26 |       validateEnv({ ...BASE, NODE_ENV: 'production', PAYMENT_CANCEL_URL: URLS.PAYMENT_CANCEL_URL }),
+    > 27 |     ).toThrow(/PAYMENT_REDIRECT_URL is required in production/);
+         |       ^
+      28 |   });
+      29 |
+      30 |   it('refuses to boot in production when PAYMENT_CANCEL_URL is missing', () => {
+
+      at Object.<anonymous> (src/config/payment-urls.spec.ts:27:7)
+
+  ● payment redirect/cancel URLs come only from validated config (BN-TASK-028) › refuses to boot in production when PAYMENT_CANCEL_URL is missing
+
+    expect(received).toThrow(expected)
+
+    Expected pattern: /PAYMENT_CANCEL_URL is required in production/
+
+    Received function did not throw
+
+      31 |     expect(() =>
+      32 |       validateEnv({ ...BASE, NODE_ENV: 'production', PAYMENT_REDIRECT_URL: URLS.PAYMENT_REDIRECT_URL }),
+    > 33 |     ).toThrow(/PAYMENT_CANCEL_URL is required in production/);
+         |       ^
+      34 |   });
+      35 |
+      36 |   it('rejects a relative URL in any environment', () => {
+
+      at Object.<anonymous> (src/config/payment-urls.spec.ts:33:7)
+
+  ● payment redirect/cancel URLs come only from validated config (BN-TASK-028) › publishes the validated values to the payment code
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 2
+    + Received  + 2
+
+      Object {
+    -   "cancelUrl": "https://pay.example.test/cancel",
+    -   "redirectUrl": "https://pay.example.test/return",
+    +   "cancelUrl": "https://localhost/",
+    +   "redirectUrl": "https://localhost/",
+      }
+
+      47 |       cancelUrl: URLS.PAYMENT_CANCEL_URL,
+      48 |     });
+    > 49 |     expect(paymentUrls()).toEqual({
+         |                           ^
+      50 |       redirectUrl: URLS.PAYMENT_REDIRECT_URL,
+      51 |       cancelUrl: URLS.PAYMENT_CANCEL_URL,
+      52 |     });
+
+      at Object.<anonymous> (src/config/payment-urls.spec.ts:49:27)
+
+  ● lint: process.env is confined to src/config (BN-TASK-028) › forbids process.env in src/payments/payment-orders.service.ts
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: [2]
+    Received: undefined
+
+      72 |   ])('forbids process.env in %s', async (file) => {
+      73 |     const config = (await eslint.calculateConfigForFile(file)) as { rules: Record<string, unknown> };
+    > 74 |     expect(config.rules['no-process-env']).toEqual([2]);
+         |                                            ^
+      75 |   });
+      76 |
+      77 |   it.each(['src/config/env.validation.ts', 'src/config/payment-urls.ts', 'scripts/migrate.ts'])(
+
+      at src/config/payment-urls.spec.ts:74:44
+
+  ● lint: process.env is confined to src/config (BN-TASK-028) › forbids process.env in src/payments/netpay-endpoints.ts
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: [2]
+    Received: undefined
+
+      72 |   ])('forbids process.env in %s', async (file) => {
+      73 |     const config = (await eslint.calculateConfigForFile(file)) as { rules: Record<string, unknown> };
+    > 74 |     expect(config.rules['no-process-env']).toEqual([2]);
+         |                                            ^
+      75 |   });
+      76 |
+      77 |   it.each(['src/config/env.validation.ts', 'src/config/payment-urls.ts', 'scripts/migrate.ts'])(
+
+      at src/config/payment-urls.spec.ts:74:44
+
+  ● lint: process.env is confined to src/config (BN-TASK-028) › forbids process.env in src/main.ts
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: [2]
+    Received: undefined
+
+      72 |   ])('forbids process.env in %s', async (file) => {
+      73 |     const config = (await eslint.calculateConfigForFile(file)) as { rules: Record<string, unknown> };
+    > 74 |     expect(config.rules['no-process-env']).toEqual([2]);
+         |                                            ^
+      75 |   });
+      76 |
+      77 |   it.each(['src/config/env.validation.ts', 'src/config/payment-urls.ts', 'scripts/migrate.ts'])(
+
+      at src/config/payment-urls.spec.ts:74:44
+
+  ● lint: process.env is confined to src/config (BN-TASK-028) › forbids process.env in src/common/logging/json-logger.ts
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: [2]
+    Received: undefined
+
+      72 |   ])('forbids process.env in %s', async (file) => {
+      73 |     const config = (await eslint.calculateConfigForFile(file)) as { rules: Record<string, unknown> };
+    > 74 |     expect(config.rules['no-process-env']).toEqual([2]);
+         |                                            ^
+      75 |   });
+      76 |
+      77 |   it.each(['src/config/env.validation.ts', 'src/config/payment-urls.ts', 'scripts/migrate.ts'])(
+
+      at src/config/payment-urls.spec.ts:74:44
+
+  ● lint: process.env is confined to src/config (BN-TASK-028) › allows process.env in src/config/env.validation.ts
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: [0]
+    Received: undefined
+
+      79 |     async (file) => {
+      80 |       const config = (await eslint.calculateConfigForFile(file)) as { rules: Record<string, unknown> };
+    > 81 |       expect(config.rules['no-process-env']).toEqual([0]);
+         |                                              ^
+      82 |     },
+      83 |   );
+      84 | });
+
+      at src/config/payment-urls.spec.ts:81:46
+
+  ● lint: process.env is confined to src/config (BN-TASK-028) › allows process.env in src/config/payment-urls.ts
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: [0]
+    Received: undefined
+
+      79 |     async (file) => {
+      80 |       const config = (await eslint.calculateConfigForFile(file)) as { rules: Record<string, unknown> };
+    > 81 |       expect(config.rules['no-process-env']).toEqual([0]);
+         |                                              ^
+      82 |     },
+      83 |   );
+      84 | });
+
+      at src/config/payment-urls.spec.ts:81:46
+
+  ● lint: process.env is confined to src/config (BN-TASK-028) › allows process.env in scripts/migrate.ts
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: [0]
+    Received: undefined
+
+      79 |     async (file) => {
+      80 |       const config = (await eslint.calculateConfigForFile(file)) as { rules: Record<string, unknown> };
+    > 81 |       expect(config.rules['no-process-env']).toEqual([0]);
+         |                                              ^
+      82 |     },
+      83 |   );
+      84 | });
+
+      at src/config/payment-urls.spec.ts:81:46
+
+Test Suites: 1 failed, 1 total
+Tests:       10 failed, 2 passed, 12 total
+Snapshots:   0 total
+Time:        4.195 s
+Ran all test suites matching src/config/payment-urls.

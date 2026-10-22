@@ -1,0 +1,22 @@
+# BN-TASK-044 wiring green (status change, NetPay latency and delivery result logged) — 2026-10-21T19:08:01Z
+# npm test -- src/payments/netpay.client.spec.ts src/payments/outbound/outbound-dispatcher.service.spec.ts src/payments/payment-orders.service.spec.ts -t latency log|outbound_delivery_result|payment_status_change
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/netpay.client.spec.ts src/payments/outbound/outbound-dispatcher.service.spec.ts src/payments/payment-orders.service.spec.ts -t latency log|outbound_delivery_result|payment_status_change
+
+(node:44365) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+(node:44364) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) message TS151002: Using hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+(node:44366) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Test Suites: 3 passed, 3 total
+Tests:       145 skipped, 6 passed, 151 total
+Snapshots:   0 total
+Time:        4.823 s, estimated 6 s
+Ran all test suites matching src/payments/netpay.client.spec.ts|src/payments/outbound/outbound-dispatcher.service.spec.ts|src/payments/payment-orders.service.spec.ts with tests matching "latency log|outbound_delivery_result|payment_status_change".

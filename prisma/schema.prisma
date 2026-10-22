@@ -122,6 +122,20 @@ model PlatformAdmin {
   /// Forces a password rotation on the next successful sign-in.
   mustChangePassword Boolean @default(false)
 
+  /// TOTP shared secret (BN-REQ-SEC-006), encrypted with the PII keyring and
+  /// bound to the admin id through the AAD. Set at enrolment, before
+  /// confirmation; `mfaEnabledAt` says whether it is active.
+  mfaSecretCiphertext String? @db.Text
+
+  /// When TOTP enrolment was confirmed. `null` means no second factor.
+  mfaEnabledAt DateTime?
+
+  /// TOTP step of the last accepted code, so a code cannot be replayed.
+  mfaLastUsedStep Int?
+
+  /// SHA-256 of each unused recovery code; a used code is removed.
+  mfaRecoveryCodeHashes String[] @default([])
+
   /// Keyed HMAC of the last client IP, for abuse investigation without
   /// storing the address itself.
   lastKnownIpHash String? @db.VarChar(64)

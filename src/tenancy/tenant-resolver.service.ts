@@ -34,10 +34,11 @@ interface CacheEntry {
 /**
  * Default time-to-live for cached tenant rows, in milliseconds.
  *
- * Short enough that a suspension takes effect promptly, long enough that the
- * control plane is not hit on every request.
+ * Every instance keeps its own cache and nothing broadcasts invalidations, so
+ * the TTL *is* the propagation bound: a suspension reaches all instances within
+ * it (BN-REQ-SEC-012, ≤ 5 s). Overridable with `AUTHZ_CACHE_TTL_MS`.
  */
-const DEFAULT_CACHE_TTL_MS = 30_000;
+const DEFAULT_CACHE_TTL_MS = 5_000;
 
 /**
  * Resolves the tenant for a request and caches the result.
@@ -79,7 +80,7 @@ export class TenantResolverService {
     private readonly crypto: PiiCryptoService,
     private readonly requestContext: RequestContextService,
   ) {
-    this.cacheTtlMs = DEFAULT_CACHE_TTL_MS;
+    this.cacheTtlMs = Math.min(config.authzCacheTtlMs ?? DEFAULT_CACHE_TTL_MS, DEFAULT_CACHE_TTL_MS);
   }
 
   /**

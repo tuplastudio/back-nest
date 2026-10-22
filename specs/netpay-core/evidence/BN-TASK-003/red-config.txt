@@ -1,0 +1,98 @@
+# BN-TASK-003/005/006 config red — 2026-10-21T18:21:45Z
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/config/outbound-webhook-env.spec.ts
+
+(node:15179) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/config/outbound-webhook-env.spec.ts (5.663 s)
+  ● outbound webhook configuration › delivers by default: an unset OUTBOUND_WEBHOOK_ENABLED means on
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      27 | describe('outbound webhook configuration', () => {
+      28 |   it('delivers by default: an unset OUTBOUND_WEBHOOK_ENABLED means on', () => {
+    > 29 |     expect(outbound().enabled).toBe(true);
+         |                                ^
+      30 |   });
+      31 |
+      32 |   it('can still be switched off deliberately', () => {
+
+      at Object.<anonymous> (src/config/outbound-webhook-env.spec.ts:29:32)
+
+  ● outbound webhook configuration › retries for 24 h by default, configurable with OUTBOUND_WEBHOOK_MAX_AGE_HOURS
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 86400000
+    Received: undefined
+
+      35 |
+      36 |   it('retries for 24 h by default, configurable with OUTBOUND_WEBHOOK_MAX_AGE_HOURS', () => {
+    > 37 |     expect(outbound().maxAgeMs).toBe(24 * 3_600_000);
+         |                                 ^
+      38 |     expect(outbound({ OUTBOUND_WEBHOOK_MAX_AGE_HOURS: '6' }).maxAgeMs).toBe(6 * 3_600_000);
+      39 |   });
+      40 |
+
+      at Object.<anonymous> (src/config/outbound-webhook-env.spec.ts:37:33)
+
+  ● outbound webhook configuration › refuses a retry window outside 1 h to 7 days
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: false
+    Received: true
+
+      40 |
+      41 |   it('refuses a retry window outside 1 h to 7 days', () => {
+    > 42 |     expect(envSchema.safeParse({ ...BASE, OUTBOUND_WEBHOOK_MAX_AGE_HOURS: '0' }).success).toBe(false);
+         |                                                                                           ^
+      43 |     expect(envSchema.safeParse({ ...BASE, OUTBOUND_WEBHOOK_MAX_AGE_HOURS: '169' }).success).toBe(false);
+      44 |   });
+      45 |
+
+      at Object.<anonymous> (src/config/outbound-webhook-env.spec.ts:42:91)
+
+  ● outbound webhook configuration › does not let the attempt cap cut the 24 h window short by default
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 48
+    Received:    8
+
+      51 |     // At most one attempt an hour once the backoff is capped, so 24 h needs
+      52 |     // a few dozen attempts; the default cap must not be the thing that ends it.
+    > 53 |     expect(outbound().maxAttempts as number).toBeGreaterThanOrEqual(48);
+         |                                              ^
+      54 |   });
+      55 |
+      56 |   it('delivers 8 at a time by default, configurable with OUTBOUND_WEBHOOK_CONCURRENCY', () => {
+
+      at Object.<anonymous> (src/config/outbound-webhook-env.spec.ts:53:46)
+
+  ● outbound webhook configuration › delivers 8 at a time by default, configurable with OUTBOUND_WEBHOOK_CONCURRENCY
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 8
+    Received: undefined
+
+      55 |
+      56 |   it('delivers 8 at a time by default, configurable with OUTBOUND_WEBHOOK_CONCURRENCY', () => {
+    > 57 |     expect(outbound().concurrency).toBe(8);
+         |                                    ^
+      58 |     expect(outbound({ OUTBOUND_WEBHOOK_CONCURRENCY: '16' }).concurrency).toBe(16);
+      59 |     expect(envSchema.safeParse({ ...BASE, OUTBOUND_WEBHOOK_CONCURRENCY: '0' }).success).toBe(false);
+      60 |   });
+
+      at Object.<anonymous> (src/config/outbound-webhook-env.spec.ts:57:36)
+
+Test Suites: 1 failed, 1 total
+Tests:       5 failed, 2 passed, 7 total
+Snapshots:   0 total
+Time:        6.008 s
+Ran all test suites matching src/config/outbound-webhook-env.spec.ts.

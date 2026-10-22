@@ -1,0 +1,75 @@
+# BN-TASK-018 green (unit: cancel, late payment on CANCELLED, event contract) — 2026-10-21T21:02:12Z
+# node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/payment-orders.lifecycle.spec.ts src/payments/event-contract.spec.ts src/payments/payment-events.spec.ts -t cancel|CANCELLED --verbose --reporters=default
+PASS src/payments/payment-events.spec.ts
+  eventForTransition
+    ✓ PENDING → CANCELLED emits payment.cancelled (8 ms)
+    ✓ FAILED → CANCELLED emits payment.cancelled (1 ms)
+    ○ skipped PENDING → PAID emits payment.paid
+    ○ skipped PENDING_VERIFICATION → FAILED emits payment.failed
+    ○ skipped PENDING → AMOUNT_MISMATCH emits payment.mismatch
+    ○ skipped PAID → PARTIALLY_REFUNDED emits payment.refunded
+    ○ skipped PARTIALLY_REFUNDED → REFUNDED emits payment.refunded
+    ○ skipped PAID → REFUNDED emits payment.refunded
+    ○ skipped PENDING_VERIFICATION → EXPIRED emits payment.expired
+    ○ skipped emits nothing for a pending state or for no change
+  buildEventPayload (snapshot serialisation)
+    ○ skipped carries every field of the contract, in its wire format
+    ○ skipped marks a fully refunded order
+    ○ skipped carries no cardholder field of any kind
+  PaymentEvents.record (outbox write)
+    ○ skipped writes the snapshot with the time of the change and the next per-order sequence
+    ○ skipped gives a partial refund sequence + 1 and the refunded amount (BN-REQ-EVT-006)
+PASS src/payments/event-contract.spec.ts
+  event schemas in docs/events (BN-TASK-009)
+    ✓ payment.cancelled.schema.json is in sync with event-contract.ts (7 ms)
+    ✓ payment.paid_after_cancel.schema.json is in sync with event-contract.ts (2 ms)
+    ○ skipped publishes one schema per event of the catalog, and nothing else
+    ○ skipped lists every event in catalog.json with its schema file
+    ○ skipped payment.paid.schema.json is in sync with event-contract.ts
+    ○ skipped payment.failed.schema.json is in sync with event-contract.ts
+    ○ skipped payment.mismatch.schema.json is in sync with event-contract.ts
+    ○ skipped payment.refunded.schema.json is in sync with event-contract.ts
+    ○ skipped payment.expired.schema.json is in sync with event-contract.ts
+  real payloads against the published schemas (BN-REQ-EVT-011)
+    ✓ payment.cancelled (BN-REQ-PAY-004) validates (7 ms)
+    ✓ payment.paid_after_cancel (BN-REQ-PAY-004) validates (2 ms)
+    ○ skipped payment.paid by card validates
+    ○ skipped payment.paid in cash (OXXO) validates
+    ○ skipped payment.failed with a decline code validates
+    ○ skipped payment.mismatch validates
+    ○ skipped payment.refunded, partial validates
+    ○ skipped payment.refunded, the rest validates
+    ○ skipped payment.expired, 3-D Secure abandoned (BN-REQ-REC-002) validates
+    ○ skipped payment.expired, cash reference past its expiry (BN-REQ-REC-003) validates
+    ○ skipped rejects a payload without its sequence or with a float amount
+PASS src/payments/payment-orders.lifecycle.spec.ts
+  GET /t/payments/orders with a cursor (BN-TASK-017)
+    ○ skipped round-trips an opaque cursor and refuses a forged one
+    ○ skipped pages oldest-update first from updatedSince, with the filters, and hands back a cursor
+    ○ skipped continues after the cursor and says when there is nothing more
+    ○ skipped lists newest first without updatedSince, and refuses an unknown status
+    ○ skipped reads one order with verifiedAmount, the transaction, refunds, failure code and its attempts
+  POST /t/payments/orders/:id/cancel (BN-TASK-018)
+    ✓ cancels an unpaid order, under a claim, and emits payment.cancelled (6 ms)
+    ✓ cancels a FAILED order (1 ms)
+    ✓ answers an already cancelled order as it is, emitting nothing
+    ✓ refuses a PAID order with 409 ORDER_STATE_CONFLICT (1 ms)
+    ✓ refuses a PARTIALLY_REFUNDED order with 409 ORDER_STATE_CONFLICT
+    ✓ refuses a REFUNDED order with 409 ORDER_STATE_CONFLICT (1 ms)
+    ✓ refuses a EXPIRED order with 409 ORDER_STATE_CONFLICT
+    ✓ refuses a AMOUNT_MISMATCH order with 409 ORDER_STATE_CONFLICT
+    ✓ refuses a CHARGE_UNKNOWN order with 409 ORDER_STATE_CONFLICT (1 ms)
+    ✓ asks Netpay first when a charge is bound, and refuses with the PAID order when it was charged (1 ms)
+    ✓ cancels a charge abandoned in 3-D Secure (1 ms)
+    ✓ uses the configuration the order was created with (BN-REQ-CFG-002)
+    ✓ records a payment Netpay reports later without reopening the order, and audits it (1 ms)
+    ✓ does not move a cancelled order when Netpay reports a decline
+  hosted return URLs (BN-TASK-021)
+    ○ skipped refuses a return URL that is not https with 422 RETURN_URL_NOT_ALLOWED
+    ○ skipped refuses an origin outside the tenant allowlist once one is configured
+    ○ skipped accepts any https origin while the allowlist is empty, and warns
+  currencies (BN-TASK-022)
+    ○ skipped refuses a currency the tenant is not enabled for with 422 CURRENCY_NOT_ENABLED
+    ○ skipped accepts it once the tenant is enabled for it
+Test Suites: 3 passed, 3 total
+Tests:       39 skipped, 20 passed, 59 total

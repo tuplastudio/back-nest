@@ -1,10 +1,17 @@
 import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 import { DiscoveryService, MetadataScanner, Reflector } from '@nestjs/core';
-import { CONTROLLER_WATERMARK, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
+import {
+  CONTROLLER_WATERMARK,
+  GUARDS_METADATA,
+  METHOD_METADATA,
+  PATH_METADATA,
+} from '@nestjs/common/constants';
+import { isInternalRoute } from './decorators/internal-route.decorator';
 import { API_KEY_ONLY_KEY, ROLES_KEY, isRbacDeclared } from './decorators/roles.decorator';
 import { isPublic } from './decorators/public.decorator';
 import { MINIMUM_PLATFORM_ROLE, MINIMUM_TENANT_ROLE } from './decorators/tenant-role.decorator';
 import { ALL_PERMISSIONS_KEY, PERMISSIONS_KEY } from './decorators/permissions.decorator';
+import { SCOPES_KEY } from './decorators/scopes.decorator';
 
 /**
  * A Reflector target: a controller class or a route handler.
@@ -47,6 +54,19 @@ function joinPath(controllerPath: string, methodPath: string): string {
 interface RouteEntry {
   readonly description: string;
   readonly declared: boolean;
+  /**
+   * `true` when the route declares RBAC permissions but no API key scope.
+   *
+   * `ApiKeyScopesGuard` lets a request through when a route declares no scope,
+   * and API keys hold no RBAC permissions for `PermissionsGuard` to check, so
+   * such a route is open to every API key of the tenant (BN-REQ-SEC-001).
+   */
+  readonly unscopedPermissions: boolean;
+  /**
+   * `true` when the route is marked internal but carries no guard of its own.
+   * `AuthGuard` steps aside for internal routes, so without one it would be open.
+   */
+  readonly unguardedInternal: boolean;
 }
 
 /**
@@ -87,7 +107,26 @@ export class RbacAuditService implements OnApplicationBootstrap {
   }
 
   onApplicationBootstrap(): void {
-    const violations = this.routes().filter((r) => !r.declared);
+    const routes = this.routes();
+    const unguarded = routes.filter((r) => r.unguardedInternal);
+    if (unguarded.length > 0) {
+      throw new Error(
+        'RBAC policy audit failed: the following internal routes carry no own guard.\n' +
+          'AuthGuard does not authenticate internal routes; each must authenticate its caller itself.\n' +
+          `${unguarded.map((v) => `  - ${v.description}`).join('\n')}\n` +
+          'Fix each with @InternalOnly() (src/internal/internal-only.decorator.ts).',
+      );
+    }
+    const unscoped = routes.filter((r) => r.unscopedPermissions);
+    if (unscoped.length > 0) {
+      throw new Error(
+        'RBAC policy audit failed: the following routes declare @RequirePermissions without @RequireScopes.\n' +
+          'Permissions only bind human sessions; without a scope every API key of the tenant passes.\n' +
+          `${unscoped.map((v) => `  - ${v.description}`).join('\n')}\n` +
+          'Fix each with @RequireScopes(...) naming the scope an API key must hold.',
+      );
+    }
+    const violations = routes.filter((r) => !r.declared);
     if (violations.length === 0) {
       return;
     }
@@ -110,6 +149,17 @@ export class RbacAuditService implements OnApplicationBootstrap {
   findUndeclaredRoutes(): string[] {
     return this.routes()
       .filter((r) => !r.declared)
+      .map((r) => r.description);
+  }
+
+  /**
+   * Lists every route that declares RBAC permissions without an API key scope.
+   *
+   * @returns Human-readable route descriptions, empty when the audit passes.
+   */
+  findUnscopedPermissionRoutes(): string[] {
+    return this.routes()
+      .filter((r) => r.unscopedPermissions)
       .map((r) => r.description);
   }
 
@@ -144,6 +194,9 @@ export class RbacAuditService implements OnApplicationBootstrap {
       if (isPublic(handler) || isPublic(controller)) {
         parts.push('public');
       }
+      if (isInternalRoute(handler) || isInternalRoute(controller)) {
+        parts.push(this.hasOwnGuard(handler, controller) ? 'internal (own guard)' : 'internal WITHOUT GUARD');
+      }
       const name = (controller as { name?: string }).name ?? 'Controller';
       return `${name}.${String(label)} ${path} -> ${parts.join('; ') || 'NONE'}`;
     });
@@ -163,9 +216,35 @@ export class RbacAuditService implements OnApplicationBootstrap {
         this.meta<boolean>(API_KEY_ONLY_KEY, [controller]) === true ||
         isPublic(handler) ||
         isPublic(controller);
+      const targets = [handler, controller];
+      const permissions =
+        (this.meta<string[]>(PERMISSIONS_KEY, targets)?.length ?? 0) > 0 ||
+        (this.meta<string[]>(ALL_PERMISSIONS_KEY, targets)?.length ?? 0) > 0;
+      const scoped = (this.meta<string[]>(SCOPES_KEY, targets)?.length ?? 0) > 0;
+      const internal = isInternalRoute(handler) || isInternalRoute(controller);
       const name = (controller as { name?: string }).name ?? 'Controller';
-      return { description: `${name}.${label} ${path}`, declared };
+      return {
+        description: `${name}.${label} ${path}`,
+        declared,
+        unscopedPermissions: permissions && !scoped,
+        unguardedInternal: internal && !this.hasOwnGuard(handler, controller),
+      };
     });
+  }
+
+  /**
+   * Whether a route carries at least one `@UseGuards` guard of its own.
+   *
+   * @param handler Route handler.
+   * @param controller Controller class.
+   * @returns `true` when the handler or its controller declares a guard.
+   */
+  private hasOwnGuard(handler: MetadataTarget, controller: MetadataTarget): boolean {
+    const own = (target: MetadataTarget): number => {
+      const guards: unknown = Reflect.getMetadata(GUARDS_METADATA, target);
+      return Array.isArray(guards) ? guards.length : 0;
+    };
+    return own(handler) + own(controller) > 0;
   }
 
   /** A single route discovered in the controller route table. */
@@ -182,14 +261,17 @@ export class RbacAuditService implements OnApplicationBootstrap {
       label: string;
     }[] = [];
 
-    for (const wrapper of this.discovery.getProviders()) {
-      if (!wrapper.instance) {
-        continue;
-      }
+    // Controllers are not providers: `getProviders()` alone never returned a
+    // single controller, so the audit used to pass vacuously. Request-scoped
+    // controllers also have no static instance, which is why the metatype, not
+    // the instance, decides what is audited.
+    const seen = new Set<unknown>();
+    for (const wrapper of [...this.discovery.getControllers(), ...this.discovery.getProviders()]) {
       const controller = this.controllerOf(wrapper.metatype);
-      if (controller === null) {
+      if (controller === null || seen.has(controller)) {
         continue;
       }
+      seen.add(controller);
       const controllerPath = this.meta<string>(PATH_METADATA, [controller]) ?? '';
       const proto = controller.prototype as Record<string, unknown>;
 

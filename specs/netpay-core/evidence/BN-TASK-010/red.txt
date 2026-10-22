@@ -1,0 +1,166 @@
+# BN-TASK-010/014/015 red (payments e2e against the build from before the change; dist/ not rebuilt) — 2026-10-21T20:14:30Z
+# node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --runInBand test/payments.e2e-spec.ts
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › runs two concurrent refunds with one key once: one Netpay call, and the stored answer on retry
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › replays an order creation and a charge without calling Netpay again
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › stores a definitive 4xx, and keeps a 5xx in progress so a retry cannot run twice
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › refuses a malformed key and leaves requests without one as they were
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › leaves the order CHARGE_UNKNOWN on a charge without answer, and refuses new charges until verify resolves it
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › accepts another card after a decline: attempt 2 settles the order, and each event names its attempt
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › verifies an abandoned 3-D Secure attempt with Netpay, then accepts a new charge
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › answers 409 with the PAID order when the previous attempt was charged after all
+Tests:       8 failed, 132 passed, 140 total
+
+## failure detail
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › runs two concurrent refunds with one key once: one Netpay call, and the stored answer on retry
+
+    expect(received).toMatchObject(expected)
+
+    - Expected  - 2
+    + Received  + 2
+
+      Object {
+    -   "code": "IDEMPOTENCY_IN_PROGRESS",
+    -   "retryable": true,
+    +   "code": "CONFLICT",
+    +   "retryable": false,
+      }
+
+      2877 |         expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+      2878 |         const busy = results.find((r) => r.status === 409) as Reply;
+    > 2879 |         expect(busy.body['error']).toMatchObject({ code: 'IDEMPOTENCY_IN_PROGRESS', retryable: true });
+           |                                    ^
+      2880 |         expect(busy.headers['retry-after']).toBe('2');
+      2881 |         expect(reversalsOf(tx)).toHaveLength(1);
+      2882 |
+
+      at Object.<anonymous> (test/payments.e2e-spec.ts:2879:36)
+
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › replays an order creation and a charge without calling Netpay again
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "817a4b86-335c-42f3-b249-786d27522e9b"
+    Received: "d70b3aac-28a0-437e-a2cd-11d34b5c9f90"
+
+      2927 |         );
+      2928 |         expect(again.status).toBe(201);
+    > 2929 |         expect(again.body['id']).toBe(created.body['id']);
+           |                                  ^
+      2930 |         expect(provider.calls.filter((c) => c.path === '/v3.2/checkout/session/')).toHaveLength(1);
+      2931 |         const orders = await tenantRows<{ n: string }>(
+      2932 |           `SELECT count(*)::text AS n FROM "${tenantASchema}".payment_orders WHERE "merchantReferenceCode" = $1`,
+
+      at Object.<anonymous> (test/payments.e2e-spec.ts:2929:34)
+
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › stores a definitive 4xx, and keeps a 5xx in progress so a retry cannot run twice
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "true"
+    Received: undefined
+
+      2977 |         expect(replayed.status).toBe(409);
+      2978 |         expect(replayed.body['error']).toEqual(refused.body['error']);
+    > 2979 |         expect(replayed.headers['idempotency-replayed']).toBe('true');
+           |                                                          ^
+      2980 |
+      2981 |         const custom = await createOrder(`E2E-IDM-5XX-${RUN_ID}`, '650.00', { checkoutMode: 'custom' });
+      2982 |         const charge = { cardToken: 'token_abcdefghijklmnop', billing: BILLING, ...DEVICE };
+
+      at Object.<anonymous> (test/payments.e2e-spec.ts:2979:58)
+
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › Idempotency-Key (BN-TASK-010) › refuses a malformed key and leaves requests without one as they were
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 400
+    Received: 409
+
+      3018 |           keyed('has space'),
+      3019 |         );
+    > 3020 |         expect(bad.status).toBe(400);
+           |                            ^
+      3021 |         const plain = await call(
+      3022 |           'POST',
+      3023 |           `/t/payments/orders/${id}/refund`,
+
+      at Object.<anonymous> (test/payments.e2e-spec.ts:3020:28)
+
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › leaves the order CHARGE_UNKNOWN on a charge without answer, and refuses new charges until verify resolves it
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "CHARGE_UNKNOWN"
+    Received: "PENDING"
+
+      3061 |         expect(first.status).toBe(504);
+      3062 |         expect(first.body['error']).toMatchObject({ code: 'PROVIDER_OUTCOME_UNKNOWN' });
+    > 3063 |         expect((await orderRow(id)).status).toBe('CHARGE_UNKNOWN');
+           |                                             ^
+      3064 |         expect(await attemptsOf(id)).toEqual([
+      3065 |           { attemptNo: 1, netpayTransactionId: null, status: 'UNKNOWN', declineCode: null },
+      3066 |         ]);
+
+      at Object.<anonymous> (test/payments.e2e-spec.ts:3063:45)
+
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › accepts another card after a decline: attempt 2 settles the order, and each event names its attempt
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 409
+
+      3113 |
+      3114 |         const second = await chargeOf(id);
+    > 3115 |         expect(second.status).toBe(200);
+           |                               ^
+      3116 |         expect(second.body['orderStatus']).toBe('PAID');
+      3117 |         const tx2 = String(second.body['transactionTokenId']);
+      3118 |         expect(tx2).not.toBe(tx1);
+
+      at Object.<anonymous> (test/payments.e2e-spec.ts:3115:31)
+
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › verifies an abandoned 3-D Secure attempt with Netpay, then accepts a new charge
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 409
+
+      3142 |         provider.calls.length = 0;
+      3143 |         const retry = await chargeOf(id);
+    > 3144 |         expect(retry.status).toBe(200);
+           |                              ^
+      3145 |         expect(retry.body['orderStatus']).toBe('PAID');
+      3146 |         // The previous attempt was asked about before the new charge was sent.
+      3147 |         const askedFirst = provider.calls.findIndex(
+
+      at Object.<anonymous> (test/payments.e2e-spec.ts:3144:30)
+
+  ● payments and outbound webhooks (e2e) › provider flow against a stand-in Netpay › charge attempts and unknown outcomes (BN-TASK-014, BN-TASK-015) › answers 409 with the PAID order when the previous attempt was charged after all
+
+    expect(received).toMatchObject(expected)
+
+    - Expected  - 1
+    + Received  + 1
+
+      Object {
+    -   "code": "ORDER_STATE_CONFLICT",
+    +   "code": "CONFLICT",
+      }
+
+      3170 |         const retry = await chargeOf(id);
+      3171 |         expect(retry.status).toBe(409);
+    > 3172 |         expect(retry.body['error']).toMatchObject({ code: 'ORDER_STATE_CONFLICT' });
+           |                                     ^
+      3173 |         const details = (retry.body['error'] as { details: { order: Record<string, unknown> } }).details;
+      3174 |         expect(details.order).toMatchObject({ id, status: 'PAID', netpayTransactionId: tx1 });
+      3175 |         expect(chargesSent()).toHaveLength(0);
+
+      at Object.<anonymous> (test/payments.e2e-spec.ts:3172:37)
+
+Test Suites: 1 failed, 1 total
+Tests:       8 failed, 132 passed, 140 total
+Snapshots:   0 total
+Time:        25.468 s
+Ran all test suites matching test/payments.e2e-spec.ts.

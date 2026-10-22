@@ -7,6 +7,7 @@ import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
 import { AuthorizationService } from './authorization.service';
 import { PermissionCatalog } from './permission-catalog';
+import { AdminMfaService } from './admin-mfa.service';
 
 /**
  * Authentication and password services.
@@ -26,6 +27,7 @@ import { PermissionCatalog } from './permission-catalog';
   controllers: [AuthController],
   providers: [
     AdminAuthService,
+    AdminMfaService,
     PasswordService,
     TokenService,
     ApiKeyScopesGuard,
@@ -34,6 +36,7 @@ import { PermissionCatalog } from './permission-catalog';
   ],
   exports: [
     AdminAuthService,
+    AdminMfaService,
     PasswordService,
     TokenService,
     ApiKeyScopesGuard,

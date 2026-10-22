@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AuditActorType, TenantStatus } from '../generated/control-plane/enums';
 import { AuditLogService } from '../audit/audit-log.service';
@@ -12,19 +11,14 @@ import { TenantSchemaNamingService } from './tenant-schema-naming.service';
 import { AppException } from '../common/errors/app.exception';
 import { quoteIdentifier } from '../prisma/identifiers';
 import { SafeSqlService } from '../prisma/safe-sql.service';
-import { renderTenantDdl } from '../prisma/tenant-ddl';
+import {
+  applyTenantMigrations,
+  loadTenantMigrations,
+  type TenantMigration,
+  TenantMigrationMismatchError,
+} from './tenant-migrations';
 
-/**
- * A versioned migration applied to every tenant schema.
- */
-export interface TenantMigration {
-  /** Monotonic version, parsed from the directory name. */
-  readonly version: number;
-  /** Directory name, e.g. `0002_add_projects`. */
-  readonly name: string;
-  /** Raw SQL script. */
-  readonly sql: string;
-}
+export type { TenantMigration } from './tenant-migrations';
 
 /**
  * Raised when tenant schema provisioning fails.
@@ -51,9 +45,12 @@ export class TenantProvisioningException extends AppException {
  *
  *  1. `prisma/schema.tenant.prisma` remains the single source of truth.
  *  2. `npm run prisma:tenant:diff` renders it to SQL under
- *     `prisma/migrations/tenant/<version>_<name>/migration.sql`.
- *  3. At provisioning time the applied versions are tracked in
- *     `Tenant.schemaVersion`; only migrations newer than that are executed.
+ *     `prisma/tenant-migrations/<version>_<name>/migration.sql`.
+ *  3. Applied versions are recorded, with their checksum, in the schema's own
+ *     `tenant_schema_migrations` ledger (mirrored in `Tenant.schemaVersion`);
+ *     only missing versions are executed, under the same advisory lock the
+ *     release pipeline's `scripts/migrate-tenants.ts` takes. See
+ *     `tenant-migrations.ts`.
  *
  * Every statement runs with `search_path` set to the tenant schema, so the
  * unqualified names in the migration file resolve inside the new schema.
@@ -128,39 +125,65 @@ export class TenantProvisionerService {
   }
 
   /**
-   * Applies every migration newer than the tenant's recorded version.
+   * Applies every migration missing from the schema's ledger.
+   *
+   * One transaction per schema, under `pg_advisory_xact_lock(hashtext(schema))`:
+   * a release pipeline migrating the same schema at the same time waits, then
+   * finds nothing left to do (BN-REQ-OPS-002).
    *
    * @param schemaName Target tenant schema.
    * @returns The versions that were applied.
+   * @throws {TenantProvisioningException} When the ledger disagrees with the files, or any DDL fails.
    */
   async applyPendingMigrations(schemaName: string): Promise<number[]> {
-    const tenant = await this.prisma.client.tenant.findFirst({
-      where: { schemaName },
-      select: { id: true, schemaVersion: true },
-    });
-    const currentVersion = tenant?.schemaVersion ?? 0;
-
-    const migrations = (await this.loadMigrations()).filter((m) => m.version > currentVersion);
+    const migrations = await this.loadMigrations();
     if (migrations.length === 0) {
       return [];
     }
 
-    const applied: number[] = [];
-    for (const migration of migrations) {
-      await this.prisma.client.$transaction(async (tx) => {
-        await this.executeInSchema(tx, schemaName, renderTenantDdl(migration.sql, schemaName));
-        if (tenant) {
-          await tx.tenant.update({
-            where: { id: tenant.id },
-            data: { schemaVersion: migration.version },
-          });
-        }
-      });
-      applied.push(migration.version);
-      this.logger.log(`Applied tenant migration ${migration.name} to "${schemaName}".`);
+    try {
+      const result = await this.prisma.client.$transaction(
+        (tx) =>
+          applyTenantMigrations(
+            {
+              query: <T>(sql: string, params: readonly unknown[] = []) =>
+                // eslint-disable-next-line no-restricted-properties -- statements are constants of tenant-migrations.ts; values are bound as parameters and the only identifier passed quoteIdentifier.
+                tx.$queryRawUnsafe<T[]>(sql, ...params),
+              exec: async (sql: string) => {
+                // eslint-disable-next-line no-restricted-properties -- repository-authored migration scripts and ledger DDL; identifiers validated by assertTenantSchemaName.
+                await tx.$executeRawUnsafe(sql);
+              },
+            },
+            schemaName,
+            migrations,
+            {
+              read: async () => {
+                const tenant = await tx.tenant.findFirst({
+                  where: { schemaName },
+                  select: { schemaVersion: true },
+                });
+                return tenant?.schemaVersion ?? 0;
+              },
+              write: async (version) => {
+                await tx.tenant.updateMany({ where: { schemaName }, data: { schemaVersion: version } });
+              },
+            },
+          ),
+        // Every pending script runs in this one transaction; Prisma's 5 s default
+        // is shorter than a fresh schema's full migration set on a cold compute.
+        { timeout: 120_000, maxWait: 30_000 },
+      );
+      for (const version of result.applied) {
+        this.logger.log(`Applied tenant migration ${version} to "${schemaName}".`);
+      }
+      return result.applied;
+    } catch (error) {
+      if (error instanceof TenantProvisioningException) {
+        throw error;
+      }
+      const reason = error instanceof TenantMigrationMismatchError ? error.message : (error as Error).message;
+      throw new TenantProvisioningException(`Failed to migrate "${schemaName}": ${reason}`, error);
     }
-
-    return applied;
   }
 
   /**
@@ -281,47 +304,30 @@ export class TenantProvisionerService {
    * re-reading on every call would be wasteful in a burst of tenant creations.
    *
    * @returns Migrations ordered by version.
-   * @throws {TenantProvisioningException} When the directory cannot be read.
+   * @throws {TenantProvisioningException} When the directory cannot be read or holds a malformed entry.
    */
-  private async loadMigrations(): Promise<TenantMigration[]> {
+  private loadMigrations(): Promise<TenantMigration[]> {
     if (this.migrations) {
-      return this.migrations;
+      return Promise.resolve(this.migrations);
     }
 
     const baseDir = join(process.cwd(), 'prisma', 'tenant-migrations');
-    let directories: string[];
     try {
-      directories = (await readdir(baseDir, { withFileTypes: true }))
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name);
+      this.migrations = loadTenantMigrations(baseDir);
     } catch (error) {
-      throw new TenantProvisioningException(
-        `Cannot read tenant migrations from ${baseDir}: ${(error as Error).message}. ` +
-          'Run `npm run prisma:tenant:diff` to render them from prisma/schema.tenant.prisma.',
-        error,
+      return Promise.reject(
+        new TenantProvisioningException(
+          `Cannot read tenant migrations from ${baseDir}: ${(error as Error).message}. ` +
+            'Run `npm run prisma:tenant:diff` to render them from prisma/schema.tenant.prisma.',
+          error,
+        ),
       );
     }
 
-    const migrations: TenantMigration[] = [];
-    for (const directory of directories) {
-      const version = Number.parseInt(directory, 10);
-      if (!Number.isInteger(version)) {
-        this.logger.warn(
-          `Skipping tenant migration directory "${directory}": name must start with a version.`,
-        );
-        continue;
-      }
-      const sql = await readFile(join(baseDir, directory, 'migration.sql'), 'utf8');
-      migrations.push({ version, name: directory, sql });
-    }
-
-    migrations.sort((a, b) => a.version - b.version);
-    this.migrations = migrations;
-
-    if (migrations.length === 0) {
+    if (this.migrations.length === 0) {
       this.logger.warn('No tenant migrations found; new tenants will have an empty schema.');
     }
-    return migrations;
+    return Promise.resolve(this.migrations);
   }
 
   /**

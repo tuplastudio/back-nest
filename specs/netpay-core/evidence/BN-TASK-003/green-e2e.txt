@@ -1,0 +1,8 @@
+# BN-TASK-003/037 e2e green — 2026-10-21T18:34:51Z (postgres:17 bn-e2e-a2 :55435, app compiled to dist-e2e-a2)
+(node:29240) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Test Suites: 1 passed, 1 total
+Tests:       4 passed, 4 total
+Snapshots:   0 total
+Time:        8.552 s
+Ran all test suites matching test/health-readiness.e2e-spec.ts.

@@ -1,0 +1,140 @@
+$ PROJECT_ID=demo-proj HOST=x.example CHANNEL=projects/demo/notificationChannels/1 scripts/gcp/monitoring/notification-channel.sh oncall@example.com   # dry-run
+[dry-run] gcloud beta monitoring channels create --project=demo-proj --display-name=netpay on-call (oncall@example.com) --type=email --channel-labels=email_address=oncall@example.com --format=value(name)
+Canal: projects/demo-proj/notificationChannels/<nuevo>
+Todas las políticas ya notifican a projects/demo-proj/notificationChannels/<nuevo> (o no se pudieron listar).
+
+$ PROJECT_ID=demo-proj HOST=x.example CHANNEL=projects/demo/notificationChannels/1 scripts/gcp/monitoring/uptime-check.sh oncall@example.com   # dry-run
+[dry-run] gcloud monitoring uptime create netpay-api-live --project=demo-proj --resource-type=uptime-url --resource-labels=host=x.example,project_id=demo-proj --path=/health/live --protocol=https --port=443 --period=1 --timeout=10 --regions=usa-oregon,usa-virginia,usa-iowa
+[dry-run] gcloud alpha monitoring policies create --project=demo-proj --policy-from-file=/var/folders/jx/q_24s9793_sc5c4710sk65ph0000gn/T/tmp.ptZd2vO7RB/uptime-policy.json
+--- política ---
+{
+  "displayName": "netpay-api: /health/live no responde",
+  "combiner": "OR",
+  "conditions": [{
+    "displayName": "uptime check netpay-api-live falla desde más de una región",
+    "conditionThreshold": {
+      "filter": "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND resource.type=\"uptime_url\" AND resource.label.host=\"x.example\"",
+      "aggregations": [{
+        "alignmentPeriod": "60s",
+        "perSeriesAligner": "ALIGN_NEXT_OLDER",
+        "crossSeriesReducer": "REDUCE_COUNT_FALSE",
+        "groupByFields": ["resource.label.host"]
+      }],
+      "comparison": "COMPARISON_GT",
+      "thresholdValue": 1,
+      "duration": "120s",
+      "trigger": { "count": 1 }
+    }
+  }],
+  "notificationChannels": ["projects/demo/notificationChannels/1"],
+  "documentation": { "content": "Runbook: docs/RUNBOOK-PAYMENTS.md (respuesta a incidentes).", "mimeType": "text/markdown" }
+}
+
+$ PROJECT_ID=demo-proj HOST=x.example CHANNEL=projects/demo/notificationChannels/1 scripts/gcp/monitoring/slo.sh oncall@example.com   # dry-run
+[dry-run] POST https://monitoring.googleapis.com/v3/projects/demo-proj/services?serviceId=netpay-api
+    {
+      "displayName": "netpay-api",
+      "basicService": {
+        "serviceType": "CLOUD_RUN",
+        "serviceLabels": {
+          "service_name": "netpay-api",
+          "location": "us-east5"
+        }
+      }
+    }
+[dry-run] POST https://monitoring.googleapis.com/v3/projects/demo-proj/services/netpay-api/serviceLevelObjectives?serviceLevelObjectiveId=availability
+    {
+      "displayName": "Disponibilidad 99,9 % (30 d)",
+      "goal": 0.999,
+      "rollingPeriod": "2592000s",
+      "serviceLevelIndicator": {
+        "basicSli": {
+          "availability": {}
+        }
+      }
+    }
+[dry-run] POST https://monitoring.googleapis.com/v3/projects/demo-proj/services/netpay-api/serviceLevelObjectives?serviceLevelObjectiveId=charge-latency
+    {
+      "displayName": "charge p95 < 1,5 s (30 d)",
+      "goal": 0.95,
+      "rollingPeriod": "2592000s",
+      "serviceLevelIndicator": {
+        "requestBased": {
+          "distributionCut": {
+            "distributionFilter": "metric.type=\"logging.googleapis.com/user/charge_latency_ms\" AND resource.type=\"cloud_run_revision\" AND resource.label.service_name=\"netpay-api\"",
+            "range": {
+              "min": 0,
+              "max": 1500
+            }
+          }
+        }
+      }
+    }
+[dry-run] gcloud alpha monitoring policies create --project=demo-proj --policy-from-file=/var/folders/jx/q_24s9793_sc5c4710sk65ph0000gn/T/tmp.Nw7QD4PTIm/burn-availability.json
+    {
+      "displayName": "SLO availability: burn rate",
+      "combiner": "OR",
+      "conditions": [
+        {
+          "displayName": "rápida: > 14,4 en 1 h",
+          "conditionThreshold": {
+            "filter": "select_slo_burn_rate(\"projects/demo-proj/services/netpay-api/serviceLevelObjectives/availability\", \"3600s\")",
+            "comparison": "COMPARISON_GT",
+            "thresholdValue": 14.4,
+            "duration": "0s"
+          }
+        },
+        {
+          "displayName": "lenta: > 6 en 6 h",
+          "conditionThreshold": {
+            "filter": "select_slo_burn_rate(\"projects/demo-proj/services/netpay-api/serviceLevelObjectives/availability\", \"21600s\")",
+            "comparison": "COMPARISON_GT",
+            "thresholdValue": 6,
+            "duration": "0s"
+          }
+        }
+      ],
+      "notificationChannels": [
+        "projects/demo/notificationChannels/1"
+      ],
+      "documentation": {
+        "content": "Runbook: docs/RUNBOOK-PAYMENTS.md",
+        "mimeType": "text/markdown"
+      }
+    }
+[dry-run] gcloud alpha monitoring policies create --project=demo-proj --policy-from-file=/var/folders/jx/q_24s9793_sc5c4710sk65ph0000gn/T/tmp.Nw7QD4PTIm/burn-charge-latency.json
+    {
+      "displayName": "SLO charge-latency: burn rate",
+      "combiner": "OR",
+      "conditions": [
+        {
+          "displayName": "rápida: > 14,4 en 1 h",
+          "conditionThreshold": {
+            "filter": "select_slo_burn_rate(\"projects/demo-proj/services/netpay-api/serviceLevelObjectives/charge-latency\", \"3600s\")",
+            "comparison": "COMPARISON_GT",
+            "thresholdValue": 14.4,
+            "duration": "0s"
+          }
+        },
+        {
+          "displayName": "lenta: > 6 en 6 h",
+          "conditionThreshold": {
+            "filter": "select_slo_burn_rate(\"projects/demo-proj/services/netpay-api/serviceLevelObjectives/charge-latency\", \"21600s\")",
+            "comparison": "COMPARISON_GT",
+            "thresholdValue": 6,
+            "duration": "0s"
+          }
+        }
+      ],
+      "notificationChannels": [
+        "projects/demo/notificationChannels/1"
+      ],
+      "documentation": {
+        "content": "Runbook: docs/RUNBOOK-PAYMENTS.md",
+        "mimeType": "text/markdown"
+      }
+    }
+
+$ shellcheck -x scripts/gcp/monitoring/*.sh
+
+ok

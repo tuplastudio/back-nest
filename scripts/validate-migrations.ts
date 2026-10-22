@@ -7,6 +7,10 @@
  * 2. Migration files follow naming conventions
  * 3. SQL is syntactically valid
  * 4. No conflicts with existing migrations
+ * 5. Tenant migrations (prisma/tenant-migrations) load strictly, render for a
+ *    tenant schema, address no schema by name, and are not destructive
+ * 6. With MIGRATIONS_BASE_REF set (CI), no already-merged migration was edited,
+ *    renamed or deleted: the tenant ledger would reject it at deploy time
  *
  * Usage:
  *   npm run validate-migrations
@@ -14,9 +18,11 @@
  *   tsx scripts/validate-migrations.ts
  */
 
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
+import { renderTenantDdl } from '../src/prisma/tenant-ddl';
+import { loadTenantMigrations } from '../src/tenancy/tenant-migrations';
 
 interface ValidationResult {
   valid: boolean;
@@ -164,6 +170,90 @@ function checkMigrationConflicts(): string[] {
 }
 
 /**
+ * Validates the tenant-plane migrations (BN-REQ-OPS-002).
+ *
+ * The same loader the runner uses, so a malformed directory fails here and not
+ * in the deploy Job. Each script is also rendered for a sample schema: a
+ * placeholder left behind, or a schema addressed by name, would apply to the
+ * wrong schema in production.
+ *
+ * @param baseDir `prisma/tenant-migrations`.
+ * @returns Errors and warnings.
+ */
+function validateTenantMigrations(baseDir: string): { errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!existsSync(baseDir)) {
+    return { errors, warnings };
+  }
+
+  let migrations: ReturnType<typeof loadTenantMigrations>;
+  try {
+    migrations = loadTenantMigrations(baseDir);
+  } catch (err) {
+    return { errors: [`tenant-migrations: ${(err as Error).message}`], warnings };
+  }
+
+  for (const migration of migrations) {
+    const where = `tenant-migrations/${migration.name}`;
+    // Comments explain the history and may legitimately mention DROP.
+    const code = migration.sql.replace(/--.*$/gm, '');
+
+    errors.push(...checkDestructiveChanges(code).map((e) => `${where}: ${e}`));
+    warnings.push(...checkUnsafeChanges(code).map((w) => `${where}: ${w}`));
+
+    // The lookbehind keeps the `__TENANT_SCHEMA__.` placeholder (the sanctioned
+    // way to qualify a name) from matching as `tenant_schema__.`.
+    if (/(?<![A-Za-z0-9_])"?(public|tenant_[a-z0-9_]+)"?\s*\./i.test(code)) {
+      errors.push(`${where}: addresses a schema by name; use unqualified names or __TENANT_SCHEMA__`);
+    }
+
+    const rendered = renderTenantDdl(migration.sql, 'tenant_validate');
+    if (/__TENANT_SCHEMA[A-Z_]*__/.test(rendered)) {
+      errors.push(`${where}: unknown placeholder left after rendering`);
+    }
+    if (/^\s*(BEGIN|START\s+TRANSACTION)\b/im.test(code)) {
+      errors.push(`${where}: opens its own transaction; the runner applies each schema in one transaction`);
+    }
+  }
+
+  info(`Found ${migrations.length} tenant migration(s)`);
+  return { errors, warnings };
+}
+
+/**
+ * Fails when a migration that already exists on the base branch was modified,
+ * renamed or deleted. Applied migrations are immutable: the tenant runner
+ * records each script's checksum and aborts the deploy on a mismatch, so this
+ * moves the failure from the deploy to the pull request.
+ *
+ * @param baseRef Git ref to compare against, e.g. `origin/main`.
+ * @returns Errors.
+ */
+function checkAppliedMigrationsUnchanged(baseRef: string): string[] {
+  let diff: string;
+  try {
+    diff = execFileSync(
+      'git',
+      ['diff', '--name-status', `${baseRef}...HEAD`, '--', 'prisma/migrations', 'prisma/tenant-migrations'],
+      { encoding: 'utf-8' },
+    );
+  } catch (err) {
+    return [`Could not diff migrations against ${baseRef}: ${String(err)}`];
+  }
+
+  return diff
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .filter(([status, path]) => status && path?.endsWith('.sql') && status !== 'A')
+    .map(
+      ([status, path]) =>
+        `${path}: already merged migration changed (git status ${status}); add a new migration instead`,
+    );
+}
+
+/**
  * Main validation function
  */
 function validateMigrations(): ValidationResult {
@@ -245,6 +335,29 @@ function validateMigrations(): ValidationResult {
     success('Prisma schema syntax is valid');
   }
 
+  // Tenant-plane migrations
+  info('\nValidating tenant migrations...');
+  const tenant = validateTenantMigrations(join(process.cwd(), 'prisma', 'tenant-migrations'));
+  result.warnings.push(...tenant.warnings);
+  if (tenant.errors.length > 0) {
+    result.errors.push(...tenant.errors);
+    result.valid = false;
+  } else {
+    success('Tenant migrations are valid');
+  }
+
+  const baseRef = process.env['MIGRATIONS_BASE_REF'];
+  if (baseRef) {
+    info(`\nChecking that merged migrations are unchanged since ${baseRef}...`);
+    const changed = checkAppliedMigrationsUnchanged(baseRef);
+    if (changed.length > 0) {
+      result.errors.push(...changed);
+      result.valid = false;
+    } else {
+      success('No merged migration was modified');
+    }
+  }
+
   // Check for conflicts
   info('\nChecking for migration conflicts...');
   const conflictErrors = checkMigrationConflicts();
@@ -296,4 +409,4 @@ if (require.main === module) {
   main();
 }
 
-export { validateMigrations };
+export { validateMigrations, validateTenantMigrations, checkAppliedMigrationsUnchanged };

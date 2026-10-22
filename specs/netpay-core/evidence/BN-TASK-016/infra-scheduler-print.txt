@@ -1,0 +1,19 @@
+# BN-TASK-016 INFRA — Cloud Scheduler de staging, SOLO IMPRESO (no ejecutado: requiere aprobación) — 2026-10-21T21:08:10Z
+$ scripts/gcp/scheduler-internal-tick.sh
+# Proyecto vondi-0q-staging · servicio netpay-api-staging (us-east5) · scheduler en us-east5
+# Audiencia/URL: https://<url-de-netpay-api-staging>.run.app
+[dry-run] gcloud services enable cloudscheduler.googleapis.com --project=vondi-0q-staging
+[dry-run] gcloud iam service-accounts create netpay-tick --project=vondi-0q-staging --display-name=netpay /internal/tick (Cloud Scheduler)
+[dry-run] gcloud run services add-iam-policy-binding netpay-api-staging --project=vondi-0q-staging --region=us-east5 --member=serviceAccount:netpay-tick@vondi-0q-staging.iam.gserviceaccount.com --role=roles/run.invoker
+[dry-run] gcloud run services update netpay-api-staging --project=vondi-0q-staging --region=us-east5 --update-env-vars=INTERNAL_TICK_SA_EMAIL=netpay-tick@vondi-0q-staging.iam.gserviceaccount.com,INTERNAL_TICK_AUDIENCE=https://<url-de-netpay-api-staging>.run.app,PUBLIC_BASE_URL=https://<url-de-netpay-api-staging>.run.app
+[dry-run] gcloud scheduler jobs create http netpay-internal-tick --project=vondi-0q-staging --location=us-east5 --schedule=*/15 * * * * --time-zone=Etc/UTC --uri=https://<url-de-netpay-api-staging>.run.app/internal/tick --http-method=POST --oidc-service-account-email=netpay-tick@vondi-0q-staging.iam.gserviceaccount.com --oidc-token-audience=https://<url-de-netpay-api-staging>.run.app --attempt-deadline=300s --description=Conciliación de pagos + despacho de webhooks (BN-TASK-016)
+
+# Verificar (a mano):
+#   gcloud scheduler jobs run netpay-internal-tick --project=vondi-0q-staging --location=us-east5
+#   gcloud logging read 'resource.labels.service_name="netpay-api-staging" AND jsonPayload.event="reconcile_checked"' --project=vondi-0q-staging --limit=5
+(solo impreso; --apply para ejecutarlo)
+
+$ GCP_PROJECT_ID=vondi-0q scripts/gcp/scheduler-internal-tick.sh   # producción: rechazado
+Este script es solo para staging (vondi-0q-staging); GCP_PROJECT_ID=vondi-0q no se admite.
+Producción no lleva scheduler por decisión del dueño (docs/RUNBOOK-PAYMENTS.md §1.2).
+exit 2

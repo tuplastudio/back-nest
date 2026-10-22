@@ -1,10 +1,14 @@
-# Orquestador de despliegue. No despliega nada: decide a qué entorno se llama
-# y en qué orden. La lógica de un entorno está en deploy-environment.yml, que es
-# reutilizable; la verificación está en ci.yml.
+# Orquestador de despliegue. No despliega nada: decide qué se verifica, a qué
+# entorno se llama y en qué orden. La verificación está en ci.yml y la lógica de
+# un entorno en deploy-environment.yml; los dos son reutilizables.
 #
-#   staging ─► ci ─► deploy-environment (staging)
+#   push/PR ─► ci ─► deploy-environment (staging)
 #                            │
-#   main    ─► ci ───────────┴─► deploy-environment (production)
+#   main    ─────────────────┴─► deploy-environment (production)
+#
+# `ci` es un job de ESTE workflow y los despliegues lo esperan con `needs`
+# (BN-REQ-OPS-001). Antes ci.yml era un workflow hermano disparado por el mismo
+# push y nada lo esperaba: un push a main con tests en rojo desplegaba igual.
 #
 # Es decir: `main` pasa por staging antes de llegar a producción. Un release que
 # no arrancó contra la base de staging no llega a tocar la de producción, y esa
@@ -24,6 +28,8 @@ on:
     branches: [main, staging]
     # La documentación no cambia el runtime; no debe gastar un release.
     paths-ignore: ['docs/**', '**/*.md']
+  # Sin paths-ignore en PR: los checks de CI son obligatorios para mergear a
+  # `main`, y un workflow que no corre deja el check pendiente para siempre.
   pull_request:
     branches: [main, staging]
   workflow_dispatch:
@@ -49,11 +55,19 @@ permissions:
   id-token: write
 
 jobs:
+  # Verificación completa. `secrets: inherit` para CODECOV_TOKEN; ci.yml no
+  # recibe ninguna variable de GCP.
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
   # Los PR despliegan a staging: probarlos contra una base de verdad es el
   # objetivo del entorno. Un PR de un fork no tiene los secrets ni la WIF del
   # environment, así que se omite en vez de fallar.
   deploy_staging:
     name: Desplegar a staging
+    needs: ci
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/deploy-environment.yml
     with:
@@ -64,8 +78,10 @@ jobs:
   # producción desde un push a staging.
   deploy_production:
     name: Desplegar a producción
-    needs: deploy_staging
-    if: ${{ github.ref == 'refs/heads/main' }}
+    # `ci` explícito aunque staging ya lo espere: la puerta no debe depender de
+    # que nadie quite un eslabón intermedio.
+    needs: [ci, deploy_staging]
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
     uses: ./.github/workflows/deploy-environment.yml
     with:
       environment: production

@@ -28,6 +28,9 @@ export default tseslint.config(
       // Root config files are not part of any tsconfig project, so the typed
       // parser cannot load them.
       '*.config.mjs',
+      // Prisma CLI config: reads the migration URL from the environment by
+      // design and sits outside every tsconfig project.
+      'prisma.config.ts',
     ],
   },
   js.configs.recommended,
@@ -110,6 +113,28 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-call': 'off',
       '@typescript-eslint/no-unsafe-argument': 'off',
     },
+  },
+  // --- Configuration discipline (BN-REQ-CFG-006) ---------------------------
+  // Application code reads configuration through `AppConfig` / `src/config/**`,
+  // where it has passed the Zod schema. A stray `process.env[...]` bypasses that
+  // validation: it is how the checkout URLs ended up defaulting to localhost in
+  // production. Tests, seeds and operational scripts run outside the app and
+  // keep direct access.
+  {
+    files: ['src/**/*.ts'],
+    rules: { 'no-process-env': 'error' },
+  },
+  {
+    files: [
+      'src/config/**/*.ts',
+      '**/*.spec.ts',
+      '**/*.int-spec.ts',
+      'test/**/*.ts',
+      'prisma/**/*.ts',
+      'scripts/**/*.ts',
+      'prisma.config.ts',
+    ],
+    rules: { 'no-process-env': 'off' },
   },
   prettier,
 );

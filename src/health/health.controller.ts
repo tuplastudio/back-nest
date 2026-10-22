@@ -5,7 +5,7 @@ import type { Request, Response } from 'express';
 import { Public } from '../common/decorators/public.decorator';
 import {
   HealthService,
-  isAuthenticatedRequest,
+  hasVerifiedPrincipal,
   readinessFor,
   type PublicReadinessReport,
   type ReadinessReport,
@@ -53,12 +53,13 @@ export class HealthController {
    * Responds 503 when a dependency is unavailable so a load balancer stops
    * routing traffic to this instance.
    *
-   * The detailed report is only for authenticated callers. The endpoint has to
-   * stay `@Public()` so the smoke test and any uptime check can reach it without
-   * credentials, but with the service exposed to the internet a public 200 also
-   * answers "there are two databases behind this, and here is how long each one
-   * took" to anyone who asks. An anonymous caller gets the status and nothing
-   * else; the status code still carries the signal an orchestrator needs.
+   * The detailed report (checks, reasons, build version and SHA) is only for a
+   * verified principal. The endpoint has to stay `@Public()` so the smoke test
+   * and any uptime check can reach it without credentials, but with the service
+   * exposed to the internet a public 200 also answers "there are two databases
+   * behind this, and here is how long each one took" to anyone who asks. An
+   * anonymous caller, or one with a credential that does not verify, gets the
+   * status and nothing else. The result is cached for 5 s.
    */
   @Public()
   @SkipThrottle()
@@ -67,14 +68,14 @@ export class HealthController {
   @ApiOperation({
     summary: 'Readiness probe',
     description:
-      'Verifies the control plane database is reachable. Responds 503 when it is not. The per-dependency detail is only returned to authenticated callers.',
+      'Verifies the databases are reachable and that outbound deliveries are not switched off under ACTIVE endpoints. Cached for 5 s. The per-dependency detail, the reasons and the build version and SHA are only returned to a verified principal.',
   })
   @ApiResponse({ status: 200, description: 'All dependencies are reachable.' })
   @ApiResponse({ status: 503, description: 'At least one dependency is unavailable.' })
   async ready(@Req() request: Request): Promise<ReadinessReport | PublicReadinessReport> {
     const report = await this.health.readiness();
 
-    return readinessFor(report, isAuthenticatedRequest(request.headers));
+    return readinessFor(report, hasVerifiedPrincipal(request as Request & { principal?: unknown }));
   }
 
   /**

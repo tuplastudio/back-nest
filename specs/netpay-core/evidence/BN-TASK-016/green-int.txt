@@ -1,0 +1,19 @@
+# BN-TASK-016 green (integration against PostgreSQL 17, container bn-e2e-w3) — 2026-10-21T21:01:25Z
+# node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-int.json --runInBand test/reconciliation.int-spec.ts --verbose --reporters=default
+PASS test/reconciliation.int-spec.ts
+  reconciliation (BN-TASK-016, integration)
+    ✓ settles a PENDING order Netpay reports paid, without a webhook, and emits payment.paid (188 ms)
+    ✓ leaves an order younger than the minimum age alone (23 ms)
+    ✓ expires a charge left in WAIT_THREEDS for more than 30 min and emits payment.expired (74 ms)
+    ✓ keeps a WAIT_THREEDS charge younger than 30 min pending, without rewriting it (59 ms)
+    ✓ expires an unpaid cash reference past its expiry (BN-REQ-REC-003) (32 ms)
+    ✓ settles a cash reference that was paid before it expired instead of expiring it (59 ms)
+    ✓ returns a CHARGE_UNKNOWN order with no transaction to PENDING after the grace period (42 ms)
+    ✓ keeps a CHARGE_UNKNOWN order inside the grace period (27 ms)
+    ✓ completes a refund whose outcome was unknown when Netpay reports the charge cancelled (57 ms)
+    ✓ records a payment Netpay reports for a CANCELLED order without reopening it (BN-TASK-018) (68 ms)
+    ✓ checks an old order with the configuration it was created with (BN-REQ-CFG-002) (69 ms)
+    ✓ checks each order once when two workers run at the same time (BN-REQ-REC-004) (281 ms)
+    ✓ applies pending provider results first (BN-REQ-IDM-004) (34 ms)
+Test Suites: 1 passed, 1 total
+Tests:       13 passed, 13 total

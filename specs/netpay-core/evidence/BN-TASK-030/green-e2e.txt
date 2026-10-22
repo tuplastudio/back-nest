@@ -1,0 +1,7 @@
+# BN-TASK-030 / BN-TASK-004 / BN-TASK-019 / BN-TASK-034 e2e green — 2026-10-21T19:16:54Z
+# jest --config test/jest-e2e.json test/payments.e2e-spec.ts test/security.e2e-spec.ts (Postgres 17, container bn-e2e-w2)
+suites 2/2 tests 145/145
+PASS payments and outbound webhooks (e2e) provider flow against a stand-in Netpay refunds a settled order once
+PASS payments and outbound webhooks (e2e) provider flow against a stand-in Netpay audits every status change and writes each event to the outbox, partial refunds included (BN-TASK-030, BN-TASK-004, BN-TASK-019)
+PASS payments and outbound webhooks (e2e) provider flow against a stand-in Netpay reverses a settled order at most once under concurrent refunds
+PASS Security hardening (e2e) refuses an admin without MFA with 403 MFA_REQUIRED

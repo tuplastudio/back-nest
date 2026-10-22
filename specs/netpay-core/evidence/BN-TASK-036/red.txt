@@ -1,0 +1,43 @@
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/common/logging
+
+FAIL src/common/logging/json-logger.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './json-logger' from 'src/common/logging/json-logger.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+(node:98584) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/common/logging/access-log.middleware.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './json-logger' from 'src/common/logging/access-log.middleware.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+(node:98585) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Test Suites: 2 failed, 2 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        2.579 s
+Ran all test suites matching src/common/logging.
+### wiring (main.ts / installLogging) before implementation
+
+ReferenceError: You are trying to `import` a file after the Jest environment has been torn down. From src/common/logging/install-logging.spec.ts.
+FAIL src/common/logging/install-logging.spec.ts
+  ● Test suite failed to run
+
+    Cannot find module './install-logging' from 'src/common/logging/install-logging.spec.ts'
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        2.189 s
+Ran all test suites matching src/common/logging/install-logging.
+(Use `node --trace-warnings ...` to show where the warning was created)

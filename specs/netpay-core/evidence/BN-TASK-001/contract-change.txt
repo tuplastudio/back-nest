@@ -1,0 +1,18 @@
+BN-TASK-001 — API contract change for POST /t/webhooks (and any UrlGuard refusal)
+
+Before: every UrlGuard refusal was 400 VALIDATION_ERROR; a host with several A/AAAA
+answers was refused as AMBIGUOUS_ADDRESS.
+
+Now (BN-REQ-EVT-001):
+- A well-formed URL whose host resolves to ANY blocked address (private, loopback,
+  link-local, metadata, outside OUTBOUND_WEBHOOK_ALLOWED_CIDRS) -> 422
+  error.code = BLOCKED_ADDRESS, error.details.reason in
+  {PRIVATE_ADDRESS, METADATA_ADDRESS, NOT_ALLOWED_BY_POLICY}.
+- Not a URL / wrong scheme (HTTPS required) / name does not resolve -> 400
+  VALIDATION_ERROR (reason INVALID_URL, HTTPS_REQUIRED, UNRESOLVED).
+- Several public addresses are accepted; AMBIGUOUS_ADDRESS no longer exists.
+- At delivery time the same refusals are retryable failures (BN-TASK-002), not
+  an immediate auto-disable.
+
+test/payments.e2e-spec.ts "outbound destinations" updated accordingly (422 + code +
+reason read from the error envelope); run: green-e2e-payments.txt (131/131).

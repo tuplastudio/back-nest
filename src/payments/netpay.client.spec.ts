@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { Logger } from '@nestjs/common';
 import { NetpayClient, NetpayRequestError, NetpayTransportError, type HttpTransport } from './netpay.client';
 import { netpayReportsUrl, netpayUrl } from './netpay-endpoints';
 
@@ -350,5 +351,164 @@ describe('NetpayClient — declines', () => {
     await expect(client.createCharge('SANDBOX', SK, { source: 'token_x' } as never)).rejects.toBeInstanceOf(
       NetpayRequestError,
     );
+  });
+});
+
+describe('NetpayClient — provider-echoed values never leave the client (BN-TASK-023)', () => {
+  const PAN = '4111111111111111';
+  const CVV = '987';
+  const EMAIL = 'ana.lopez@example.mx';
+  /** A 400 that echoes what was sent, the way Netpay's validation errors do. */
+  const echoed = {
+    message: 'Argument not valid',
+    subErrors: [
+      { object: 'charge', field: 'source', rejectedValue: PAN, value: PAN, message: 'Invalid card' },
+      { object: 'charge', field: 'cvv', value: CVV, message: `cvv ${CVV} is invalid` },
+      { object: 'billing', field: 'email', value: EMAIL },
+    ],
+  };
+
+  it('keeps field names only: no PAN, CVV or e-mail in the error, its details or the log', async () => {
+    const { client } = clientAnswering({ status: 400, body: echoed });
+    const logged: string[] = [];
+    const spy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation((message: unknown) => void logged.push(String(message)));
+    const error = await client
+      .createCharge('SANDBOX', SK, { source: 'token_x' } as never)
+      .catch((e: unknown) => e);
+    spy.mockRestore();
+    expect(error).toBeInstanceOf(NetpayRequestError);
+    const refusal = error as NetpayRequestError;
+    const everything = JSON.stringify({
+      message: refusal.message,
+      providerMessage: refusal.providerMessage,
+      details: refusal.details,
+      logged,
+    });
+    expect(everything).not.toContain(PAN);
+    expect(everything).not.toContain('1111');
+    expect(everything).not.toContain(CVV);
+    expect(everything).not.toContain(EMAIL);
+    expect(refusal.providerMessage).toBe('Argument not valid (source; cvv; email)');
+  });
+
+  it('drops digit runs that look like a card number from the provider message itself', async () => {
+    const { client } = clientAnswering({ status: 400, body: { message: `Card ${PAN} rejected` } });
+    const error = (await client
+      .getTransaction('SANDBOX', SK, 'tx')
+      .catch((e: unknown) => e)) as NetpayRequestError;
+    expect(error.providerMessage).not.toContain(PAN);
+  });
+
+  it('keeps a declined charge free of the echoed values too', async () => {
+    const { client } = clientAnswering({
+      status: 409,
+      body: { transactionTokenId: 'tx-d', status: 'failed', error: 'Rejected', subErrors: echoed.subErrors },
+    });
+    const tx = await client.createCharge('SANDBOX', SK, { source: 'token_x' } as never);
+    expect(JSON.stringify(tx)).not.toContain(PAN);
+    expect(JSON.stringify(tx)).not.toContain(EMAIL);
+  });
+});
+
+describe('NetpayClient — decline codes (BN-TASK-020)', () => {
+  it('maps a decline to the stable enum and keeps the original code internally', async () => {
+    const { client } = clientAnswering({
+      status: 409,
+      body: {
+        transactionTokenId: 'tx-d',
+        status: 'failed',
+        responseCode: '51',
+        error: 'Fondos insuficientes',
+      },
+    });
+    const tx = await client.createCharge('SANDBOX', SK, { source: 'token_x' } as never);
+    expect(tx.failureCode).toBe('INSUFFICIENT_FUNDS');
+    expect(tx.providerFailureCode).toBe('51');
+  });
+
+  it('classifies the Decision Manager rejection as suspected fraud', async () => {
+    const { client } = clientAnswering({
+      status: 409,
+      body: { transactionTokenId: 'tx-d', status: 'failed', error: 'Rejected by Decision Manager' },
+    });
+    const tx = await client.createCharge('SANDBOX', SK, { source: 'token_x' } as never);
+    expect(tx.failureCode).toBe('FRAUD_SUSPECTED');
+  });
+});
+
+describe('NetpayClient — credential check (BN-TASK-025)', () => {
+  it('reads the webhook registration, which changes nothing, to prove the key', async () => {
+    const { client, sent } = clientAnswering({ status: 200, body: { webhook: null } });
+    await expect(client.checkCredentials('SANDBOX', SK)).resolves.toBe('VALID');
+    expect(sent[0].method).toBe('GET');
+    expect(sent[0].url).toBe('https://gateway-154.netpay' + 'dev.com/gateway-ecommerce/v3/webhooks/');
+    expect(sent[0].headers['Authorization']).toBe(SK);
+  });
+
+  it.each([401, 403])('reports a key the environment refuses (%i) as invalid', async (status) => {
+    const { client } = clientAnswering({ status, body: { message: 'Please Verify your ApiKeys' } });
+    await expect(client.checkCredentials('LIVE', SK)).resolves.toBe('INVALID');
+  });
+
+  it('treats a 404 (nothing registered yet) as an accepted key', async () => {
+    const { client } = clientAnswering({ status: 404, body: { message: 'No message available' } });
+    await expect(client.checkCredentials('SANDBOX', SK)).resolves.toBe('VALID');
+  });
+
+  it('does not guess on a 5xx: the caller sees an unknown outcome', async () => {
+    const { client } = clientAnswering({ status: 500, body: {} });
+    await expect(client.checkCredentials('SANDBOX', SK)).rejects.toMatchObject({
+      code: 'PROVIDER_OUTCOME_UNKNOWN',
+    });
+  });
+});
+
+describe('NetpayClient latency log (BN-TASK-044, BN-REQ-OPS-005)', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('logs netpay_request with a bounded operation name, the outcome and the latency', async () => {
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    const { client } = clientAnswering({ status: 200, body: { transactionTokenId: 'tx', status: 'DONE' } });
+    await client.getTransaction('SANDBOX', SK, 'c4f1a9e2-0000-4000-8000-000000000001');
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'netpay_request',
+        // The id is not part of the label: one series per endpoint, not per transaction.
+        operation: 'GET /v3/transactions/:id',
+        outcome: 'ok',
+        httpStatus: 200,
+        latencyMs: expect.any(Number) as unknown,
+      }),
+    );
+  });
+
+  it('logs a provider error at warn with its status', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { client } = clientAnswering({ status: 502, body: { message: 'down' } });
+    await expect(client.getTransaction('SANDBOX', SK, 'tx-1')).rejects.toBeInstanceOf(NetpayRequestError);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'netpay_request', outcome: 'error', httpStatus: 502 }),
+    );
+  });
+
+  it('logs a timeout as such, and never the secret key', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const client = new NetpayClient({ request: () => Promise.reject(new Error('Request timed out.')) });
+    await expect(client.confirmCharge('SANDBOX', SK, 'tx-9', 'proc-1')).rejects.toBeInstanceOf(
+      NetpayTransportError,
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'netpay_request',
+        operation: 'POST /v3.5/charges/:id/confirm',
+        outcome: 'timeout',
+      }),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(SK);
   });
 });

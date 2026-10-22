@@ -1,0 +1,45 @@
+Test Suites: 1 passed, 1 total
+Tests:       5 passed, 5 total
+Snapshots:   0 total
+Time:        4.355 s, estimated 5 s
+Ran all test suites matching scripts/lib/tenant-migration-runner.
+Test Suites: 1 passed, 1 total
+Tests:       10 passed, 10 total
+Snapshots:   0 total
+Time:        2.59 s
+Ran all test suites matching src/tenancy/tenant-migrations.
+
+$ npm run migrations:validate
+VALIDATION RESULTS
+============================================================
+
+[31m❌ Errors found:[0m
+  - tenant-migrations/0011_tenant_schema_migrations: addresses a schema by name; use unqualified names or __TENANT_SCHEMA__
+
+[33m⚠ Warnings:[0m
+  - 20261013183351_init_control_plane: Adding FOREIGN KEY constraint on existing table may lock the table
+  - tenant-migrations/0001_init: Adding FOREIGN KEY constraint on existing table may lock the table
+
+[31m❌ Migration validation failed![0m
+
+✗ Please fix the errors before deploying
+
+--- validator catches bad tenant migrations (temporary probe dirs, removed afterwards) ---
+VALIDATION RESULTS
+============================================================
+
+[31m❌ Errors found:[0m
+  - tenant-migrations: Tenant migrations "0011_dup_probe" and "0011_tenant_schema_migrations" share version 11.
+
+[33m⚠ Warnings:[0m
+  - 20261013183351_init_control_plane: Adding FOREIGN KEY constraint on existing table may lock the table
+
+[31m❌ Migration validation failed![0m
+
+✗ Please fix the errors before deploying
+[31m❌ Errors found:[0m
+  - tenant-migrations/0099_bad_probe: Destructive operation detected: DROP TABLE
+  - tenant-migrations/0099_bad_probe: addresses a schema by name; use unqualified names or __TENANT_SCHEMA__
+  - tenant-migrations/0099_bad_probe: opens its own transaction; the runner applies each schema in one transaction
+
+[33m⚠ Warnings:[0m

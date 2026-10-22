@@ -4,6 +4,8 @@ import { APP_GUARD, DiscoveryModule, NestFactory } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ApiKeyScopesGuard } from './auth/api-key-scopes.guard';
 import { PermissionsGuard } from './auth/permissions.guard';
+import { buildThrottlerOptions } from './auth/throttling';
+import { RedisThrottlerStorage, RespClient } from './auth/redis-throttler.storage';
 import { AppConfig } from './config/app-config.service';
 import { AppConfigModule } from './config/config.module';
 import { ApiKeysModule } from './api-keys/api-keys.module';
@@ -15,6 +17,7 @@ import { DocsModule } from './docs/docs.module';
 import { HealthModule } from './health/health.module';
 import { PiiModule } from './pii/pii.module';
 import { PaymentsModule } from './payments/payments.module';
+import { InternalModule } from './internal/internal.module';
 import { RbacAuditService } from './common/rbac-audit.service';
 import { TenantApiModule } from './tenant-api/tenant-api.module';
 import { TenancyModule } from './tenancy/tenancy.module';
@@ -38,12 +41,22 @@ import { TenancyModule } from './tenancy/tenancy.module';
   imports: [
     AppConfigModule,
 
+    // `default` applies everywhere; `auth` only to routes marked @AuthThrottle
+    // (sign-in, refresh, MFA, invitation); health is exempt from both
+    // (BN-REQ-SEC-004). THROTTLER_REDIS_URL shares the counters across
+    // instances; unset keeps them in process memory.
     ThrottlerModule.forRootAsync({
       inject: [AppConfig],
-      useFactory: (config: AppConfig) => [
-        { name: 'default', ttl: config.throttleTtlMs, limit: config.throttleLimit },
-        { name: 'auth', ttl: config.authThrottleTtlMs, limit: config.authThrottleLimit },
-      ],
+      useFactory: (config: AppConfig) =>
+        buildThrottlerOptions({
+          defaultLimit: config.throttleLimit,
+          defaultTtlMs: config.throttleTtlMs,
+          authLimit: config.authThrottleLimit,
+          authTtlMs: config.authThrottleTtlMs,
+          storage: config.throttlerRedisUrl
+            ? new RedisThrottlerStorage(new RespClient(config.throttlerRedisUrl))
+            : undefined,
+        }),
     }),
 
     PiiModule,
@@ -57,6 +70,8 @@ import { TenancyModule } from './tenancy/tenancy.module';
     ApiKeysModule,
     TenantApiModule,
     PaymentsModule,
+    // POST /internal/tick: reconciliation + dispatch on demand (Cloud Scheduler, OIDC).
+    InternalModule,
     HealthModule,
     DocsModule,
   ],

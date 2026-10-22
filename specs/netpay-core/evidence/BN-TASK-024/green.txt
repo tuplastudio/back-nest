@@ -1,0 +1,51 @@
+# BN-TASK-024 green (unit: versioned config, token rotation; config-by-order) — 2026-10-21T21:02:07Z
+# node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/payment-config src/payments/payment-orders.lifecycle.spec.ts -t configuration|version|webhook token|allowlists|BN-REQ-CFG-002 --verbose --reporters=default
+PASS src/payments/payment-orders.lifecycle.spec.ts
+  GET /t/payments/orders with a cursor (BN-TASK-017)
+    ○ skipped round-trips an opaque cursor and refuses a forged one
+    ○ skipped pages oldest-update first from updatedSince, with the filters, and hands back a cursor
+    ○ skipped continues after the cursor and says when there is nothing more
+    ○ skipped lists newest first without updatedSince, and refuses an unknown status
+    ○ skipped reads one order with verifiedAmount, the transaction, refunds, failure code and its attempts
+  POST /t/payments/orders/:id/cancel (BN-TASK-018)
+    ✓ uses the configuration the order was created with (BN-REQ-CFG-002) (6 ms)
+    ○ skipped cancels an unpaid order, under a claim, and emits payment.cancelled
+    ○ skipped cancels a FAILED order
+    ○ skipped answers an already cancelled order as it is, emitting nothing
+    ○ skipped refuses a PAID order with 409 ORDER_STATE_CONFLICT
+    ○ skipped refuses a PARTIALLY_REFUNDED order with 409 ORDER_STATE_CONFLICT
+    ○ skipped refuses a REFUNDED order with 409 ORDER_STATE_CONFLICT
+    ○ skipped refuses a EXPIRED order with 409 ORDER_STATE_CONFLICT
+    ○ skipped refuses a AMOUNT_MISMATCH order with 409 ORDER_STATE_CONFLICT
+    ○ skipped refuses a CHARGE_UNKNOWN order with 409 ORDER_STATE_CONFLICT
+    ○ skipped asks Netpay first when a charge is bound, and refuses with the PAID order when it was charged
+    ○ skipped cancels a charge abandoned in 3-D Secure
+    ○ skipped records a payment Netpay reports later without reopening the order, and audits it
+    ○ skipped does not move a cancelled order when Netpay reports a decline
+  hosted return URLs (BN-TASK-021)
+    ○ skipped refuses a return URL that is not https with 422 RETURN_URL_NOT_ALLOWED
+    ○ skipped refuses an origin outside the tenant allowlist once one is configured
+    ○ skipped accepts any https origin while the allowlist is empty, and warns
+  currencies (BN-TASK-022)
+    ○ skipped refuses a currency the tenant is not enabled for with 422 CURRENCY_NOT_ENABLED
+    ○ skipped accepts it once the tenant is enabled for it
+PASS src/payments/payment-config.audit.spec.ts
+  PaymentConfigService audit (BN-TASK-030)
+    ✓ records a first configuration with the actor and the environment, never the secret (4 ms)
+    ✓ records a webhook token rotation without the token (1 ms)
+    ○ skipped records a change of environment or keys as from → to
+    ○ skipped records the registration of the inbound webhook URL by host
+PASS src/payments/payment-config.versions.spec.ts
+  versioned payment configuration (BN-TASK-024)
+    ✓ writes version 1, active, with MXN only and no return-origin allowlist (5 ms)
+    ✓ appends a new version on change and keeps the old one, inactive, for its orders (1 ms)
+    ✓ does not write a version when nothing changed (1 ms)
+    ✓ issues a new webhook token and clears webhookRegisteredAt when the environment changes (BN-REQ-CFG-003) (1 ms)
+    ✓ issues a new webhook token and clears webhookRegisteredAt when the secret key changes (BN-REQ-CFG-003) (1 ms)
+    ✓ keeps the webhook token and its registration when only the public key changes (1 ms)
+  allowlists in the configuration (BN-TASK-021/022)
+    ✓ stores return origins normalised, and currencies upper-case (1 ms)
+    ✓ refuses an origin that is not https or carries a path
+    ✓ changes the allowlists alone as a new version that keeps the keys (1 ms)
+Test Suites: 1 skipped, 3 passed, 3 of 4 total
+Tests:       29 skipped, 12 passed, 41 total

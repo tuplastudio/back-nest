@@ -1,0 +1,119 @@
+# BN-TASK-016 green (unit: worker, rate limit, OIDC guard, throttler exemption, RBAC audit, reconcile_* events, event contract) — 2026-10-21T21:01:20Z
+# node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/reconciliation src/internal src/common/rbac-audit src/auth/throttling.spec.ts src/common/logging/payment-log-events.spec.ts src/payments/payment-events.spec.ts src/payments/event-contract.spec.ts --verbose --reporters=default
+PASS src/internal/internal-invoker.guard.spec.ts
+  InternalInvokerGuard (BN-TASK-016)
+    ✓ lets the scheduler service account in (9 ms)
+    ✓ answers 401 without a token, with garbage, or with a token for another audience (3 ms)
+    ✓ answers 403 to a valid Google token of another identity (1 ms)
+    ✓ refuses every call when the service account or the audience is not configured (2 ms)
+PASS src/auth/throttling.spec.ts
+  throttler configuration (BN-REQ-SEC-004)
+    ✓ declares a default and an auth throttler with the configured budgets (2 ms)
+    ✓ applies the auth throttler only to routes marked @AuthThrottle (sign-in / refresh) (14 ms)
+    ✓ exempts health routes from every throttler
+    ✓ exempts internal routes (POST /internal/tick) from every throttler (BN-TASK-016) (1 ms)
+    ✓ recognises health paths precisely
+    ✓ uses the shared storage when one is supplied, in-memory otherwise (2 ms)
+PASS src/internal/google-id-token.spec.ts
+  verifyGoogleIdToken (BN-TASK-016)
+    ✓ accepts a token signed by Google for this audience and service account (4 ms)
+    ✓ accepts the bare accounts.google.com issuer too (1 ms)
+    ✓ refuses another audience (1 ms)
+    ✓ refuses another service account (1 ms)
+    ✓ refuses an unverified e-mail (1 ms)
+    ✓ refuses an expired token (28 ms)
+    ✓ refuses a token issued in the future (5 ms)
+    ✓ refuses another issuer
+    ✓ refuses a token signed by another key (1 ms)
+    ✓ refuses a key id Google does not publish (12 ms)
+    ✓ refuses alg none and HS256 whatever the signature says (2 ms)
+    ✓ refuses garbage and an API key
+    ✓ refuses a tampered payload (1 ms)
+PASS src/common/logging/payment-log-events.spec.ts
+  payment log events (BN-TASK-044)
+    ✓ payment_status_change carries the fields the metric reads (1 ms)
+    ✓ netpay_request is a rounded latency, warn on failure (1 ms)
+    ✓ outbound_delivery_result carries result
+    ✓ reconcile_checked / reconcile_corrected / reconcile_errors carry counts and the transition (BN-TASK-016) (1 ms)
+    ✓ netpay_webhook_drift is 1 (warning) on drift and 0 otherwise (BN-TASK-026)
+    ✓ the log-based metrics filter on these exact event names and fields (1 ms)
+PASS src/common/rbac-audit.service.spec.ts
+  RbacAuditService
+    ✓ accepts an internal route that carries its own guard (BN-TASK-016) (5 ms)
+    ✓ refuses an internal route without a guard of its own (9 ms)
+    ✓ reports a controller whose route declares no policy (1 ms)
+    ✓ refuses to start and names the offending route (1 ms)
+    ✓ accepts a route guarded by @Roles (1 ms)
+    ✓ accepts a route guarded by @RequirePermissions
+    ✓ accepts a route guarded by all-of permissions
+    ✓ accepts a public route and an API-key-only route (1 ms)
+    ✓ accepts a dual-plane route declared only at the class level
+    ✓ refuses to start when a route declares @RequirePermissions without @RequireScopes (BN-REQ-SEC-001) (1 ms)
+    ✓ applies the scope rule to class-level permissions too
+    ✓ reports every offending route, not just the first (1 ms)
+    ✓ describes the policy each route declares
+    ✓ audits controllers listed by discovery.getControllers(), even without an instance (regression)
+    ✓ ignores providers that are not controllers
+PASS src/payments/event-contract.spec.ts
+  event schemas in docs/events (BN-TASK-009)
+    ✓ publishes one schema per event of the catalog, and nothing else (4 ms)
+    ✓ lists every event in catalog.json with its schema file
+    ✓ payment.paid.schema.json is in sync with event-contract.ts (5 ms)
+    ✓ payment.failed.schema.json is in sync with event-contract.ts (3 ms)
+    ✓ payment.mismatch.schema.json is in sync with event-contract.ts (11 ms)
+    ✓ payment.refunded.schema.json is in sync with event-contract.ts (2 ms)
+    ✓ payment.cancelled.schema.json is in sync with event-contract.ts (2 ms)
+    ✓ payment.expired.schema.json is in sync with event-contract.ts (2 ms)
+    ✓ payment.paid_after_cancel.schema.json is in sync with event-contract.ts (1 ms)
+  real payloads against the published schemas (BN-REQ-EVT-011)
+    ✓ payment.paid by card validates (9 ms)
+    ✓ payment.paid in cash (OXXO) validates (2 ms)
+    ✓ payment.failed with a decline code validates (2 ms)
+    ✓ payment.mismatch validates (1 ms)
+    ✓ payment.refunded, partial validates (1 ms)
+    ✓ payment.refunded, the rest validates (2 ms)
+    ✓ payment.cancelled (BN-REQ-PAY-004) validates (1 ms)
+    ✓ payment.expired, 3-D Secure abandoned (BN-REQ-REC-002) validates (1 ms)
+    ✓ payment.expired, cash reference past its expiry (BN-REQ-REC-003) validates (1 ms)
+    ✓ payment.paid_after_cancel (BN-REQ-PAY-004) validates (2 ms)
+    ✓ rejects a payload without its sequence or with a float amount (2 ms)
+PASS src/payments/payment-events.spec.ts
+  eventForTransition
+    ✓ PENDING → PAID emits payment.paid (3 ms)
+    ✓ PENDING_VERIFICATION → FAILED emits payment.failed
+    ✓ PENDING → AMOUNT_MISMATCH emits payment.mismatch
+    ✓ PAID → PARTIALLY_REFUNDED emits payment.refunded
+    ✓ PARTIALLY_REFUNDED → REFUNDED emits payment.refunded (1 ms)
+    ✓ PAID → REFUNDED emits payment.refunded
+    ✓ PENDING → CANCELLED emits payment.cancelled
+    ✓ FAILED → CANCELLED emits payment.cancelled
+    ✓ PENDING_VERIFICATION → EXPIRED emits payment.expired (1 ms)
+    ✓ emits nothing for a pending state or for no change
+  buildEventPayload (snapshot serialisation)
+    ✓ carries every field of the contract, in its wire format (2 ms)
+    ✓ marks a fully refunded order
+    ✓ carries no cardholder field of any kind (1 ms)
+  PaymentEvents.record (outbox write)
+    ✓ writes the snapshot with the time of the change and the next per-order sequence (1 ms)
+    ✓ gives a partial refund sequence + 1 and the refunded amount (BN-REQ-EVT-006)
+PASS src/payments/reconciliation/reconciliation.service.spec.ts
+  ReconciliationService (BN-TASK-016)
+    ✓ visits every active tenant: pending results first, then its leased orders (6 ms)
+    ✓ counts an order that fails and goes on with the next one (1 ms)
+    ✓ emits reconcile_checked, reconcile_corrected and reconcile_errors for the log-based metrics (1 ms)
+    ✓ does not overlap itself: a pass while one runs is skipped
+    ✓ starts no timer when disabled or with a zero interval (1 ms)
+    ✓ schedules itself, unref’d, while the instance lives (1 ms)
+  ProviderRateLimiter (BN-REQ-REC-004)
+    ✓ spaces calls of one tenant to the configured rate
+    ✓ does not wait when calls are already slower than the rate
+PASS src/common/rbac-audit.routes.spec.ts
+  RBAC route table (BN-REQ-SEC-001)
+    ✓ has no route with @RequirePermissions and no @RequireScopes (4 ms)
+    ✓ boots: every route declares a policy and a scope where it declares permissions (2 ms)
+    ✓ declares POST /internal/tick as an internal route with the OIDC guard (BN-TASK-016) (2 ms)
+    ✓ makes webhooks:read and webhooks:write grantable to API keys
+    ✓ requires a webhooks scope on every /t/webhooks route (2 ms)
+    ✓ requires users:write at method level on POST /t/users, so VIEWER is refused (BN-REQ-SEC-003)
+Test Suites: 9 passed, 9 total
+Tests:       93 passed, 93 total

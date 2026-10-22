@@ -41,6 +41,9 @@ IMAGE_BASE="${IMAGE_BASE:-$REGION-docker.pkg.dev/$PROJECT_ID/$AR_REPOSITORY/$PRE
 
 # Diferencias por entorno. Los valores por defecto son los de preproducción;
 # producción está en §11.2 y se pasa explícitamente al ejecutar el script.
+# Los flags de runtime (instancias, CPU, ingress, egress, concurrencia, timeout)
+# los reaplica cada despliegue desde .github/cloudrun/flags.json; lo que se pase
+# aquí solo dura hasta el primer release, y drift-check.yml avisa si difiere.
 INGRESS="${INGRESS:-all}"
 # Sin `--allow-unauthenticated` por defecto, ni en staging. La URL `run.app`
 # es pública, así que permitir acceso anónimo deja la API de preproducción
@@ -65,9 +68,12 @@ CORS_ORIGINS="${CORS_ORIGINS:-http://localhost:3000}"
 # Cliente → Cloud Run directo: un proxy, no dos. Con el balanceador global de
 # §13.2 serían 2 (§11.4).
 TRUST_PROXY_HOPS="${TRUST_PROXY_HOPS:-1}"
-# Staging no dispara webhooks: una versión sin validar no llama a sistemas de
-# terceros, ni de prueba.
-OUTBOUND_WEBHOOK_ENABLED="${OUTBOUND_WEBHOOK_ENABLED:-false}"
+# Entregas encendidas por defecto (BN-REQ-EVT-003): un servicio que acepta
+# suscripciones y no entrega es peor que uno que falla, porque nadie lo nota.
+# Ventana de reintentos de 24 h y 8 entregas concurrentes por instancia.
+OUTBOUND_WEBHOOK_ENABLED="${OUTBOUND_WEBHOOK_ENABLED:-true}"
+OUTBOUND_WEBHOOK_MAX_AGE_HOURS="${OUTBOUND_WEBHOOK_MAX_AGE_HOURS:-24}"
+OUTBOUND_WEBHOOK_CONCURRENCY="${OUTBOUND_WEBHOOK_CONCURRENCY:-8}"
 
 RUNTIME_SA="${RUNTIME_SA:-${PREFIX}-runtime@${PROJECT_ID}.iam.gserviceaccount.com}"
 MIGRATOR_SA="${MIGRATOR_SA:-${PREFIX}-migrator@${PROJECT_ID}.iam.gserviceaccount.com}"
@@ -114,6 +120,7 @@ RUN_JOB=(
   --network="$NETWORK" --subnet="$SUBNET" --vpc-egress=all-traffic
   --cpu=1 --memory=512Mi --task-timeout=900s
   --max-retries=0 --tasks=1 --parallelism=1
+  --command=npm "--args=run,db:migrate:all"
   --set-env-vars="NODE_ENV=production,LOG_LEVEL=log,PII_LOG_REDACTION=true"
   --set-secrets="CONTROL_PLANE_DATABASE_URL_UNPOOLED=control-plane-db-url-unpooled:latest"
 )
@@ -151,7 +158,7 @@ fi
 # compute de Neon despertándose, eso es un bucle de reinicios (§11.3).
 RUN_SERVICE=(
   gcloud run deploy "$SERVICE" "${COMMON[@]}"
-  --set-env-vars="^@^NODE_ENV=production@API_PREFIX=api/v1@TRUST_PROXY_HOPS=$TRUST_PROXY_HOPS@DOCS_ENABLED=$DOCS_ENABLED@PII_LOG_REDACTION=true@LOG_LEVEL=log@DATABASE_POOL_MAX=10@DATABASE_CONNECTION_TIMEOUT_MS=15000@DATABASE_STATEMENT_TIMEOUT_MS=15000@CORS_ORIGINS=$CORS_ORIGINS@OUTBOUND_WEBHOOK_ENABLED=$OUTBOUND_WEBHOOK_ENABLED"
+  --set-env-vars="^@^NODE_ENV=production@API_PREFIX=api/v1@TRUST_PROXY_HOPS=$TRUST_PROXY_HOPS@DOCS_ENABLED=$DOCS_ENABLED@PII_LOG_REDACTION=true@LOG_LEVEL=log@DATABASE_POOL_MAX=10@DATABASE_CONNECTION_TIMEOUT_MS=15000@DATABASE_STATEMENT_TIMEOUT_MS=15000@CORS_ORIGINS=$CORS_ORIGINS@OUTBOUND_WEBHOOK_ENABLED=$OUTBOUND_WEBHOOK_ENABLED@OUTBOUND_WEBHOOK_MAX_AGE_HOURS=$OUTBOUND_WEBHOOK_MAX_AGE_HOURS@OUTBOUND_WEBHOOK_CONCURRENCY=$OUTBOUND_WEBHOOK_CONCURRENCY"
   --set-secrets="CONTROL_PLANE_DATABASE_URL=control-plane-db-url:latest,TENANT_PLANE_DATABASE_URL=tenant-plane-db-url:latest,JWT_ACCESS_SECRET=jwt-access-secret:latest,JWT_REFRESH_SECRET=jwt-refresh-secret:latest,PII_HMAC_KEY=pii-hmac-key:1,PII_ENCRYPTION_KEY=pii-encryption-key:1,NETPAY_ENCRYPTION_KEY=netpay-encryption-key:1,DOCS_BASIC_AUTH_PASSWORD=docs-basic-auth-password:latest"
 )
 run "${RUN_SERVICE[@]}"

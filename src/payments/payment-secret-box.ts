@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID, createHash } from 'node:crypto';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { Keyring } from '../pii/keyring';
 
 /**
  * Encryption for payment credentials.
@@ -10,57 +11,64 @@ import { createCipheriv, createDecipheriv, randomBytes, randomUUID, createHash }
  * into it would couple two unrelated operations.
  *
  * Format, mirroring the PII service so the codebase stays consistent:
- * `iv (12 bytes) || authTag (16 bytes) || ciphertext`, base64url encoded.
+ * `v<n>:` + base64url(`iv (12 bytes) || authTag (16 bytes) || ciphertext`), where
+ * `n` is the {@link Keyring} version (BN-REQ-SEC-007). Values written before the
+ * keyring have no prefix and are read with `NETPAY_ENCRYPTION_KEY`.
  */
 export class PaymentSecretBox {
-  private readonly key: Buffer;
+  /** Versioned payment data keys. */
+  readonly keyring: Keyring;
 
   /**
-   * @param base64Key Base64 encoded key of exactly 32 bytes.
+   * @param keys Base64 encoded key of exactly 32 bytes (a one-key ring), or a
+   * versioned {@link Keyring} built from `NETPAY_KEYS_JSON`.
    * @throws {Error} When the key is not exactly 32 bytes.
    */
-  constructor(base64Key: string) {
-    this.key = Buffer.from(base64Key, 'base64');
-    if (this.key.length !== 32) {
-      throw new Error('Payment encryption key must decode to exactly 32 bytes.');
+  constructor(keys: string | Keyring) {
+    if (typeof keys === 'string') {
+      try {
+        this.keyring = Keyring.single(keys);
+      } catch {
+        throw new Error('Payment encryption key must decode to exactly 32 bytes.');
+      }
+    } else {
+      this.keyring = keys;
     }
   }
 
   /**
-   * Encrypts a secret for storage.
+   * Builds the box from configuration.
    *
-   * @param plaintext Secret, e.g. `sk_netpay_…`.
-   * @param aad Additional authenticated data binding the value to its context.
-   * @returns base64url ciphertext.
+   * @param legacyBase64Key `NETPAY_ENCRYPTION_KEY`: the one-key ring when no
+   * keyring JSON is set, and the reader of unprefixed values either way.
+   * @param keysJson `NETPAY_KEYS_JSON`, or `null`.
+   * @returns The secret box.
    */
-  encrypt(plaintext: string, aad: string): string {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', this.key, iv);
-    cipher.setAAD(Buffer.from(aad, 'utf8'));
-    const body = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-    return Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64url');
+  static fromConfig(legacyBase64Key: string, keysJson: string | null): PaymentSecretBox {
+    return new PaymentSecretBox(keysJson ? Keyring.fromJson(keysJson, legacyBase64Key) : legacyBase64Key);
   }
 
   /**
-   * Decrypts a stored secret.
+   * Encrypts a secret for storage with the current key.
    *
-   * @param ciphertext base64url ciphertext produced by {@link encrypt}.
+   * @param plaintext Secret, e.g. `sk_netpay_…`.
+   * @param aad Additional authenticated data binding the value to its context.
+   * @returns Versioned ciphertext.
+   */
+  encrypt(plaintext: string, aad: string): string {
+    return this.keyring.encrypt(plaintext, aad);
+  }
+
+  /**
+   * Decrypts a stored secret written by any key in the ring, or a legacy value.
+   *
+   * @param ciphertext Ciphertext produced by {@link encrypt}.
    * @param aad Must match the value used when encrypting.
    * @returns The plaintext secret.
    * @throws {Error} When the ciphertext or AAD is wrong.
    */
   decrypt(ciphertext: string, aad: string): string {
-    const raw = Buffer.from(ciphertext, 'base64url');
-    if (raw.length < 28) {
-      throw new Error('Ciphertext is too short to be valid.');
-    }
-    const iv = raw.subarray(0, 12);
-    const tag = raw.subarray(12, 28);
-    const body = raw.subarray(28);
-    const decipher = createDecipheriv('aes-256-gcm', this.key, iv);
-    decipher.setAAD(Buffer.from(aad, 'utf8'));
-    decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(body), decipher.final()]).toString('utf8');
+    return this.keyring.decrypt(ciphertext, aad);
   }
 
   /**

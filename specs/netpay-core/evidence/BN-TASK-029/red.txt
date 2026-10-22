@@ -1,0 +1,99 @@
+# BN-TASK-029 red — before fix (unit: rbac-audit.service.spec + rbac-audit.routes.spec)
+(node:97871) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/common/rbac-audit.service.spec.ts
+  ● RbacAuditService › refuses to start when a route declares @RequirePermissions without @RequireScopes (BN-REQ-SEC-001)
+
+    TypeError: service.findUnscopedPermissionRoutes is not a function
+
+      177 |
+      178 |     const service = auditOf(WebhooksController);
+    > 179 |     expect(service.findUnscopedPermissionRoutes()).toEqual(['WebhooksController.create POST /t/webhooks']);
+          |                    ^
+      180 |     expect(() => service.onApplicationBootstrap()).toThrow(/@RequirePermissions without @RequireScopes/);
+      181 |     expect(() => service.onApplicationBootstrap()).toThrow(/WebhooksController.create POST \/t\/webhooks/);
+      182 |   });
+
+      at Object.<anonymous> (src/common/rbac-audit.service.spec.ts:179:20)
+
+  ● RbacAuditService › applies the scope rule to class-level permissions too
+
+    TypeError: auditOf(...).findUnscopedPermissionRoutes is not a function
+
+      196 |     Reflect.defineMetadata('__controller__', true, UsersController);
+      197 |
+    > 198 |     expect(auditOf(UsersController).findUnscopedPermissionRoutes()).toEqual(['UsersController.me GET /t/users/me']);
+          |                                     ^
+      199 |   });
+      200 |
+      201 |   it('reports every offending route, not just the first', () => {
+
+      at Object.<anonymous> (src/common/rbac-audit.service.spec.ts:198:37)
+
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 10 passed, 12 total
+Snapshots:   0 total
+Time:        2.191 s
+Ran all test suites matching src/common/rbac-audit.service.spec.ts.
+
+=== rbac-audit.routes.spec.ts (real route table) ===
+      - OutboundWebhookController.setStatus POST /t/webhooks/:id/status
+      - OutboundWebhookController.deliveries GET /t/webhooks/:id/deliveries
+      - OutboundWebhookController.replay POST /t/webhooks/deliveries/:deliveryId/replay
+      - TenantUsersController.ownEmail GET /t/users/me/email
+    Fix each with @RequireScopes(...) naming the scope an API key must hold."
+
+          100 |     const unscoped = routes.filter((r) => r.unscopedPermissions);
+          101 |     if (unscoped.length > 0) {
+        > 102 |       throw new Error(
+              |             ^
+          103 |         'RBAC policy audit failed: the following routes declare @RequirePermissions without @RequireScopes.\n' +
+          104 |           'Permissions only bind human sessions; without a scope every API key of the tenant passes.\n' +
+          105 |           `${unscoped.map((v) => `  - ${v.description}`).join('\n')}\n` +
+
+      at RbacAuditService.onApplicationBootstrap (src/common/rbac-audit.service.ts:102:13)
+      at src/common/rbac-audit.routes.spec.ts:60:26
+      at Object.<anonymous> (node_modules/expect/build/index.js:1824:9)
+      at Object.throwingMatcher [as toThrow] (node_modules/expect/build/index.js:2235:93)
+      at Object.<anonymous> (src/common/rbac-audit.routes.spec.ts:60:56)
+      at Object.<anonymous> (src/common/rbac-audit.routes.spec.ts:60:56)
+
+  ● RBAC route table (BN-REQ-SEC-001) › makes webhooks:read and webhooks:write grantable to API keys
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: ArrayContaining ["webhooks:read", "webhooks:write"]
+    Received: ["projects:read", "projects:write", "users:read", "users:write", "audit:read", "payments:read", "payments:write", "payments:refund", "admin:*"]
+
+      62 |
+      63 |   it('makes webhooks:read and webhooks:write grantable to API keys', () => {
+    > 64 |     expect(GRANTABLE_SCOPES).toEqual(expect.arrayContaining(['webhooks:read', 'webhooks:write']));
+         |                              ^
+      65 |   });
+      66 |
+      67 |   it('requires a webhooks scope on every /t/webhooks route', () => {
+
+      at Object.<anonymous> (src/common/rbac-audit.routes.spec.ts:64:30)
+
+  ● RBAC route table (BN-REQ-SEC-001) › requires a webhooks scope on every /t/webhooks route
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: undefined
+
+      74 |     for (const handler of handlers) {
+      75 |       const scopes = Reflect.getMetadata(SCOPES_KEY, handler) as string[] | undefined;
+    > 76 |       expect(scopes?.every((s) => s === 'webhooks:read' || s === 'webhooks:write')).toBe(true);
+         |                                                                                     ^
+      77 |     }
+      78 |   });
+      79 | });
+
+      at Object.<anonymous> (src/common/rbac-audit.routes.spec.ts:76:85)
+
+Test Suites: 1 failed, 1 total
+Tests:       4 failed, 4 total
+Snapshots:   0 total
+Time:        2.542 s
+Ran all test suites matching src/common/rbac-audit.routes.spec.ts.

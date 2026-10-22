@@ -1,0 +1,46 @@
+# Coverage of outbound-webhook.service.ts / controller — 2026-10-21T18:35:40Z
+
+> netpay-api@1.0.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js src/payments/outbound src/payments/http.transport.spec.ts src/health --coverage --collectCoverageFrom=src/payments/outbound/**/*.ts --collectCoverageFrom=src/payments/http.transport.ts --collectCoverageFrom=src/health/**/*.ts --coverageReporters=text --coverageDirectory=/private/tmp/claude-501/-Users-carlosalexisgalavizrosas-Documents-tupla-studio-parlo/3a072167-5746-46e1-b169-94825e6c1256/scratchpad/cov
+
+[33m[Nest] 30267  - [39m10/21/2026, 11:35:48 AM [33m   WARN[39m [38;5;3m[HealthService] [39m[33mHealth probe failed: tenant plane unreachable[39m
+[33m[Nest] 30267  - [39m10/21/2026, 11:35:48 AM [33m   WARN[39m [38;5;3m[HealthService] [39m[33mHealth probe failed: control plane unreachable[39m
+[33m[Nest] 30267  - [39m10/21/2026, 11:35:48 AM [33m   WARN[39m [38;5;3m[HealthService] [39m[33mHealth probe failed: connect ECONNREFUSED 10.1.2.3:5432: database "mtb_prod" user "mtb_control" password authentication failed for tenant_acme_45fd71af[39m
+[33m[Nest] 30267  - [39m10/21/2026, 11:35:48 AM [33m   WARN[39m [38;5;3m[HealthService] [39m[33mHealth probe failed: down[39m
+(node:30268) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:30267) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:30264) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:30263) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:30266) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:30265) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:30262) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+---------------------------------|---------|----------|---------|---------|-------------------------------------------------------------
+File                             | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s                                           
+---------------------------------|---------|----------|---------|---------|-------------------------------------------------------------
+All files                        |   88.03 |    79.09 |   89.14 |   87.83 |                                                             
+ health                          |    91.3 |     90.9 |   84.21 |    92.3 |                                                             
+  health.controller.ts           |     100 |      100 |     100 |     100 |                                                             
+  health.module.ts               |       0 |      100 |       0 |       0 | 30-39                                                       
+  health.service.ts              |   94.64 |     90.9 |   85.71 |   94.44 | 130,153,218                                                 
+ payments                        |   76.56 |    60.71 |   72.22 |   76.27 |                                                             
+  http.transport.ts              |   76.56 |    60.71 |   72.22 |   76.27 | 29,87-94,110-111,152,184-185,222-223                        
+ payments/outbound               |   89.22 |    80.07 |   93.47 |    88.8 |                                                             
+  outbound-dispatcher.service.ts |   84.65 |    77.58 |   85.71 |   84.23 | 151-164,195,205-206,253,273,286,437,474,507,716,772-786,791 
+  outbound-webhook.controller.ts |     100 |      100 |     100 |     100 |                                                             
+  outbound-webhook.service.ts    |     100 |      100 |     100 |     100 |                                                             
+  signature.ts                   |     100 |      100 |     100 |     100 |                                                             
+  url-guard.ts                   |   87.12 |    77.19 |   94.11 |   86.32 | 129,140,198,206,293,333,338,342,371,388-396                 
+---------------------------------|---------|----------|---------|---------|-------------------------------------------------------------
+
+Test Suites: 9 passed, 9 total
+Tests:       136 passed, 136 total
+Snapshots:   0 total
+Time:        11.708 s
+Ran all test suites matching src/payments/outbound|src/payments/http.transport.spec.ts|src/health.
