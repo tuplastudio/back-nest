@@ -188,6 +188,7 @@ jobs:
           {
             echo "PII_HMAC_KEY=$(openssl rand -base64 24)"
             echo "PII_ENCRYPTION_KEY=$(openssl rand -base64 32)"
+            echo "NETPAY_ENCRYPTION_KEY=$(openssl rand -base64 32)"
             echo "JWT_ACCESS_SECRET=$(openssl rand -base64 32)"
             echo "JWT_REFRESH_SECRET=$(openssl rand -base64 32)"
             echo "DOCS_BASIC_AUTH_PASSWORD=$(openssl rand -base64 16)"
@@ -259,11 +260,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # `version`: el valor por defecto de trivy-action v0.33.1 (v0.65.0) ya no
+      # existe como release en GitHub y la instalación falla; se fija una publicada.
       - name: Escanear dependencias
         id: trivy_fs
         continue-on-error: true
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
         with:
+          version: v0.76.1
           scan-type: fs
           scan-ref: .
           severity: HIGH,CRITICAL
@@ -276,6 +280,7 @@ jobs:
         if: steps.trivy_fs.outcome == 'failure'
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
         with:
+          version: v0.76.1
           scan-type: fs
           scan-ref: .
           severity: HIGH,CRITICAL
@@ -303,6 +308,7 @@ jobs:
         continue-on-error: true
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
         with:
+          version: v0.76.1
           scan-type: image
           image-ref: netpay-api:ci-${{ github.sha }}
           severity: HIGH,CRITICAL
@@ -315,6 +321,7 @@ jobs:
         if: steps.trivy_image.outcome == 'failure'
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
         with:
+          version: v0.76.1
           scan-type: image
           image-ref: netpay-api:ci-${{ github.sha }}
           severity: HIGH,CRITICAL
