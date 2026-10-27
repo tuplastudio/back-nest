@@ -9,6 +9,15 @@ import type { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import type { RequestContextService } from '../tenancy/request-context.service';
 import type { RecordEventInput } from './payment-events';
 import type { AuditEntry, AuditLogService } from '../audit/audit-log.service';
+import type { PaymentQuickLinksService } from './payment-quick-links.service';
+
+const quickLinks = {
+  enabled: () => false,
+  newCode: () => 'ABCDEF',
+  returnUrls: () => ({ successUrl: '', cancelUrl: '' }),
+  register: () => Promise.resolve({ code: 'ABCDEF', url: '' }),
+  findForOrder: () => Promise.resolve(null),
+} as unknown as PaymentQuickLinksService;
 
 /**
  * OXXO Pay cash references, hosted cash, and partial refunds. The tenant client
@@ -148,7 +157,15 @@ function fixture(rows: Record<string, unknown>[]) {
     },
   } as unknown as AuditLogService;
   return {
-    service: new PaymentOrdersService(tenantPrisma, requestContext, config, netpay, events, audit),
+    service: new PaymentOrdersService(
+      tenantPrisma,
+      requestContext,
+      config,
+      netpay,
+      events,
+      audit,
+      quickLinks,
+    ),
     writes,
     created,
     emitted,

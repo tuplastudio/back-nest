@@ -8,6 +8,15 @@ import type { PaymentEvents, RecordEventInput } from './payment-events';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import type { RequestContextService } from '../tenancy/request-context.service';
 import type { AuditEntry, AuditLogService } from '../audit/audit-log.service';
+import type { PaymentQuickLinksService } from './payment-quick-links.service';
+
+const quickLinks = {
+  enabled: () => false,
+  newCode: () => 'ABCDEF',
+  returnUrls: () => ({ successUrl: '', cancelUrl: '' }),
+  register: () => Promise.resolve({ code: 'ABCDEF', url: '' }),
+  findForOrder: () => Promise.resolve(null),
+} as unknown as PaymentQuickLinksService;
 
 /**
  * Order lifecycle added in the last wave:
@@ -149,7 +158,15 @@ function fixture(
       return Promise.resolve();
     },
   } as unknown as AuditLogService;
-  const service = new PaymentOrdersService(tenantPrisma, requestContext, config, netpay, events, audit);
+  const service = new PaymentOrdersService(
+    tenantPrisma,
+    requestContext,
+    config,
+    netpay,
+    events,
+    audit,
+    quickLinks,
+  );
   return { service, rows, emitted, audits, claims, findMany, configCalls, createCheckoutSession };
 }
 

@@ -166,6 +166,14 @@ export class CreatePaymentOrderDto {
   @IsInt()
   @Min(3)
   installments?: number;
+
+  /**
+   * Create a public quick link (`QUICK_LINK_BASE_URL/<code>`) for this order and point the
+   * checkout's return URLs at it. Hosted checkout only; overrides successUrl/cancelUrl.
+   */
+  @IsOptional()
+  @IsBoolean()
+  quickLink?: boolean;
 }
 
 /** Body for storing a buyer's card with the provider. */
@@ -522,6 +530,7 @@ export class PaymentOrdersController {
       paymentMethods: body.paymentMethods,
       buyer: body.buyer,
       expirationDays: body.expirationDays,
+      quickLink: body.quickLink,
     });
   }
 

@@ -703,7 +703,7 @@ COMMON=(
   --concurrency=15 --cpu=1 --memory=512Mi --timeout=60 --no-cpu-throttling
   --startup-probe="httpGet.path=/health/live,initialDelaySeconds=0,periodSeconds=2,timeoutSeconds=2,failureThreshold=30"
   --liveness-probe="httpGet.path=/health/live,periodSeconds=30,timeoutSeconds=3,failureThreshold=3"
-  --set-env-vars="^@^NODE_ENV=production@API_PREFIX=api/v1@API_BASE_DOMAIN=netpay.tupla.dev@CORS_ORIGINS=https://app.tupla.dev@TRUST_PROXY_HOPS=2@DOCS_ENABLED=false@PII_LOG_REDACTION=true@LOG_LEVEL=log@DATABASE_POOL_MAX=10@DATABASE_CONNECTION_TIMEOUT_MS=15000@DATABASE_STATEMENT_TIMEOUT_MS=15000@PAYMENT_REDIRECT_URL=https://app.tupla.dev/payments/return@PAYMENT_CANCEL_URL=https://app.tupla.dev/payments/cancelled"
+  --set-env-vars="^@^NODE_ENV=production@API_PREFIX=api/v1@API_BASE_DOMAIN=netpay.tupla.dev@CORS_ORIGINS=https://app.tupla.dev@TRUST_PROXY_HOPS=2@DOCS_ENABLED=false@PII_LOG_REDACTION=true@LOG_LEVEL=log@DATABASE_POOL_MAX=10@DATABASE_CONNECTION_TIMEOUT_MS=15000@DATABASE_STATEMENT_TIMEOUT_MS=15000@PAYMENT_REDIRECT_URL=https://app.tupla.dev/payments/return@PAYMENT_CANCEL_URL=https://app.tupla.dev/payments/cancelled@QUICK_LINK_BASE_URL=https://vondi.tupla.dev/l"
   --set-secrets="CONTROL_PLANE_DATABASE_URL=control-plane-db-url:latest,TENANT_PLANE_DATABASE_URL=tenant-plane-db-url:latest,JWT_ACCESS_SECRET=jwt-access-secret:latest,JWT_REFRESH_SECRET=jwt-refresh-secret:latest,PII_HMAC_KEY=pii-hmac-key:latest,PII_ENCRYPTION_KEY=pii-encryption-key:latest,NETPAY_ENCRYPTION_KEY=netpay-encryption-key:latest"
 )
 
@@ -1709,6 +1709,8 @@ THROTTLE_TTL=60s
 API_KEY_PREFIX=mtb
 API_KEY_DEFAULT_TTL_DAYS=90
 PAYMENT_REDIRECT_URL=https://app.tupla.dev/payments/return
+# Quick links de cobro: base pública (el código se agrega al final: https://vondi.tupla.dev/l/K7P3QX). Sin ella, `quickLink: true` crea la orden sin link.
+QUICK_LINK_BASE_URL=https://vondi.tupla.dev/l
 PAYMENT_CANCEL_URL=https://app.tupla.dev/payments/cancelled
 OUTBOUND_WEBHOOK_ENABLED=true              # false en el canario
 OUTBOUND_WEBHOOK_REQUIRE_HTTPS=true

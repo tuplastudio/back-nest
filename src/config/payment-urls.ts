@@ -13,6 +13,8 @@ export interface PaymentUrls {
   readonly redirectUrl: string;
   /** Return URL after the buyer abandons the checkout. */
   readonly cancelUrl: string;
+  /** Public base of payment quick links (`https://vondi.tupla.dev/l`); null disables them. */
+  readonly quickLinkBaseUrl: string | null;
 }
 
 /**
@@ -22,6 +24,11 @@ export interface PaymentUrls {
 export const paymentUrlFields = {
   PAYMENT_REDIRECT_URL: z.string().url('PAYMENT_REDIRECT_URL must be an absolute URL.').optional(),
   PAYMENT_CANCEL_URL: z.string().url('PAYMENT_CANCEL_URL must be an absolute URL.').optional(),
+  QUICK_LINK_BASE_URL: z
+    .string()
+    .url('QUICK_LINK_BASE_URL must be an absolute https URL.')
+    .refine((value) => value.startsWith('https://'), { message: 'QUICK_LINK_BASE_URL must use https.' })
+    .optional(),
 };
 
 let current: PaymentUrls | null = null;
@@ -68,6 +75,7 @@ export function paymentUrls(): PaymentUrls {
   return {
     redirectUrl: parsed.data.PAYMENT_REDIRECT_URL ?? DEV_PAYMENT_URL_FALLBACK,
     cancelUrl: parsed.data.PAYMENT_CANCEL_URL ?? DEV_PAYMENT_URL_FALLBACK,
+    quickLinkBaseUrl: parsed.data.QUICK_LINK_BASE_URL?.replace(/\/+$/, '') ?? null,
   };
 }
 

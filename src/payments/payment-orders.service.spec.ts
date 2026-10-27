@@ -10,6 +10,15 @@ import type { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import type { RequestContextService } from '../tenancy/request-context.service';
 import type { RecordEventInput } from './payment-events';
 import type { AuditEntry, AuditLogService } from '../audit/audit-log.service';
+import type { PaymentQuickLinksService } from './payment-quick-links.service';
+
+const quickLinks = {
+  enabled: () => false,
+  newCode: () => 'ABCDEF',
+  returnUrls: () => ({ successUrl: '', cancelUrl: '' }),
+  register: () => Promise.resolve({ code: 'ABCDEF', url: '' }),
+  findForOrder: () => Promise.resolve(null),
+} as unknown as PaymentQuickLinksService;
 
 const SCHEMA = 'tenant_acme_00000001';
 const TENANT_ID = '11111111-1111-4111-8111-111111111111';
@@ -263,7 +272,15 @@ function serviceOver(
   } as unknown as AuditLogService;
 
   return {
-    service: new PaymentOrdersService(tenantPrisma, requestContext, config, netpay, events, audit),
+    service: new PaymentOrdersService(
+      tenantPrisma,
+      requestContext,
+      config,
+      netpay,
+      events,
+      audit,
+      quickLinks,
+    ),
     attempts,
     pending,
     audits,

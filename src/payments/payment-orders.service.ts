@@ -38,6 +38,7 @@ import {
 import { quoteIdentifier } from '../prisma/identifiers';
 import { classifyDecline, type DeclineCode } from './decline-codes';
 import { AuditLogService } from '../audit/audit-log.service';
+import { PaymentQuickLinksService, type QuickLinkRef } from './payment-quick-links.service';
 import { auditActorOf } from '../audit/audit-actor';
 import { logPaymentStatusChange } from '../common/logging/payment-log-events';
 
@@ -88,6 +89,8 @@ export interface PaymentOrderView {
    * (BN-REQ-PAY-004). The status stays; the merchant refunds.
    */
   readonly paidAfterCancelAt: string | null;
+  /** Quick link público creado con la orden (`quickLink: true`); sólo en la respuesta de creación. */
+  readonly quickLink?: { readonly code: string; readonly url: string } | null;
   /** Charge attempts (BN-REQ-PAY-001), on `GET /t/payments/orders/:id` only. */
   readonly attempts?: { readonly count: number; readonly items: readonly PaymentAttemptView[] };
   readonly createdAt: string;
@@ -466,6 +469,7 @@ export class PaymentOrdersService {
     private readonly netpay: NetpayClient,
     private readonly events: PaymentEvents,
     private readonly audit: AuditLogService,
+    private readonly quickLinks: PaymentQuickLinksService,
   ) {}
 
   /**
@@ -496,6 +500,8 @@ export class PaymentOrdersService {
     buyer?: OxxoBuyer;
     /** Days the cash reference stays payable (1-30). Default 2. */
     expirationDays?: number;
+    /** Genera un quick link público (`QUICK_LINK_BASE_URL/<code>`) y fija a él las URLs de retorno. Sólo `hosted`. */
+    quickLink?: boolean;
   }): Promise<PaymentOrderView> {
     const amount = this.normaliseAmount(input.amount);
     if (amount === null) {
@@ -528,7 +534,25 @@ export class PaymentOrdersService {
     if (!allowedCurrencies.includes(currency)) {
       throw new CurrencyNotEnabledException(currency, allowedCurrencies);
     }
-    if (checkoutMode === 'hosted') {
+    if (input.quickLink === true && checkoutMode !== 'hosted') {
+      throw new ValidationException('A quick link needs the hosted checkout.');
+    }
+    if (input.quickLink === true && !this.quickLinks.enabled()) {
+      // Despliegue mixto: un cliente nuevo contra un entorno sin QUICK_LINK_BASE_URL sigue creando
+      // la orden (con el checkout alojado) y recibe `quickLink: null` en vez de un error.
+      this.logger.warn({
+        event: 'quick_link_disabled',
+        message:
+          'quickLink requested but QUICK_LINK_BASE_URL is not configured; creating the order without one',
+        tenantId: this.currentTenantId(),
+      });
+    }
+    // El quick link manda al comprador de vuelta a nuestro host, no al del tenant: no pasa por
+    // allowedReturnOrigins, y gana sobre successUrl/cancelUrl del cuerpo.
+    const quickLinkCode =
+      input.quickLink === true && this.quickLinks.enabled() ? this.quickLinks.newCode() : null;
+    const returnUrls = quickLinkCode === null ? null : this.quickLinks.returnUrls(quickLinkCode);
+    if (checkoutMode === 'hosted' && returnUrls === null) {
       // Where Netpay sends the buyer back is a redirect this system vouches for
       // (BN-REQ-PAY-007). The configured defaults are trusted; a caller's are not.
       for (const [field, url] of [
@@ -561,14 +585,15 @@ export class PaymentOrdersService {
 
     let amountToken: string | null = null;
     let hostedCheckoutUrl: string | null = null;
+    let quickLink: QuickLinkRef | null = null;
     let cashReference: { reference: NetpayOxxoReference; expiresAt: Date } | null = null;
     try {
       if (checkoutMode === 'hosted') {
         // Netpay hosts the payment page and answers with its URL. The merchant
         // reference sent is the order reference, which is unique, so a retry can
         // never clash with an earlier session.
-        const successUrl = input.successUrl ?? paymentUrls().redirectUrl;
-        const cancelUrl = input.cancelUrl ?? paymentUrls().cancelUrl;
+        const successUrl = returnUrls?.successUrl ?? input.successUrl ?? paymentUrls().redirectUrl;
+        const cancelUrl = returnUrls?.cancelUrl ?? input.cancelUrl ?? paymentUrls().cancelUrl;
         const session = await this.netpay.createCheckoutSession(config.environment, config.secretKey, {
           paymentMethodTypes:
             input.paymentMethods !== undefined && input.paymentMethods.length > 0
@@ -588,6 +613,15 @@ export class PaymentOrdersService {
           ...(cancelUrl === undefined ? {} : { cancelUrl }),
         });
         hostedCheckoutUrl = session.hostedCheckoutUrl;
+        if (quickLinkCode !== null && hostedCheckoutUrl !== null) {
+          quickLink = await this.quickLinks.register({
+            code: quickLinkCode,
+            tenantId,
+            schemaName: this.requestContext.requireTenant().schemaName,
+            orderId: order.id,
+            hostedCheckoutUrl,
+          });
+        }
         // The notification names the payment only by this id.
         await this.tenantPrisma.forCurrentTenantTransaction((client) =>
           client.paymentOrder.update({
@@ -681,6 +715,7 @@ export class PaymentOrdersService {
         amountToken,
         hostedCheckoutUrl,
       }),
+      quickLink,
     };
   }
 
@@ -715,8 +750,12 @@ export class PaymentOrdersService {
       // difference would be an existence oracle across tenants.
       throw new NotFoundException('The requested resource was not found.');
     }
+    const quickLink = this.quickLinks.enabled()
+      ? await this.quickLinks.findForOrder(this.currentTenantId(), id)
+      : null;
     return {
       ...this.toView(found.row),
+      quickLink,
       // What a consumer reconciles against (BN-REQ-REC-006): every attempt, in order.
       attempts: {
         count: found.attempts.length,

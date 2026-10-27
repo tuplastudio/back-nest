@@ -9,6 +9,16 @@ import { TenantSchemaNamingService } from '../src/tenancy/tenant-schema-naming.s
 import { RequestContextService } from '../src/tenancy/request-context.service';
 import { PaymentEvents } from '../src/payments/payment-events';
 import { PaymentOrdersService } from '../src/payments/payment-orders.service';
+import type { PaymentQuickLinksService } from '../src/payments/payment-quick-links.service';
+
+const quickLinks = {
+  enabled: () => false,
+  newCode: () => 'ABCDEF',
+  returnUrls: () => ({ successUrl: '', cancelUrl: '' }),
+  register: () => Promise.resolve({ code: 'ABCDEF', url: '' }),
+  findForOrder: () => Promise.resolve(null),
+} as unknown as PaymentQuickLinksService;
+
 import {
   ReconciliationService,
   type ReconcileOptions,
@@ -124,7 +134,15 @@ describe('reconciliation (BN-TASK-016, integration)', () => {
   } as unknown as ControlPlanePrismaService;
 
   const orders = () =>
-    new PaymentOrdersService(tenantPrisma, requestContext, paymentConfig, netpay, new PaymentEvents(), audit);
+    new PaymentOrdersService(
+      tenantPrisma,
+      requestContext,
+      paymentConfig,
+      netpay,
+      new PaymentEvents(),
+      audit,
+      quickLinks,
+    );
   const worker = (options: Partial<ReconcileOptions> = {}) =>
     new ReconciliationService(controlPlane, tenantPrisma, orders(), { ...OPTIONS, ...options });
 

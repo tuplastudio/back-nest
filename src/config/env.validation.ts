@@ -412,6 +412,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv = process.env): Record<string
   const paymentUrls = {
     redirectUrl: env.PAYMENT_REDIRECT_URL ?? DEV_PAYMENT_URL_FALLBACK,
     cancelUrl: env.PAYMENT_CANCEL_URL ?? DEV_PAYMENT_URL_FALLBACK,
+    quickLinkBaseUrl: env.QUICK_LINK_BASE_URL?.replace(/\/+$/, '') ?? null,
   };
   setPaymentUrls(paymentUrls);
 

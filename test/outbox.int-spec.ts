@@ -15,6 +15,15 @@ import {
   type RecordEventInput,
 } from '../src/payments/payment-events';
 import { PaymentOrdersService } from '../src/payments/payment-orders.service';
+import type { PaymentQuickLinksService } from '../src/payments/payment-quick-links.service';
+
+const quickLinks = {
+  enabled: () => false,
+  newCode: () => 'ABCDEF',
+  returnUrls: () => ({ successUrl: '', cancelUrl: '' }),
+  register: () => Promise.resolve({ code: 'ABCDEF', url: '' }),
+  findForOrder: () => Promise.resolve(null),
+} as unknown as PaymentQuickLinksService;
 import { PaymentSecretBox } from '../src/payments/payment-secret-box';
 import {
   OutboundDispatcher,
@@ -113,7 +122,7 @@ describe('payment event outbox (BN-TASK-004, integration)', () => {
   const audit = { record: () => Promise.resolve() } as unknown as AuditLogService;
 
   const service = (events: PaymentEvents = new PaymentEvents()) =>
-    new PaymentOrdersService(tenantPrisma, requestContext, paymentConfig, netpay, events, audit);
+    new PaymentOrdersService(tenantPrisma, requestContext, paymentConfig, netpay, events, audit, quickLinks);
 
   /** A fresh dispatcher: what a restarted process would build. */
   function dispatcher(received: Received[]): OutboundDispatcher {

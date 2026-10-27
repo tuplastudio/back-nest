@@ -537,3 +537,29 @@ model PlatformAdminRole {
   @@index([roleId])
   @@map("platform_admin_roles")
 }
+
+/// Quick link público de un cobro: código corto que el comprador abre desde WhatsApp, correo o
+/// la app sin sesión. Vive en el plano de control porque la ruta pública no conoce el tenant;
+/// el código resuelve el esquema y la orden. La URL de checkout se guarda aquí porque Netpay
+/// no permite recuperarla después de crear la sesión.
+model PaymentQuickLink {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Código corto (6 caracteres, sin O/0/I/1), único en toda la plataforma.
+  code String @unique @db.VarChar(12)
+
+  tenantId String @db.Uuid
+
+  schemaName String @db.VarChar(63)
+
+  /// Id de `payment_orders` en el esquema del tenant.
+  orderId String @db.Uuid
+
+  hostedCheckoutUrl String @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, orderId])
+  @@map("payment_quick_links")
+}

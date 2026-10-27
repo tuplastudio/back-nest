@@ -14,6 +14,16 @@ import {
   type RecordEventInput,
 } from '../src/payments/payment-events';
 import { PaymentOrdersService } from '../src/payments/payment-orders.service';
+import type { PaymentQuickLinksService } from '../src/payments/payment-quick-links.service';
+
+const quickLinks = {
+  enabled: () => false,
+  newCode: () => 'ABCDEF',
+  returnUrls: () => ({ successUrl: '', cancelUrl: '' }),
+  register: () => Promise.resolve({ code: 'ABCDEF', url: '' }),
+  findForOrder: () => Promise.resolve(null),
+} as unknown as PaymentQuickLinksService;
+
 import { NetpayTransportError, type NetpayClient } from '../src/payments/netpay.client';
 import { IdempotencyStore } from '../src/common/idempotency/idempotency.store';
 import { runTenantMigrations } from '../scripts/lib/tenant-migration-runner';
@@ -158,7 +168,7 @@ describe('payment recovery paths (BN-TASK-010/011/014/015, integration)', () => 
   const audit = { record: () => Promise.resolve() } as unknown as AuditLogService;
 
   const service = (events: PaymentEvents = new PaymentEvents()) =>
-    new PaymentOrdersService(tenantPrisma, requestContext, paymentConfig, netpay, events, audit);
+    new PaymentOrdersService(tenantPrisma, requestContext, paymentConfig, netpay, events, audit, quickLinks);
   const inTenant = <T>(fn: () => Promise<T>): Promise<T> => requestContext.run({ tenant }, fn);
 
   async function newOrder(): Promise<{ id: string; orderReference: string }> {

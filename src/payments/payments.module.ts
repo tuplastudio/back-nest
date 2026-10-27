@@ -10,6 +10,8 @@ import { PaymentConfigService } from './payment-config.service';
 import { PaymentOrdersService } from './payment-orders.service';
 import { PaymentEvents } from './payment-events';
 import { PaymentOrdersController } from './payment-orders.controller';
+import { PaymentQuickLinksController } from './payment-quick-links.controller';
+import { PaymentQuickLinksService } from './payment-quick-links.service';
 import { NetpayWebhookService } from './netpay-webhook.service';
 import { NetpayWebhookController } from './netpay-webhook.controller';
 import { UrlGuard } from './outbound/url-guard';
@@ -52,8 +54,14 @@ export const OUTBOUND_TRANSPORT = Symbol('OutboundTransport');
  */
 @Module({
   imports: [AuthModule],
-  controllers: [PaymentOrdersController, NetpayWebhookController, OutboundWebhookController],
+  controllers: [
+    PaymentOrdersController,
+    NetpayWebhookController,
+    OutboundWebhookController,
+    PaymentQuickLinksController,
+  ],
   providers: [
+    PaymentQuickLinksService,
     {
       provide: PaymentSecretBox,
       inject: [ConfigService],
