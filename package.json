@@ -103,5 +103,8 @@
   },
   "prisma": {
     "schema": "prisma/schema.prisma"
+  },
+  "overrides": {
+    "multer": "^2.5.0"
   }
 }

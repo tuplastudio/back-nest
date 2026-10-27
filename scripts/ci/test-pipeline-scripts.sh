@@ -63,13 +63,15 @@ describe() { # describe <minScale> <cpu-throttling|""> <ingress>
     }}}'
 }
 
-describe 1 false all >"$TMP/prod-ok.json"
-describe 0 "" all >"$TMP/prod-manual.json"
+# flags.json (decisión del dueño, 2026-10-21): producción escala a cero con CPU throttling.
+describe 0 true all >"$TMP/prod-ok.json"
+# Una revisión reaplicada a mano con min-instances 1 y sin throttling es deriva.
+describe 1 false all >"$TMP/prod-manual.json"
 
 flags() { bash "$ROOT/scripts/gcp/cloudrun-flags.sh" "$@"; }
 expect "drift: producción como se declaró" 0 flags check production "$TMP/prod-ok.json"
-expect "drift: revisión manual con min-instances 0 y throttling falla" 1 flags check production "$TMP/prod-manual.json"
-expect "args: producción lleva --no-cpu-throttling" 0 bash -c "bash '$ROOT/scripts/gcp/cloudrun-flags.sh' args production | grep -qx -- --no-cpu-throttling"
+expect "drift: revisión manual con min-instances 1 y sin throttling falla" 1 flags check production "$TMP/prod-manual.json"
+expect "args: producción lleva --cpu-throttling" 0 bash -c "bash '$ROOT/scripts/gcp/cloudrun-flags.sh' args production | grep -qx -- --cpu-throttling"
 expect "args: entorno desconocido" 2 flags args qa
 
 if [[ $FAILURES -ne 0 ]]; then
