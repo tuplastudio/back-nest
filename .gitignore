@@ -134,10 +134,6 @@ Desktop.ini
 *.sublime-workspace
 *.sublime-project
 
-# --- Generated documentation --------------------------------------------------
-# Regenerate with `node --import tsx src/docs/generate-openapi.ts`.
-docs/openapi.json
-
 # --- Docker -------------------------------------------------------------------
 # Only the compose file and the init SQL are source. Anything a build leaves
 # behind is not.

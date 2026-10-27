@@ -1,0 +1,6152 @@
+{
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/tenants/context": {
+      "get": {
+        "description": "Returns the tenant resolved from X-Tenant-Id, X-Tenant-Slug or the request subdomain, and which of those won. Returns `null` on control-plane routes that do not target a tenant.",
+        "operationId": "TenantsController_context",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "The resolved tenant and the header that resolved it."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Resolved tenant for this request",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants": {
+      "get": {
+        "description": "Tenants ordered by creation date, newest first. Soft-deleted tenants are excluded unless an explicit status filter includes them.",
+        "operationId": "TenantsController_list",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PROVISIONING",
+                "ACTIVE",
+                "SUSPENDED",
+                "DEPRECATED",
+                "DELETED"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "acme",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantListDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "List tenants",
+        "tags": [
+          "tenants"
+        ]
+      },
+      "post": {
+        "description": "Creates the registry row, provisions the dedicated PostgreSQL schema, applies tenant migrations and activates the tenant. If provisioning fails, the row is retained in PROVISIONING so the operation can be retried without duplicating the tenant.",
+        "operationId": "TenantsController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTenantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantDetailDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The slug or another field failed validation."
+          },
+          "403": {
+            "description": "The caller is not permitted to create tenants."
+          },
+          "409": {
+            "description": "The slug is already in use."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Create a tenant",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/stats": {
+      "get": {
+        "description": "Counts of tenants by status and active API keys.",
+        "operationId": "TenantsController_stats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantStatsDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Tenant statistics",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/{id}": {
+      "get": {
+        "description": "Returns one tenant, including the physical schema name for operator tooling.",
+        "operationId": "TenantsController_findOne",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No tenant with that id."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Get a tenant",
+        "tags": [
+          "tenants"
+        ]
+      },
+      "patch": {
+        "description": "Slug and schema name are immutable: changing them would repoint live subdomains and cached clients at different data.",
+        "operationId": "TenantsController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTenantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No tenant with that id."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Update a tenant",
+        "tags": [
+          "tenants"
+        ]
+      },
+      "delete": {
+        "description": "Soft deletion: data and schema are retained for the retention window. Use POST /tenants/:id/purge to drop the schema permanently.",
+        "operationId": "TenantsController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantDetailDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Delete a tenant",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/{id}/suspend": {
+      "post": {
+        "description": "Blocks all tenant traffic and revokes every API key in the same operation, so integrations lose access immediately rather than at key expiry.",
+        "operationId": "TenantsController_suspend",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuspendTenantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No tenant with that id."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Suspend a tenant",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/{id}/reactivate": {
+      "post": {
+        "description": "Returns a suspended tenant to ACTIVE.",
+        "operationId": "TenantsController_reactivate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantDetailDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Reactivate a tenant",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/{id}/migrate": {
+      "post": {
+        "description": "Applies tenant migrations newer than the tenant's recorded schema version. Idempotent.",
+        "operationId": "TenantsController_migrate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrateTenantDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Migrate a tenant schema",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/{id}/purge": {
+      "post": {
+        "description": "Irreversibly drops the tenant schema and all of its data. Requires the slug as an explicit confirmation.",
+        "operationId": "TenantsController_purge",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PurgeTenantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeResultDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The confirmation does not match the tenant slug."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Purge a tenant schema",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/api/v1/auth/sign-in": {
+      "post": {
+        "description": "Exchanges an e-mail and password for an access token and a rotating refresh token.\n\nFailures are deliberately indistinguishable: an unknown e-mail, a wrong password\nand a locked account all return `INVALID_CREDENTIALS` after roughly the same\namount of work, so the endpoint cannot be used to enumerate accounts.\n\nRepeated failures lock the account for `AUTH_LOCKOUT_DURATION`.",
+        "operationId": "AuthController_signIn",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials, or the account is locked."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sign in as a platform administrator",
+        "tags": [
+          "authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "description": "Rotates the refresh token. The presented token is revoked and marked as replaced.\n\nPresenting an already-rotated token means it leaked, so the entire rotation\nfamily is revoked and `TOKEN_REUSE_DETECTED` is returned.",
+        "operationId": "AuthController_refresh",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is unknown, expired or already revoked."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Refresh an administrator session",
+        "tags": [
+          "authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/sign-out": {
+      "post": {
+        "description": "Revokes the refresh token family associated with the presented token.",
+        "operationId": "AuthController_signOut",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session revoked."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sign out",
+        "tags": [
+          "authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "description": "Returns the principal attached to the request. Requires a valid access token.",
+        "operationId": "AuthController_session",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "The authenticated principal."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Inspect the current session",
+        "tags": [
+          "authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/enroll": {
+      "post": {
+        "description": "Returns a new secret; confirm it with a code.",
+        "operationId": "AuthController_enrollMfa",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaEnrollmentDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Start TOTP enrolment",
+        "tags": [
+          "authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/confirm": {
+      "post": {
+        "operationId": "AuthController_confirmMfa",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Confirm TOTP enrolment",
+        "tags": [
+          "authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/verify": {
+      "post": {
+        "operationId": "AuthController_verifyMfa",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponseDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Verify a second factor (sign-in completion and step-up)",
+        "tags": [
+          "authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/recovery-codes": {
+      "post": {
+        "operationId": "AuthController_regenerateRecoveryCodes",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Regenerate MFA recovery codes",
+        "tags": [
+          "authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/disable": {
+      "post": {
+        "operationId": "AuthController_disableMfa",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Disable the second factor",
+        "tags": [
+          "authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/change-password": {
+      "post": {
+        "operationId": "AuthController_changePassword",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponseDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Change the administrator password",
+        "tags": [
+          "authentication"
+        ]
+      }
+    },
+    "/api/v1/api-keys": {
+      "get": {
+        "description": "Returns metadata for the current tenant's keys. Secrets are never returned — only an Argon2id hash is stored, so the clear-text key exists only at creation and rotation time.",
+        "operationId": "ApiKeysController_list",
+        "parameters": [
+          {
+            "name": "includeRevoked",
+            "required": false,
+            "in": "query",
+            "description": "Include revoked and expired keys in the response.",
+            "schema": {
+              "example": "false",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyListDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key lacks the `admin:*` scope."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-id": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "List API keys",
+        "tags": [
+          "api-keys"
+        ]
+      },
+      "post": {
+        "description": "Issues a tenant-scoped machine credential and returns the clear-text secret\n**exactly once**. It cannot be retrieved later because only an Argon2id hash is\npersisted.\n\nKey format: `<prefix>_<publicPart>_<secretPart>`. The public part is indexed for\nO(1) lookup; the secret part carries 256 bits of entropy.",
+        "operationId": "ApiKeysController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreatedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload."
+          },
+          "409": {
+            "description": "An unsupported scope was requested."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-id": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Create an API key",
+        "tags": [
+          "api-keys"
+        ]
+      }
+    },
+    "/api/v1/api-keys/{id}/rotate": {
+      "post": {
+        "description": "Mints a new secret, revokes the previous one and links them for auditability. Both operations share a transaction, so a failure can never leave two active secrets for one logical key.",
+        "operationId": "ApiKeysController_rotate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreatedDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No key with that id belongs to this tenant."
+          },
+          "409": {
+            "description": "The key is not active."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-id": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Rotate an API key",
+        "tags": [
+          "api-keys"
+        ]
+      }
+    },
+    "/api/v1/api-keys/{id}": {
+      "delete": {
+        "description": "Revocation is immediate and irreversible. Rotate instead if the secret may only have been seen in transit.",
+        "operationId": "ApiKeysController_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No key with that id belongs to this tenant."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-id": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Revoke an API key",
+        "tags": [
+          "api-keys"
+        ]
+      }
+    },
+    "/api/v1/t/auth/sign-in": {
+      "post": {
+        "description": "Authenticates against the tenant resolved from X-Tenant-Id, X-Tenant-Slug or the request subdomain. The e-mail is matched through a keyed blind index, so no plaintext e-mail is queried.",
+        "operationId": "TenantAuthController_signIn",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantSignInDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantTokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials, inactive account or lockout."
+          },
+          "403": {
+            "description": "The tenant is not active, or could not be resolved."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sign in as a tenant member",
+        "tags": [
+          "tenant authentication"
+        ]
+      }
+    },
+    "/api/v1/t/auth/refresh": {
+      "post": {
+        "description": "Rotates the refresh token. Presenting an already-rotated token revokes the entire rotation family.",
+        "operationId": "TenantAuthController_refresh",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantRefreshTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantTokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is unknown, expired or already revoked."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Refresh a tenant session",
+        "tags": [
+          "tenant authentication"
+        ]
+      }
+    },
+    "/api/v1/t/auth/accept-invitation": {
+      "post": {
+        "description": "Activates an INVITED member with the password they choose. The token is single use: once accepted the member is no longer INVITED and the token is refused.",
+        "operationId": "TenantAuthController_acceptInvitation",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInvitationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "description": "The invitation is invalid, expired or already used."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Accept a member invitation",
+        "tags": [
+          "tenant authentication"
+        ]
+      }
+    },
+    "/api/v1/t/users": {
+      "get": {
+        "description": "Members of the current tenant only. E-mail addresses are returned masked.",
+        "operationId": "TenantUsersController_list",
+        "parameters": [
+          {
+            "name": "role",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "OWNER",
+                "ADMIN",
+                "MEMBER",
+                "VIEWER"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 25,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserListDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-slug": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "List tenant members",
+        "tags": [
+          "tenant users"
+        ]
+      },
+      "post": {
+        "description": "E-mail and phone are encrypted with AES-256-GCM before storage. Lookups use a keyed blind index, and responses expose only the masked e-mail. API keys may grant at most MEMBER and may not send a password: the member is created INVITED and the one-time invitation token is returned only in this response.",
+        "operationId": "TenantUsersController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedUserDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller may not grant the requested role."
+          },
+          "409": {
+            "description": "The e-mail is already registered in this tenant."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-slug": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Create a tenant member",
+        "tags": [
+          "tenant users"
+        ]
+      }
+    },
+    "/api/v1/t/users/me/email": {
+      "get": {
+        "description": "The only endpoint that returns a plaintext e-mail, and only to the principal that owns it. Everything else returns the masked form.",
+        "operationId": "TenantUsersController_ownEmail",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "email": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-slug": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Reveal the caller's own e-mail",
+        "tags": [
+          "tenant users"
+        ]
+      }
+    },
+    "/api/v1/t/users/{id}": {
+      "get": {
+        "operationId": "TenantUsersController_findOne",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No member with that id exists in this tenant."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-slug": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Get a tenant member",
+        "tags": [
+          "tenant users"
+        ]
+      }
+    },
+    "/api/v1/t/projects": {
+      "get": {
+        "description": "Soft-deleted projects are excluded. Pagination is cursor based.",
+        "operationId": "TenantProjectsController_list",
+        "parameters": [
+          {
+            "name": "ownerId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of projects."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-slug": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "List projects",
+        "tags": [
+          "tenant projects"
+        ]
+      },
+      "post": {
+        "description": "Member sessions own what they create; API keys must pass `ownerId`.",
+        "operationId": "TenantProjectsController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created project."
+          },
+          "409": {
+            "description": "The slug is already used in this tenant."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-slug": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Create a project",
+        "tags": [
+          "tenant projects"
+        ]
+      }
+    },
+    "/api/v1/t/projects/{id}": {
+      "get": {
+        "operationId": "TenantProjectsController_findOne",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project."
+          },
+          "404": {
+            "description": "No project with that id exists in this tenant."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-slug": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Get a project",
+        "tags": [
+          "tenant projects"
+        ]
+      },
+      "patch": {
+        "description": "Supply `expectedVersion` for optimistic concurrency control; a mismatch returns 409.",
+        "operationId": "TenantProjectsController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated project."
+          },
+          "409": {
+            "description": "Concurrent modification detected."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-slug": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Update a project",
+        "tags": [
+          "tenant projects"
+        ]
+      },
+      "delete": {
+        "description": "Soft delete: the row is retained with `deletedAt` set.",
+        "operationId": "TenantProjectsController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deleted project."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenant-slug": []
+          },
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Delete a project",
+        "tags": [
+          "tenant projects"
+        ]
+      }
+    },
+    "/api/v1/t/payments/orders": {
+      "post": {
+        "operationId": "PaymentOrdersController_createOrder",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional; 1-255 printable ASCII characters, a UUID is recommended. A repeat with the same key and body within 24 h gets the stored response (header Idempotency-Replayed: true) without calling Netpay. After a 5xx/504 the key stays in progress for 10 min. See docs/ERRORS.md.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePaymentOrderDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created order."
+          },
+          "409": {
+            "description": "IDEMPOTENCY_IN_PROGRESS (with Retry-After) while the first request with this key runs; CONFLICT / ORDER_STATE_CONFLICT when the order does not allow the operation."
+          },
+          "422": {
+            "description": "IDEMPOTENCY_KEY_REUSED: the key was already used with a different body."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Create a payment order and return a checkout URL",
+        "tags": [
+          "payments"
+        ]
+      },
+      "get": {
+        "description": "Answers `{ items, nextCursor }`; pass `nextCursor` back as `cursor` until it is null. With `updatedSince` the orders come oldest change first (an incremental sync: keep the last `updatedAt` seen); without it, newest first. Filters: `status` (comma-separated), `merchantReferenceCode`. `limit` 1-100, default 25.",
+        "operationId": "PaymentOrdersController_listOrders",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "One page of orders and the cursor of the next one."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "List payment orders (cursor pagination)",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/orders/{id}": {
+      "get": {
+        "description": "Includes what a consumer reconciles against (BN-REQ-REC-006): `verifiedAmount`, `netpayTransactionId`, `refundedAmount`, `failureCode`, `paidAfterCancelAt` and `attempts` (`{ count, items }`).",
+        "operationId": "PaymentOrdersController_getOrder",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Read one payment order",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/orders/{id}/cancel": {
+      "post": {
+        "description": "From PENDING, PENDING_VERIFICATION or FAILED → CANCELLED, emitting `payment.cancelled`. A bound charge is checked with Netpay first: 409 `ORDER_STATE_CONFLICT` (with the PAID order) if it was charged, or while Netpay has not decided; CHARGE_UNKNOWN is refused until verified. Netpay cannot expire a hosted session or a cash reference, so a payment that still arrives keeps the order CANCELLED and emits `payment.paid_after_cancel` for the consumer to refund. Repeating it on a CANCELLED order answers the order.",
+        "operationId": "PaymentOrdersController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Cancel an unpaid payment order",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/orders/{id}/verify": {
+      "post": {
+        "operationId": "PaymentOrdersController_verify",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyOrderDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Verify an order against Netpay and settle it",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/orders/{id}/charge": {
+      "post": {
+        "operationId": "PaymentOrdersController_charge",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional; 1-255 printable ASCII characters, a UUID is recommended. A repeat with the same key and body within 24 h gets the stored response (header Idempotency-Replayed: true) without calling Netpay. After a 5xx/504 the key stays in progress for 10 min. See docs/ERRORS.md.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChargeTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "409": {
+            "description": "IDEMPOTENCY_IN_PROGRESS (with Retry-After) while the first request with this key runs; CONFLICT / ORDER_STATE_CONFLICT when the order does not allow the operation."
+          },
+          "422": {
+            "description": "IDEMPOTENCY_KEY_REUSED: the key was already used with a different body."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Charge a tokenized card against an order",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/orders/{id}/confirm": {
+      "post": {
+        "operationId": "PaymentOrdersController_confirm",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional; 1-255 printable ASCII characters, a UUID is recommended. A repeat with the same key and body within 24 h gets the stored response (header Idempotency-Replayed: true) without calling Netpay. After a 5xx/504 the key stays in progress for 10 min. See docs/ERRORS.md.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmChargeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "409": {
+            "description": "IDEMPOTENCY_IN_PROGRESS (with Retry-After) while the first request with this key runs; CONFLICT / ORDER_STATE_CONFLICT when the order does not allow the operation."
+          },
+          "422": {
+            "description": "IDEMPOTENCY_KEY_REUSED: the key was already used with a different body."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Confirm a charge after 3-D Secure",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/cards": {
+      "post": {
+        "operationId": "PaymentOrdersController_storeCard",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoreCardDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The stored profile."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Store a buyer card with Netpay (saveCard)",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/cards/{clientId}": {
+      "get": {
+        "operationId": "PaymentOrdersController_getCustomer",
+        "parameters": [
+          {
+            "name": "clientId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Read a Netpay customer and its stored cards",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/cards/{clientId}/token": {
+      "put": {
+        "operationId": "PaymentOrdersController_assignCard",
+        "parameters": [
+          {
+            "name": "clientId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignCardDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Attach a card token to an existing customer",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/cards/{clientId}/token/{token}": {
+      "delete": {
+        "operationId": "PaymentOrdersController_deleteCard",
+        "parameters": [
+          {
+            "name": "clientId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Delete a stored card from a customer",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/installments": {
+      "get": {
+        "operationId": "PaymentOrdersController_installments",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "List installment plans and their minimum amounts",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/orders/{id}/refund": {
+      "post": {
+        "operationId": "PaymentOrdersController_refund",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional; 1-255 printable ASCII characters, a UUID is recommended. A repeat with the same key and body within 24 h gets the stored response (header Idempotency-Replayed: true) without calling Netpay. After a 5xx/504 the key stays in progress for 10 min. See docs/ERRORS.md.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundOrderDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "409": {
+            "description": "IDEMPOTENCY_IN_PROGRESS (with Retry-After) while the first request with this key runs; CONFLICT / ORDER_STATE_CONFLICT when the order does not allow the operation."
+          },
+          "422": {
+            "description": "IDEMPOTENCY_KEY_REUSED: the key was already used with a different body."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Refund a settled payment order",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/config": {
+      "get": {
+        "operationId": "PaymentOrdersController_readConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Read this tenant’s Netpay configuration (never the secret)",
+        "tags": [
+          "payments"
+        ]
+      },
+      "post": {
+        "description": "Append-only (BN-REQ-CFG-002): a change writes the next version and orders keep the version they were created with. A first configuration, or a change of environment or secret key, returns a new `webhookToken` once, retires the previous one and clears `webhookRegisteredAt`: register the new URL with Netpay (BN-REQ-CFG-003).",
+        "operationId": "PaymentOrdersController_saveConfig",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavePaymentConfigDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Store this tenant’s Netpay credentials (a new configuration version)",
+        "tags": [
+          "payments"
+        ]
+      },
+      "patch": {
+        "description": "Writes a new configuration version with the same keys and webhook token. `allowedReturnOrigins`: https origins a hosted order may return the buyer to (BN-REQ-PAY-007); `allowedCurrencies`: ISO codes this tenant may charge in (BN-REQ-PAY-008).",
+        "operationId": "PaymentOrdersController_updateSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePaymentSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Change the return-origin and currency allowlists",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/config/webhook-token": {
+      "post": {
+        "operationId": "PaymentOrdersController_rotateWebhookToken",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Rotate the inbound webhook token",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/config/webhook-register": {
+      "post": {
+        "operationId": "PaymentOrdersController_registerWebhook",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Register the inbound webhook URL with Netpay",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/config/webhook": {
+      "get": {
+        "description": "`drift: true` when Netpay calls anything other than `${PUBLIC_BASE_URL}/api/v1/payments/webhook/{token}` with this tenant’s current token; `reason` is `match`, `none_registered`, `origin`, `path` or `token`. The verdict is stored, logged as `netpay_webhook_drift` (the alert’s metric) and summarised in the authenticated `/health/ready`.",
+        "operationId": "PaymentOrdersController_registeredWebhook",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Read the webhook URL registered with Netpay and detect drift",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/webhooks": {
+      "get": {
+        "operationId": "OutboundWebhookController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "List outbound webhook endpoints",
+        "tags": [
+          "webhooks"
+        ]
+      },
+      "post": {
+        "operationId": "OutboundWebhookController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookEndpointDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The endpoint; the secret is shown only here."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Register an outbound webhook endpoint",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/v1/t/webhooks/events": {
+      "get": {
+        "operationId": "OutboundWebhookController_availableEvents",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "List subscribable events",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/v1/t/webhooks/{id}/rotate-secret": {
+      "post": {
+        "operationId": "OutboundWebhookController_rotateSecret",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The endpoint; the new secret is shown only here."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Rotate an endpoint signing secret",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/v1/t/webhooks/{id}/end-rotation": {
+      "post": {
+        "operationId": "OutboundWebhookController_endRotation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Retire the previous signing secret",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/v1/t/webhooks/{id}/status": {
+      "post": {
+        "operationId": "OutboundWebhookController_setStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToggleWebhookEndpointDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Enable or disable an endpoint",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/v1/t/webhooks/{id}/disable": {
+      "post": {
+        "description": "No further event is delivered to it; deliveries already recorded are kept. 204, idempotent.",
+        "operationId": "OutboundWebhookController_disable",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Disable an endpoint (consumer disconnect)",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/v1/t/webhooks/{id}/deliveries": {
+      "get": {
+        "operationId": "OutboundWebhookController_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "List recent deliveries for an endpoint",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/v1/t/webhooks/deliveries/{deliveryId}/replay": {
+      "post": {
+        "operationId": "OutboundWebhookController_replay",
+        "parameters": [
+          {
+            "name": "deliveryId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Re-queue a delivery",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/v1/public/quick-links/{code}": {
+      "get": {
+        "operationId": "PaymentQuickLinksController_resolve",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The quick link."
+          },
+          "404": {
+            "description": "Unknown code."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Public view of a payment quick link (merchant, concept, amount, checkout URL)",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/health/live": {
+      "get": {
+        "description": "Returns 200 while the process is responsive.",
+        "operationId": "HealthController_live",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "The process is alive."
+          },
+          "503": {
+            "description": "The process is shutting down."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Liveness probe",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "description": "Verifies the databases are reachable and that outbound deliveries are not switched off under ACTIVE endpoints. Cached for 5 s. The per-dependency detail, the reasons and the build version and SHA are only returned to a verified principal.",
+        "operationId": "HealthController_ready",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "All dependencies are reachable."
+          },
+          "503": {
+            "description": "At least one dependency is unavailable."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Readiness probe",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Redirects to the interactive API documentation.",
+        "operationId": "HealthController_redirectToDocs",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "API reference",
+        "tags": [
+          "health"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "Multi-tenant API",
+    "description": "Schema-per-tenant REST API built with NestJS 12, Prisma 7 and PostgreSQL.\n\n### Selecting a tenant\n\nTenant-scoped routes (`/t/**`, `/api-keys/**`) resolve the tenant from, in order of precedence:\n\n1. `X-Tenant-Id` — tenant UUID, intended for service-to-service calls.\n2. `X-Tenant-Slug` — business slug, e.g. `acme`.\n3. The request subdomain, e.g. `acme.api.example.com`.\n\nAn API key never selects its own tenant: the tenant comes from the request,\nand the key must belong to it.\n\n### Authentication\n\n| Caller | Credential | Endpoint |\n| --- | --- | --- |\n| Platform administrator | JWT access token | `POST /auth/sign-in` |\n| Tenant member | JWT access token | `POST /t/auth/sign-in` |\n| Machine | API key `mtb_<public>_<secret>` | any tenant-scoped route |\n\nAccess tokens live 15 minutes by default. Refresh tokens rotate on every use,\nand replaying a rotated token revokes the whole session family.\n\n### Security\n\n- PII is encrypted at rest with AES-256-GCM; equality lookups use a keyed\n  HMAC blind index, so no plaintext e-mail or phone number is ever queried.\n- Responses and logs expose masked values unless a principal is asking for\n  its own data.\n- Raw SQL is restricted to parameterised tagged templates; dynamic\n  identifiers must pass an allow-list before being quoted.\n- Every tenant is isolated in its own PostgreSQL schema, addressed through a\n  validated schema name.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Platform team",
+      "url": "https://example.com/support",
+      "email": "platform@example.com"
+    }
+  },
+  "tags": [],
+  "servers": [
+    {
+      "url": "https://api.example.com",
+      "description": "Subdomain"
+    },
+    {
+      "url": "http://localhost:3000",
+      "description": "Localhost"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearer-jwt": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http",
+        "in": "header",
+        "name": "Authorization"
+      },
+      "tenant-id": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Tenant-Id"
+      },
+      "tenant-slug": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Tenant-Slug"
+      }
+    },
+    "schemas": {
+      "TenantSummaryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string",
+            "example": "acme"
+          },
+          "name": {
+            "type": "string",
+            "example": "ACME Corporation"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PROVISIONING",
+              "ACTIVE",
+              "SUSPENDED",
+              "DEPRECATED",
+              "DELETED"
+            ]
+          },
+          "plan": {
+            "type": "string",
+            "example": "standard"
+          },
+          "timezone": {
+            "type": "string",
+            "example": "America/Mexico_City"
+          },
+          "activeApiKeyCount": {
+            "type": "number",
+            "example": 3
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "status",
+          "plan",
+          "timezone",
+          "activeApiKeyCount",
+          "createdAt"
+        ]
+      },
+      "PageMetaDto": {
+        "type": "object",
+        "properties": {
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "total": {
+            "type": "number",
+            "example": 12
+          }
+        },
+        "required": [
+          "nextCursor",
+          "total"
+        ]
+      },
+      "TenantListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TenantSummaryDto"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/PageMetaDto"
+          }
+        },
+        "required": [
+          "items",
+          "meta"
+        ]
+      },
+      "TenantStatsDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number",
+            "example": 8
+          },
+          "byStatus": {
+            "type": "object",
+            "example": {
+              "ACTIVE": 6,
+              "PROVISIONING": 1,
+              "SUSPENDED": 1
+            },
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "activeApiKeys": {
+            "type": "number",
+            "example": 14
+          }
+        },
+        "required": [
+          "total",
+          "byStatus",
+          "activeApiKeys"
+        ]
+      },
+      "TenantDetailDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string",
+            "example": "acme"
+          },
+          "name": {
+            "type": "string",
+            "example": "ACME Corporation"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PROVISIONING",
+              "ACTIVE",
+              "SUSPENDED",
+              "DEPRECATED",
+              "DELETED"
+            ]
+          },
+          "plan": {
+            "type": "string",
+            "example": "standard"
+          },
+          "timezone": {
+            "type": "string",
+            "example": "America/Mexico_City"
+          },
+          "activeApiKeyCount": {
+            "type": "number",
+            "example": 3
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "schemaName": {
+            "type": "string",
+            "example": "tenant_acme_1a2b3c4d",
+            "description": "Physical PostgreSQL schema. Returned only on the detail endpoint."
+          },
+          "schemaVersion": {
+            "type": "number",
+            "example": 1
+          },
+          "provisionedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "utcOffsetMinutes": {
+            "type": "number",
+            "example": -360,
+            "description": "Minutes east of UTC for the tenant timezone."
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "status",
+          "plan",
+          "timezone",
+          "activeApiKeyCount",
+          "createdAt",
+          "schemaName",
+          "schemaVersion",
+          "provisionedAt",
+          "settings",
+          "utcOffsetMinutes"
+        ]
+      },
+      "CreateTenantDto": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "example": "acme",
+            "description": "Business slug. Lowercase letters, digits and hyphens; max 63 characters.",
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+          },
+          "name": {
+            "type": "string",
+            "example": "ACME Corporation",
+            "maxLength": 120
+          },
+          "plan": {
+            "type": "string",
+            "example": "standard",
+            "default": "standard"
+          },
+          "timezone": {
+            "type": "string",
+            "example": "America/Mexico_City",
+            "default": "UTC"
+          },
+          "locale": {
+            "type": "string",
+            "example": "es-MX",
+            "default": "en-US"
+          },
+          "settings": {
+            "type": "object",
+            "example": {
+              "featureFlags": {
+                "betaEditor": true
+              }
+            }
+          },
+          "supportContact": {
+            "type": "string",
+            "example": "#acme-support",
+            "maxLength": 120
+          }
+        },
+        "required": [
+          "slug",
+          "name"
+        ]
+      },
+      "UpdateTenantDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "plan": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "timezone": {
+            "type": "string",
+            "example": "Europe/Madrid"
+          },
+          "locale": {
+            "type": "string",
+            "maxLength": 16
+          },
+          "settings": {
+            "type": "object"
+          },
+          "supportContact": {
+            "type": "string",
+            "maxLength": 120
+          }
+        }
+      },
+      "SuspendTenantDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "example": "Payment overdue",
+            "maxLength": 200
+          }
+        }
+      },
+      "MigrateTenantDto": {
+        "type": "object",
+        "properties": {
+          "appliedVersions": {
+            "example": [
+              1,
+              2
+            ],
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "appliedVersions"
+        ]
+      },
+      "PurgeTenantDto": {
+        "type": "object",
+        "properties": {
+          "confirm": {
+            "type": "string",
+            "example": "acme",
+            "description": "Must match the tenant slug exactly."
+          }
+        },
+        "required": [
+          "confirm"
+        ]
+      },
+      "PurgeResultDto": {
+        "type": "object",
+        "properties": {
+          "purged": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "purged"
+        ]
+      },
+      "SignInDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "owner@example.com",
+            "description": "E-mail address of the platform administrator."
+          },
+          "password": {
+            "type": "string",
+            "example": "correct-horse-battery-staple",
+            "description": "Account password. Never logged.",
+            "format": "password"
+          },
+          "otp": {
+            "type": "string",
+            "example": "123456",
+            "description": "TOTP or recovery code (BN-REQ-SEC-006)."
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "TokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "Short-lived JWT for the Authorization header."
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Long-lived refresh token; rotate on every use."
+          },
+          "tokenType": {
+            "type": "string",
+            "example": "Bearer"
+          },
+          "expiresIn": {
+            "type": "number",
+            "example": 900,
+            "description": "Access token lifetime in seconds."
+          },
+          "emailMasked": {
+            "type": "string",
+            "example": "o***r@example.com",
+            "description": "Masked e-mail of the authenticated principal."
+          },
+          "displayName": {
+            "type": "string",
+            "example": "Platform Owner"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "OWNER",
+              "ADMIN",
+              "AUDITOR"
+            ]
+          },
+          "mustChangePassword": {
+            "type": "boolean",
+            "description": "Whether a password change is required before use."
+          },
+          "mfaRequired": {
+            "type": "boolean",
+            "description": "Whether the session must still verify (or enrol) a second factor."
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "tokenType",
+          "expiresIn",
+          "emailMasked",
+          "displayName",
+          "role",
+          "mustChangePassword",
+          "mfaRequired"
+        ]
+      },
+      "RefreshTokenDto": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "description": "Refresh token issued by the previous sign-in or refresh."
+          }
+        },
+        "required": [
+          "refreshToken"
+        ]
+      },
+      "MfaEnrollmentDto": {
+        "type": "object",
+        "properties": {
+          "secret": {
+            "type": "string"
+          },
+          "otpauthUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "secret",
+          "otpauthUrl"
+        ]
+      },
+      "MfaCodeDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "123456"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "ChangePasswordDto": {
+        "type": "object",
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "format": "password"
+          },
+          "newPassword": {
+            "type": "string",
+            "format": "password",
+            "minLength": 12
+          }
+        },
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ]
+      },
+      "ApiKeyDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "ci-pipeline"
+          },
+          "prefix": {
+            "type": "string",
+            "example": "mtb_a1b2c3d4e5f60718"
+          },
+          "scopes": {
+            "example": [
+              "projects:read",
+              "projects:write"
+            ],
+            "type": "array",
+            "items": {
+              "type": "array"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "REVOKED",
+              "EXPIRED"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "usageCount": {
+            "type": "number",
+            "example": 1284
+          },
+          "rotatedFromId": {
+            "type": "object",
+            "format": "uuid",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "scopes",
+          "status",
+          "expiresAt",
+          "revokedAt",
+          "lastUsedAt",
+          "usageCount",
+          "rotatedFromId",
+          "createdAt"
+        ]
+      },
+      "ApiKeyListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyDto"
+            }
+          },
+          "grantableScopes": {
+            "example": [
+              "projects:read",
+              "projects:write",
+              "users:read",
+              "users:write",
+              "audit:read",
+              "admin:*"
+            ],
+            "type": "array",
+            "items": {
+              "type": "array"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "CreateApiKeyDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "ci-pipeline",
+            "maxLength": 120
+          },
+          "scopes": {
+            "example": [
+              "projects:read",
+              "projects:write"
+            ],
+            "description": "Subset of the grantable scopes. Wildcards other than `resource:*` are not allowed.",
+            "type": "array",
+            "items": {
+              "type": "array"
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "example": "2026-03-01T00:00:00.000Z",
+            "description": "Absolute expiry. Defaults to API_KEY_DEFAULT_TTL_DAYS when omitted.",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ]
+      },
+      "ApiKeyCreatedDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "ci-pipeline"
+          },
+          "prefix": {
+            "type": "string",
+            "example": "mtb_a1b2c3d4e5f60718"
+          },
+          "scopes": {
+            "example": [
+              "projects:read",
+              "projects:write"
+            ],
+            "type": "array",
+            "items": {
+              "type": "array"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "REVOKED",
+              "EXPIRED"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "usageCount": {
+            "type": "number",
+            "example": 1284
+          },
+          "rotatedFromId": {
+            "type": "object",
+            "format": "uuid",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "secret": {
+            "type": "string",
+            "example": "mtb_a1b2c3d4e5f60718_kZ9xQmR3vT8sW2yB7nL4pJ6hG1dF0cE5aU8iO3rN7qW2zX4bV6",
+            "description": "Complete API key, returned exactly once. Store it now — only an Argon2id hash is persisted and it cannot be recovered."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "scopes",
+          "status",
+          "expiresAt",
+          "revokedAt",
+          "lastUsedAt",
+          "usageCount",
+          "rotatedFromId",
+          "createdAt",
+          "secret"
+        ]
+      },
+      "TenantSignInDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "ada@acme.com"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "example": "correct-horse-battery-staple"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "TenantTokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "tokenType": {
+            "type": "string",
+            "example": "Bearer"
+          },
+          "expiresIn": {
+            "type": "number",
+            "example": 900
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "emailMasked": {
+            "type": "string",
+            "example": "a***a@acme.com"
+          },
+          "displayName": {
+            "type": "string",
+            "example": "Ada Lovelace"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "OWNER",
+              "ADMIN",
+              "MEMBER",
+              "VIEWER"
+            ]
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "tokenType",
+          "expiresIn",
+          "userId",
+          "emailMasked",
+          "displayName",
+          "role"
+        ]
+      },
+      "TenantRefreshTokenDto": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "refreshToken"
+        ]
+      },
+      "AcceptInvitationDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ]
+      },
+      "UserDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "emailMasked": {
+            "type": "string",
+            "example": "g***e@acme.com"
+          },
+          "displayName": {
+            "type": "string",
+            "example": "Grace Hopper"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "OWNER",
+              "ADMIN",
+              "MEMBER",
+              "VIEWER"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "INVITED",
+              "ACTIVE",
+              "SUSPENDED"
+            ]
+          },
+          "emailVerifiedAt": {
+            "type": "object"
+          },
+          "lastLoginAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "emailMasked",
+          "displayName",
+          "role",
+          "status",
+          "emailVerifiedAt",
+          "lastLoginAt",
+          "createdAt"
+        ]
+      },
+      "UserListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "total": {
+            "type": "number",
+            "example": 12
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor",
+          "total"
+        ]
+      },
+      "CreateUserDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "grace@acme.com"
+          },
+          "phone": {
+            "type": "string",
+            "example": "+5215512345678"
+          },
+          "displayName": {
+            "type": "string",
+            "example": "Grace Hopper",
+            "maxLength": 120
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "ADMIN",
+              "MEMBER",
+              "VIEWER"
+            ],
+            "default": "MEMBER"
+          }
+        },
+        "required": [
+          "email",
+          "displayName"
+        ]
+      },
+      "CreatedUserDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "emailMasked": {
+            "type": "string",
+            "example": "g***e@acme.com"
+          },
+          "displayName": {
+            "type": "string",
+            "example": "Grace Hopper"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "OWNER",
+              "ADMIN",
+              "MEMBER",
+              "VIEWER"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "INVITED",
+              "ACTIVE",
+              "SUSPENDED"
+            ]
+          },
+          "emailVerifiedAt": {
+            "type": "object"
+          },
+          "lastLoginAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "invitationToken": {
+            "type": "string",
+            "nullable": true
+          },
+          "invitationExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "emailMasked",
+          "displayName",
+          "role",
+          "status",
+          "emailVerifiedAt",
+          "lastLoginAt",
+          "createdAt",
+          "invitationToken",
+          "invitationExpiresAt"
+        ]
+      },
+      "CreateProjectDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Q1 Platform Migration",
+            "maxLength": 160
+          },
+          "slug": {
+            "type": "string",
+            "example": "q1-platform-migration",
+            "maxLength": 160
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ],
+            "default": "DRAFT"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "ownerId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Required when the caller is an API key."
+          }
+        },
+        "required": [
+          "name",
+          "slug"
+        ]
+      },
+      "UpdateProjectDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "expectedVersion": {
+            "type": "number",
+            "example": 3,
+            "description": "Optimistic concurrency guard. 409 on mismatch."
+          }
+        }
+      },
+      "CreatePaymentOrderDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "VerifyOrderDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ChargeTokenDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ConfirmChargeDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "StoreCardDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "AssignCardDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "RefundOrderDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "SavePaymentConfigDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdatePaymentSettingsDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "RegisterWebhookDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateWebhookEndpointDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ToggleWebhookEndpointDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "Every error response, whatever layer produced it (BN-REQ-API-002). See docs/ERRORS.md.",
+        "required": [
+          "error",
+          "requestId",
+          "timestamp",
+          "source"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable discriminator; the only field a client should branch on.",
+                "examples": [
+                  "PROVIDER_OUTCOME_UNKNOWN",
+                  "VALIDATION_ERROR",
+                  "CONFLICT"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable, English, PII-free. May change."
+              },
+              "retryable": {
+                "type": "boolean",
+                "description": "Whether repeating the same request may succeed."
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Optional, non-sensitive context; its shape depends on the code."
+              }
+            }
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Correlation id; equals the X-Request-Id response header."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "application",
+              "http",
+              "prisma",
+              "unexpected"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "x-webhooks": {
+    "payment.paid": {
+      "post": {
+        "operationId": "webhook_payment_paid",
+        "summary": "payment.paid",
+        "description": "The order was verified as paid against Netpay (PENDING* or CHARGE_UNKNOWN → PAID). JSON Schema: docs/events/payment.paid.schema.json.",
+        "tags": [
+          "Outbound webhooks"
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Id",
+            "description": "Same as eventId; stable across retries. Deduplicate on it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Type",
+            "description": "Same as eventType.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Attempt",
+            "description": "Attempt number, from 1; kept across an operator replay.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Signature",
+            "description": "t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\">; two v1 values during a secret rotation.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Delivery",
+            "description": "Signature scheme version.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "eventId": {
+                    "type": "string",
+                    "pattern": "^evt_[0-9a-f]{32}$",
+                    "description": "Stable across retries; also sent as X-MTBPay-Event-Id. Deduplicate on it."
+                  },
+                  "eventType": {
+                    "type": "string",
+                    "const": "payment.paid"
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                    "description": "When the order changed, not when it was delivered."
+                  },
+                  "sequence": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Per order, strictly increasing. A gap means an event is still to come."
+                  },
+                  "tenantId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "orderId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "description": "Order id in this platform."
+                      },
+                      "orderReference": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Reference sent to Netpay as the merchant reference code."
+                      },
+                      "merchantReferenceCode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The tenant's own business code."
+                      },
+                      "amount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Amount with two decimals, as a string (e.g. \"650.00\").",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "currency": {
+                        "type": "string",
+                        "pattern": "^[A-Z]{3}$"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "PENDING",
+                          "PENDING_VERIFICATION",
+                          "CHARGE_UNKNOWN",
+                          "PAID",
+                          "PARTIALLY_REFUNDED",
+                          "FAILED",
+                          "REFUNDED",
+                          "AMOUNT_MISMATCH",
+                          "CANCELLED",
+                          "EXPIRED"
+                        ],
+                        "description": "Status after the change."
+                      },
+                      "previousStatus": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "PENDING_VERIFICATION",
+                              "CHARGE_UNKNOWN",
+                              "PAID",
+                              "PARTIALLY_REFUNDED",
+                              "FAILED",
+                              "REFUNDED",
+                              "AMOUNT_MISMATCH",
+                              "CANCELLED",
+                              "EXPIRED"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Status before the change."
+                      },
+                      "refundedAmount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Total returned to the buyer so far.",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "refunded": {
+                        "description": "Amount of this refund. Only on payment.refunded.",
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "fullyRefunded": {
+                        "type": "boolean",
+                        "description": "True once the whole amount went back."
+                      },
+                      "netpayTransactionId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "paymentMethod": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "CARD",
+                              "OXXO"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "paymentReference": {
+                        "description": "Cash reference (OXXO Pay).",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "failureCode": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Z_]+$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Stable decline code (docs/ERRORS.md §5), e.g. INSUFFICIENT_FUNDS."
+                      },
+                      "failureReason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "orderId",
+                      "orderReference",
+                      "merchantReferenceCode",
+                      "amount",
+                      "currency",
+                      "status",
+                      "previousStatus",
+                      "refundedAmount",
+                      "fullyRefunded",
+                      "netpayTransactionId",
+                      "paymentMethod",
+                      "paymentReference",
+                      "failureCode",
+                      "failureReason"
+                    ],
+                    "additionalProperties": false,
+                    "description": "The order at the moment of the change. No cardholder data of any kind."
+                  }
+                },
+                "required": [
+                  "eventId",
+                  "eventType",
+                  "occurredAt",
+                  "sequence",
+                  "tenantId",
+                  "data"
+                ],
+                "additionalProperties": false,
+                "title": "payment.paid",
+                "description": "The order was verified as paid against Netpay (PENDING* or CHARGE_UNKNOWN → PAID)."
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Accepted. Any other answer, or none within the timeout, is retried with backoff for 24 h."
+          }
+        }
+      }
+    },
+    "payment.failed": {
+      "post": {
+        "operationId": "webhook_payment_failed",
+        "summary": "payment.failed",
+        "description": "Netpay reported the charge as declined or failed (→ FAILED); emitted again for each declined attempt. data.netpayTransactionId is the attempt's transaction. JSON Schema: docs/events/payment.failed.schema.json.",
+        "tags": [
+          "Outbound webhooks"
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Id",
+            "description": "Same as eventId; stable across retries. Deduplicate on it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Type",
+            "description": "Same as eventType.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Attempt",
+            "description": "Attempt number, from 1; kept across an operator replay.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Signature",
+            "description": "t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\">; two v1 values during a secret rotation.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Delivery",
+            "description": "Signature scheme version.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "eventId": {
+                    "type": "string",
+                    "pattern": "^evt_[0-9a-f]{32}$",
+                    "description": "Stable across retries; also sent as X-MTBPay-Event-Id. Deduplicate on it."
+                  },
+                  "eventType": {
+                    "type": "string",
+                    "const": "payment.failed"
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                    "description": "When the order changed, not when it was delivered."
+                  },
+                  "sequence": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Per order, strictly increasing. A gap means an event is still to come."
+                  },
+                  "tenantId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "orderId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "description": "Order id in this platform."
+                      },
+                      "orderReference": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Reference sent to Netpay as the merchant reference code."
+                      },
+                      "merchantReferenceCode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The tenant's own business code."
+                      },
+                      "amount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Amount with two decimals, as a string (e.g. \"650.00\").",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "currency": {
+                        "type": "string",
+                        "pattern": "^[A-Z]{3}$"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "PENDING",
+                          "PENDING_VERIFICATION",
+                          "CHARGE_UNKNOWN",
+                          "PAID",
+                          "PARTIALLY_REFUNDED",
+                          "FAILED",
+                          "REFUNDED",
+                          "AMOUNT_MISMATCH",
+                          "CANCELLED",
+                          "EXPIRED"
+                        ],
+                        "description": "Status after the change."
+                      },
+                      "previousStatus": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "PENDING_VERIFICATION",
+                              "CHARGE_UNKNOWN",
+                              "PAID",
+                              "PARTIALLY_REFUNDED",
+                              "FAILED",
+                              "REFUNDED",
+                              "AMOUNT_MISMATCH",
+                              "CANCELLED",
+                              "EXPIRED"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Status before the change."
+                      },
+                      "refundedAmount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Total returned to the buyer so far.",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "refunded": {
+                        "description": "Amount of this refund. Only on payment.refunded.",
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "fullyRefunded": {
+                        "type": "boolean",
+                        "description": "True once the whole amount went back."
+                      },
+                      "netpayTransactionId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "paymentMethod": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "CARD",
+                              "OXXO"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "paymentReference": {
+                        "description": "Cash reference (OXXO Pay).",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "failureCode": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Z_]+$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Stable decline code (docs/ERRORS.md §5), e.g. INSUFFICIENT_FUNDS."
+                      },
+                      "failureReason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "orderId",
+                      "orderReference",
+                      "merchantReferenceCode",
+                      "amount",
+                      "currency",
+                      "status",
+                      "previousStatus",
+                      "refundedAmount",
+                      "fullyRefunded",
+                      "netpayTransactionId",
+                      "paymentMethod",
+                      "paymentReference",
+                      "failureCode",
+                      "failureReason"
+                    ],
+                    "additionalProperties": false,
+                    "description": "The order at the moment of the change. No cardholder data of any kind."
+                  }
+                },
+                "required": [
+                  "eventId",
+                  "eventType",
+                  "occurredAt",
+                  "sequence",
+                  "tenantId",
+                  "data"
+                ],
+                "additionalProperties": false,
+                "title": "payment.failed",
+                "description": "Netpay reported the charge as declined or failed (→ FAILED); emitted again for each declined attempt. data.netpayTransactionId is the attempt's transaction."
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Accepted. Any other answer, or none within the timeout, is retried with backoff for 24 h."
+          }
+        }
+      }
+    },
+    "payment.mismatch": {
+      "post": {
+        "operationId": "webhook_payment_mismatch",
+        "summary": "payment.mismatch",
+        "description": "Netpay reported an amount different from the order; the order is not paid (→ AMOUNT_MISMATCH). JSON Schema: docs/events/payment.mismatch.schema.json.",
+        "tags": [
+          "Outbound webhooks"
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Id",
+            "description": "Same as eventId; stable across retries. Deduplicate on it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Type",
+            "description": "Same as eventType.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Attempt",
+            "description": "Attempt number, from 1; kept across an operator replay.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Signature",
+            "description": "t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\">; two v1 values during a secret rotation.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Delivery",
+            "description": "Signature scheme version.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "eventId": {
+                    "type": "string",
+                    "pattern": "^evt_[0-9a-f]{32}$",
+                    "description": "Stable across retries; also sent as X-MTBPay-Event-Id. Deduplicate on it."
+                  },
+                  "eventType": {
+                    "type": "string",
+                    "const": "payment.mismatch"
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                    "description": "When the order changed, not when it was delivered."
+                  },
+                  "sequence": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Per order, strictly increasing. A gap means an event is still to come."
+                  },
+                  "tenantId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "orderId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "description": "Order id in this platform."
+                      },
+                      "orderReference": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Reference sent to Netpay as the merchant reference code."
+                      },
+                      "merchantReferenceCode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The tenant's own business code."
+                      },
+                      "amount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Amount with two decimals, as a string (e.g. \"650.00\").",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "currency": {
+                        "type": "string",
+                        "pattern": "^[A-Z]{3}$"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "PENDING",
+                          "PENDING_VERIFICATION",
+                          "CHARGE_UNKNOWN",
+                          "PAID",
+                          "PARTIALLY_REFUNDED",
+                          "FAILED",
+                          "REFUNDED",
+                          "AMOUNT_MISMATCH",
+                          "CANCELLED",
+                          "EXPIRED"
+                        ],
+                        "description": "Status after the change."
+                      },
+                      "previousStatus": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "PENDING_VERIFICATION",
+                              "CHARGE_UNKNOWN",
+                              "PAID",
+                              "PARTIALLY_REFUNDED",
+                              "FAILED",
+                              "REFUNDED",
+                              "AMOUNT_MISMATCH",
+                              "CANCELLED",
+                              "EXPIRED"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Status before the change."
+                      },
+                      "refundedAmount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Total returned to the buyer so far.",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "refunded": {
+                        "description": "Amount of this refund. Only on payment.refunded.",
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "fullyRefunded": {
+                        "type": "boolean",
+                        "description": "True once the whole amount went back."
+                      },
+                      "netpayTransactionId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "paymentMethod": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "CARD",
+                              "OXXO"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "paymentReference": {
+                        "description": "Cash reference (OXXO Pay).",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "failureCode": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Z_]+$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Stable decline code (docs/ERRORS.md §5), e.g. INSUFFICIENT_FUNDS."
+                      },
+                      "failureReason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "orderId",
+                      "orderReference",
+                      "merchantReferenceCode",
+                      "amount",
+                      "currency",
+                      "status",
+                      "previousStatus",
+                      "refundedAmount",
+                      "fullyRefunded",
+                      "netpayTransactionId",
+                      "paymentMethod",
+                      "paymentReference",
+                      "failureCode",
+                      "failureReason"
+                    ],
+                    "additionalProperties": false,
+                    "description": "The order at the moment of the change. No cardholder data of any kind."
+                  }
+                },
+                "required": [
+                  "eventId",
+                  "eventType",
+                  "occurredAt",
+                  "sequence",
+                  "tenantId",
+                  "data"
+                ],
+                "additionalProperties": false,
+                "title": "payment.mismatch",
+                "description": "Netpay reported an amount different from the order; the order is not paid (→ AMOUNT_MISMATCH)."
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Accepted. Any other answer, or none within the timeout, is retried with backoff for 24 h."
+          }
+        }
+      }
+    },
+    "payment.refunded": {
+      "post": {
+        "operationId": "webhook_payment_refunded",
+        "summary": "payment.refunded",
+        "description": "Money went back to the buyer: emitted for every refund, partial (→ PARTIALLY_REFUNDED) or total (→ REFUNDED). JSON Schema: docs/events/payment.refunded.schema.json.",
+        "tags": [
+          "Outbound webhooks"
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Id",
+            "description": "Same as eventId; stable across retries. Deduplicate on it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Type",
+            "description": "Same as eventType.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Attempt",
+            "description": "Attempt number, from 1; kept across an operator replay.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Signature",
+            "description": "t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\">; two v1 values during a secret rotation.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Delivery",
+            "description": "Signature scheme version.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "eventId": {
+                    "type": "string",
+                    "pattern": "^evt_[0-9a-f]{32}$",
+                    "description": "Stable across retries; also sent as X-MTBPay-Event-Id. Deduplicate on it."
+                  },
+                  "eventType": {
+                    "type": "string",
+                    "const": "payment.refunded"
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                    "description": "When the order changed, not when it was delivered."
+                  },
+                  "sequence": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Per order, strictly increasing. A gap means an event is still to come."
+                  },
+                  "tenantId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "orderId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "description": "Order id in this platform."
+                      },
+                      "orderReference": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Reference sent to Netpay as the merchant reference code."
+                      },
+                      "merchantReferenceCode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The tenant's own business code."
+                      },
+                      "amount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Amount with two decimals, as a string (e.g. \"650.00\").",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "currency": {
+                        "type": "string",
+                        "pattern": "^[A-Z]{3}$"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "PENDING",
+                          "PENDING_VERIFICATION",
+                          "CHARGE_UNKNOWN",
+                          "PAID",
+                          "PARTIALLY_REFUNDED",
+                          "FAILED",
+                          "REFUNDED",
+                          "AMOUNT_MISMATCH",
+                          "CANCELLED",
+                          "EXPIRED"
+                        ],
+                        "description": "Status after the change."
+                      },
+                      "previousStatus": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "PENDING_VERIFICATION",
+                              "CHARGE_UNKNOWN",
+                              "PAID",
+                              "PARTIALLY_REFUNDED",
+                              "FAILED",
+                              "REFUNDED",
+                              "AMOUNT_MISMATCH",
+                              "CANCELLED",
+                              "EXPIRED"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Status before the change."
+                      },
+                      "refundedAmount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Total returned to the buyer so far.",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "refunded": {
+                        "description": "Amount of this refund. Only on payment.refunded.",
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "fullyRefunded": {
+                        "type": "boolean",
+                        "description": "True once the whole amount went back."
+                      },
+                      "netpayTransactionId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "paymentMethod": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "CARD",
+                              "OXXO"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "paymentReference": {
+                        "description": "Cash reference (OXXO Pay).",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "failureCode": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Z_]+$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Stable decline code (docs/ERRORS.md §5), e.g. INSUFFICIENT_FUNDS."
+                      },
+                      "failureReason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "orderId",
+                      "orderReference",
+                      "merchantReferenceCode",
+                      "amount",
+                      "currency",
+                      "status",
+                      "previousStatus",
+                      "refundedAmount",
+                      "fullyRefunded",
+                      "netpayTransactionId",
+                      "paymentMethod",
+                      "paymentReference",
+                      "failureCode",
+                      "failureReason"
+                    ],
+                    "additionalProperties": false,
+                    "description": "The order at the moment of the change. No cardholder data of any kind."
+                  }
+                },
+                "required": [
+                  "eventId",
+                  "eventType",
+                  "occurredAt",
+                  "sequence",
+                  "tenantId",
+                  "data"
+                ],
+                "additionalProperties": false,
+                "title": "payment.refunded",
+                "description": "Money went back to the buyer: emitted for every refund, partial (→ PARTIALLY_REFUNDED) or total (→ REFUNDED)."
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Accepted. Any other answer, or none within the timeout, is retried with backoff for 24 h."
+          }
+        }
+      }
+    },
+    "payment.cancelled": {
+      "post": {
+        "operationId": "webhook_payment_cancelled",
+        "summary": "payment.cancelled",
+        "description": "The merchant cancelled an unpaid order (PENDING, PENDING_VERIFICATION or FAILED → CANCELLED). Netpay cannot expire a hosted session or a cash reference, so a later payment is still possible: it arrives as payment.paid_after_cancel. JSON Schema: docs/events/payment.cancelled.schema.json.",
+        "tags": [
+          "Outbound webhooks"
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Id",
+            "description": "Same as eventId; stable across retries. Deduplicate on it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Type",
+            "description": "Same as eventType.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Attempt",
+            "description": "Attempt number, from 1; kept across an operator replay.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Signature",
+            "description": "t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\">; two v1 values during a secret rotation.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Delivery",
+            "description": "Signature scheme version.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "eventId": {
+                    "type": "string",
+                    "pattern": "^evt_[0-9a-f]{32}$",
+                    "description": "Stable across retries; also sent as X-MTBPay-Event-Id. Deduplicate on it."
+                  },
+                  "eventType": {
+                    "type": "string",
+                    "const": "payment.cancelled"
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                    "description": "When the order changed, not when it was delivered."
+                  },
+                  "sequence": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Per order, strictly increasing. A gap means an event is still to come."
+                  },
+                  "tenantId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "orderId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "description": "Order id in this platform."
+                      },
+                      "orderReference": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Reference sent to Netpay as the merchant reference code."
+                      },
+                      "merchantReferenceCode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The tenant's own business code."
+                      },
+                      "amount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Amount with two decimals, as a string (e.g. \"650.00\").",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "currency": {
+                        "type": "string",
+                        "pattern": "^[A-Z]{3}$"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "PENDING",
+                          "PENDING_VERIFICATION",
+                          "CHARGE_UNKNOWN",
+                          "PAID",
+                          "PARTIALLY_REFUNDED",
+                          "FAILED",
+                          "REFUNDED",
+                          "AMOUNT_MISMATCH",
+                          "CANCELLED",
+                          "EXPIRED"
+                        ],
+                        "description": "Status after the change."
+                      },
+                      "previousStatus": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "PENDING_VERIFICATION",
+                              "CHARGE_UNKNOWN",
+                              "PAID",
+                              "PARTIALLY_REFUNDED",
+                              "FAILED",
+                              "REFUNDED",
+                              "AMOUNT_MISMATCH",
+                              "CANCELLED",
+                              "EXPIRED"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Status before the change."
+                      },
+                      "refundedAmount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Total returned to the buyer so far.",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "refunded": {
+                        "description": "Amount of this refund. Only on payment.refunded.",
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "fullyRefunded": {
+                        "type": "boolean",
+                        "description": "True once the whole amount went back."
+                      },
+                      "netpayTransactionId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "paymentMethod": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "CARD",
+                              "OXXO"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "paymentReference": {
+                        "description": "Cash reference (OXXO Pay).",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "failureCode": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Z_]+$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Stable decline code (docs/ERRORS.md §5), e.g. INSUFFICIENT_FUNDS."
+                      },
+                      "failureReason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "orderId",
+                      "orderReference",
+                      "merchantReferenceCode",
+                      "amount",
+                      "currency",
+                      "status",
+                      "previousStatus",
+                      "refundedAmount",
+                      "fullyRefunded",
+                      "netpayTransactionId",
+                      "paymentMethod",
+                      "paymentReference",
+                      "failureCode",
+                      "failureReason"
+                    ],
+                    "additionalProperties": false,
+                    "description": "The order at the moment of the change. No cardholder data of any kind."
+                  }
+                },
+                "required": [
+                  "eventId",
+                  "eventType",
+                  "occurredAt",
+                  "sequence",
+                  "tenantId",
+                  "data"
+                ],
+                "additionalProperties": false,
+                "title": "payment.cancelled",
+                "description": "The merchant cancelled an unpaid order (PENDING, PENDING_VERIFICATION or FAILED → CANCELLED). Netpay cannot expire a hosted session or a cash reference, so a later payment is still possible: it arrives as payment.paid_after_cancel."
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Accepted. Any other answer, or none within the timeout, is retried with backoff for 24 h."
+          }
+        }
+      }
+    },
+    "payment.expired": {
+      "post": {
+        "operationId": "webhook_payment_expired",
+        "summary": "payment.expired",
+        "description": "Reconciliation found the order never paid in time: 3-D Secure not completed within 30 min, or a cash reference past its expiry (→ EXPIRED). JSON Schema: docs/events/payment.expired.schema.json.",
+        "tags": [
+          "Outbound webhooks"
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Id",
+            "description": "Same as eventId; stable across retries. Deduplicate on it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Type",
+            "description": "Same as eventType.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Attempt",
+            "description": "Attempt number, from 1; kept across an operator replay.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Signature",
+            "description": "t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\">; two v1 values during a secret rotation.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Delivery",
+            "description": "Signature scheme version.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "eventId": {
+                    "type": "string",
+                    "pattern": "^evt_[0-9a-f]{32}$",
+                    "description": "Stable across retries; also sent as X-MTBPay-Event-Id. Deduplicate on it."
+                  },
+                  "eventType": {
+                    "type": "string",
+                    "const": "payment.expired"
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                    "description": "When the order changed, not when it was delivered."
+                  },
+                  "sequence": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Per order, strictly increasing. A gap means an event is still to come."
+                  },
+                  "tenantId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "orderId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "description": "Order id in this platform."
+                      },
+                      "orderReference": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Reference sent to Netpay as the merchant reference code."
+                      },
+                      "merchantReferenceCode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The tenant's own business code."
+                      },
+                      "amount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Amount with two decimals, as a string (e.g. \"650.00\").",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "currency": {
+                        "type": "string",
+                        "pattern": "^[A-Z]{3}$"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "PENDING",
+                          "PENDING_VERIFICATION",
+                          "CHARGE_UNKNOWN",
+                          "PAID",
+                          "PARTIALLY_REFUNDED",
+                          "FAILED",
+                          "REFUNDED",
+                          "AMOUNT_MISMATCH",
+                          "CANCELLED",
+                          "EXPIRED"
+                        ],
+                        "description": "Status after the change."
+                      },
+                      "previousStatus": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "PENDING_VERIFICATION",
+                              "CHARGE_UNKNOWN",
+                              "PAID",
+                              "PARTIALLY_REFUNDED",
+                              "FAILED",
+                              "REFUNDED",
+                              "AMOUNT_MISMATCH",
+                              "CANCELLED",
+                              "EXPIRED"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Status before the change."
+                      },
+                      "refundedAmount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Total returned to the buyer so far.",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "refunded": {
+                        "description": "Amount of this refund. Only on payment.refunded.",
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "fullyRefunded": {
+                        "type": "boolean",
+                        "description": "True once the whole amount went back."
+                      },
+                      "netpayTransactionId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "paymentMethod": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "CARD",
+                              "OXXO"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "paymentReference": {
+                        "description": "Cash reference (OXXO Pay).",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "failureCode": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Z_]+$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Stable decline code (docs/ERRORS.md §5), e.g. INSUFFICIENT_FUNDS."
+                      },
+                      "failureReason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "orderId",
+                      "orderReference",
+                      "merchantReferenceCode",
+                      "amount",
+                      "currency",
+                      "status",
+                      "previousStatus",
+                      "refundedAmount",
+                      "fullyRefunded",
+                      "netpayTransactionId",
+                      "paymentMethod",
+                      "paymentReference",
+                      "failureCode",
+                      "failureReason"
+                    ],
+                    "additionalProperties": false,
+                    "description": "The order at the moment of the change. No cardholder data of any kind."
+                  }
+                },
+                "required": [
+                  "eventId",
+                  "eventType",
+                  "occurredAt",
+                  "sequence",
+                  "tenantId",
+                  "data"
+                ],
+                "additionalProperties": false,
+                "title": "payment.expired",
+                "description": "Reconciliation found the order never paid in time: 3-D Secure not completed within 30 min, or a cash reference past its expiry (→ EXPIRED)."
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Accepted. Any other answer, or none within the timeout, is retried with backoff for 24 h."
+          }
+        }
+      }
+    },
+    "payment.paid_after_cancel": {
+      "post": {
+        "operationId": "webhook_payment_paid_after_cancel",
+        "summary": "payment.paid_after_cancel",
+        "description": "Netpay reported a payment for an order already CANCELLED or EXPIRED. The status does not change (data.status is still CANCELLED or EXPIRED); data.netpayTransactionId is the payment. Refund it. JSON Schema: docs/events/payment.paid_after_cancel.schema.json.",
+        "tags": [
+          "Outbound webhooks"
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Id",
+            "description": "Same as eventId; stable across retries. Deduplicate on it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Event-Type",
+            "description": "Same as eventType.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Attempt",
+            "description": "Attempt number, from 1; kept across an operator replay.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Signature",
+            "description": "t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\">; two v1 values during a secret rotation.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "required": true,
+            "name": "X-MTBPay-Delivery",
+            "description": "Signature scheme version.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "eventId": {
+                    "type": "string",
+                    "pattern": "^evt_[0-9a-f]{32}$",
+                    "description": "Stable across retries; also sent as X-MTBPay-Event-Id. Deduplicate on it."
+                  },
+                  "eventType": {
+                    "type": "string",
+                    "const": "payment.paid_after_cancel"
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                    "description": "When the order changed, not when it was delivered."
+                  },
+                  "sequence": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Per order, strictly increasing. A gap means an event is still to come."
+                  },
+                  "tenantId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "orderId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "description": "Order id in this platform."
+                      },
+                      "orderReference": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Reference sent to Netpay as the merchant reference code."
+                      },
+                      "merchantReferenceCode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The tenant's own business code."
+                      },
+                      "amount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Amount with two decimals, as a string (e.g. \"650.00\").",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "currency": {
+                        "type": "string",
+                        "pattern": "^[A-Z]{3}$"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "PENDING",
+                          "PENDING_VERIFICATION",
+                          "CHARGE_UNKNOWN",
+                          "PAID",
+                          "PARTIALLY_REFUNDED",
+                          "FAILED",
+                          "REFUNDED",
+                          "AMOUNT_MISMATCH",
+                          "CANCELLED",
+                          "EXPIRED"
+                        ],
+                        "description": "Status after the change."
+                      },
+                      "previousStatus": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "PENDING_VERIFICATION",
+                              "CHARGE_UNKNOWN",
+                              "PAID",
+                              "PARTIALLY_REFUNDED",
+                              "FAILED",
+                              "REFUNDED",
+                              "AMOUNT_MISMATCH",
+                              "CANCELLED",
+                              "EXPIRED"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Status before the change."
+                      },
+                      "refundedAmount": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "description": "Total returned to the buyer so far.",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "refunded": {
+                        "description": "Amount of this refund. Only on payment.refunded.",
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "examples": [
+                          "650.00"
+                        ]
+                      },
+                      "fullyRefunded": {
+                        "type": "boolean",
+                        "description": "True once the whole amount went back."
+                      },
+                      "netpayTransactionId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "paymentMethod": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "CARD",
+                              "OXXO"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "paymentReference": {
+                        "description": "Cash reference (OXXO Pay).",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "failureCode": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Z_]+$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Stable decline code (docs/ERRORS.md §5), e.g. INSUFFICIENT_FUNDS."
+                      },
+                      "failureReason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "orderId",
+                      "orderReference",
+                      "merchantReferenceCode",
+                      "amount",
+                      "currency",
+                      "status",
+                      "previousStatus",
+                      "refundedAmount",
+                      "fullyRefunded",
+                      "netpayTransactionId",
+                      "paymentMethod",
+                      "paymentReference",
+                      "failureCode",
+                      "failureReason"
+                    ],
+                    "additionalProperties": false,
+                    "description": "The order at the moment of the change. No cardholder data of any kind."
+                  }
+                },
+                "required": [
+                  "eventId",
+                  "eventType",
+                  "occurredAt",
+                  "sequence",
+                  "tenantId",
+                  "data"
+                ],
+                "additionalProperties": false,
+                "title": "payment.paid_after_cancel",
+                "description": "Netpay reported a payment for an order already CANCELLED or EXPIRED. The status does not change (data.status is still CANCELLED or EXPIRED); data.netpayTransactionId is the payment. Refund it."
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Accepted. Any other answer, or none within the timeout, is retried with backoff for 24 h."
+          }
+        }
+      }
+    }
+  }
+}

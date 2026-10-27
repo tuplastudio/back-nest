@@ -49,6 +49,7 @@ describe('payment redirect/cancel URLs come only from validated config (BN-TASK-
     expect(paymentUrls()).toEqual({
       redirectUrl: URLS.PAYMENT_REDIRECT_URL,
       cancelUrl: URLS.PAYMENT_CANCEL_URL,
+      quickLinkBaseUrl: null,
     });
   });
 
@@ -57,6 +58,7 @@ describe('payment redirect/cancel URLs come only from validated config (BN-TASK-
     expect(paymentUrls()).toEqual({
       redirectUrl: DEV_PAYMENT_URL_FALLBACK,
       cancelUrl: DEV_PAYMENT_URL_FALLBACK,
+      quickLinkBaseUrl: null,
     });
   });
 });
