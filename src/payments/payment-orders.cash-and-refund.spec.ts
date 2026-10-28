@@ -17,6 +17,7 @@ const quickLinks = {
   returnUrls: () => ({ successUrl: '', cancelUrl: '' }),
   register: () => Promise.resolve({ code: 'ABCDEF', url: '' }),
   findForOrder: () => Promise.resolve(null),
+  findForOrders: () => Promise.resolve(new Map()),
 } as unknown as PaymentQuickLinksService;
 
 /**

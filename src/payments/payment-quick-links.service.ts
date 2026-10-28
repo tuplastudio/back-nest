@@ -69,6 +69,18 @@ export class PaymentQuickLinksService {
   }
 
   /** Quick link de una orden del tenant actual, para que el agente lo reenvíe después de creado. */
+  /** Quick links of several orders at once (listing); orders without one are absent from the map. */
+  async findForOrders(tenantId: string, orderIds: readonly string[]): Promise<Map<string, QuickLinkRef>> {
+    if (orderIds.length === 0) {
+      return new Map();
+    }
+    const links = await this.controlPlane.client.paymentQuickLink.findMany({
+      where: { tenantId, orderId: { in: [...orderIds] } },
+      select: { code: true, orderId: true },
+    });
+    return new Map(links.map((link) => [link.orderId, { code: link.code, url: this.urlFor(link.code) }]));
+  }
+
   async findForOrder(tenantId: string, orderId: string): Promise<QuickLinkRef | null> {
     const link = await this.controlPlane.client.paymentQuickLink.findFirst({
       where: { tenantId, orderId },

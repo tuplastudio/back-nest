@@ -822,8 +822,15 @@ export class PaymentOrdersService {
     );
     const page = rows.slice(0, take);
     const last = page[page.length - 1];
+    // The code is what an agent reads and shares; the listing carries it like the detail does.
+    const quickLinks = this.quickLinks.enabled()
+      ? await this.quickLinks.findForOrders(
+          this.currentTenantId(),
+          page.map((row) => row.id),
+        )
+      : new Map<string, QuickLinkRef>();
     return {
-      items: page.map((row) => this.toView(row)),
+      items: page.map((row) => ({ ...this.toView(row), quickLink: quickLinks.get(row.id) ?? null })),
       nextCursor:
         rows.length > take && last !== undefined
           ? encodeOrderCursor({ direction, updatedAt: last.updatedAt, id: last.id })
