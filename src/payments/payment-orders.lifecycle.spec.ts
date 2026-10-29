@@ -144,7 +144,11 @@ function fixture(
     Promise.resolve({ sessionId: 'sess_1', hostedCheckoutUrl: 'https://pay.example/s/1' }),
   );
   const netpay = {
-    getTransaction: jest.fn(() => Promise.resolve(options.transaction ?? { status: 'DONE', amount: 100 })),
+    getTransaction: jest.fn(() =>
+      Promise.resolve(
+        options.transaction ?? { status: 'DONE', amount: 100, merchantReferenceCode: 'acme_abc' },
+      ),
+    ),
     createCheckoutSession,
   } as unknown as NetpayClient;
   const events = {
@@ -323,7 +327,7 @@ describe('POST /t/payments/orders/:id/cancel (BN-TASK-018)', () => {
   it('asks Netpay first when a charge is bound, and refuses with the PAID order when it was charged', async () => {
     const f = fixture({
       rows: [order({ status: 'PENDING_VERIFICATION', netpayTransactionId: 'txn-1', checkoutMode: 'custom' })],
-      transaction: { status: 'DONE', amount: 100 },
+      transaction: { status: 'DONE', amount: 100, merchantReferenceCode: 'acme_abc' },
     });
     await expect(f.service.cancel('order-1')).rejects.toMatchObject({
       code: 'ORDER_STATE_CONFLICT',
@@ -475,7 +479,7 @@ describe('reconcileOrder (BN-TASK-016)', () => {
   it('settles a PENDING order Netpay reports paid, rate-limited', async () => {
     const { outcome, f, calls } = await reconcile(
       { netpayTransactionId: 'txn-1', updatedAt: ago(10) },
-      { status: 'DONE', amount: 100 },
+      { status: 'DONE', amount: 100, merchantReferenceCode: 'acme_abc' },
     );
     expect(outcome).toMatchObject({ from: 'PENDING', to: 'PAID', corrected: true, action: 'verified' });
     expect(f.emitted).toEqual(['payment.paid']);
@@ -536,7 +540,7 @@ describe('reconcileOrder (BN-TASK-016)', () => {
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     const { outcome } = await reconcile(
       { status: 'PAID', netpayTransactionId: 'txn-1', operationClaim: 'refund' },
-      { status: 'DONE', amount: 100 },
+      { status: 'DONE', amount: 100, merchantReferenceCode: 'acme_abc' },
     );
     expect(outcome).toMatchObject({ to: 'PAID', action: 'manual_review', corrected: false });
     expect(warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'reconcile_manual_review' }));
@@ -546,7 +550,7 @@ describe('reconcileOrder (BN-TASK-016)', () => {
   it('records a late payment on a cancelled order', async () => {
     const { outcome, f } = await reconcile(
       { status: 'CANCELLED', netpayTransactionId: 'txn-1' },
-      { status: 'DONE', amount: 100 },
+      { status: 'DONE', amount: 100, merchantReferenceCode: 'acme_abc' },
     );
     expect(outcome).toMatchObject({
       from: 'CANCELLED',

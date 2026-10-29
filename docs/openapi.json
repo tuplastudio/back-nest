@@ -1067,6 +1067,9 @@
           "400": {
             "description": "Invalid payload."
           },
+          "403": {
+            "description": "A requested scope exceeds the caller’s own permissions (or scopes, for a key); `admin:*` is granted by platform administrators only."
+          },
           "409": {
             "description": "An unsupported scope was requested."
           },
@@ -2449,7 +2452,7 @@
         ]
       },
       "post": {
-        "description": "Append-only (BN-REQ-CFG-002): a change writes the next version and orders keep the version they were created with. A first configuration, or a change of environment or secret key, returns a new `webhookToken` once, retires the previous one and clears `webhookRegisteredAt`: register the new URL with Netpay (BN-REQ-CFG-003).",
+        "description": "Append-only (BN-REQ-CFG-002): a change writes the next version and orders keep the version they were created with. A first configuration, or a change of environment or secret key, returns a new `webhookToken` once, retires the previous one and clears `webhookRegisteredAt`: register the new URL with Netpay (BN-REQ-CFG-003). A tenant member session must also send its own password as `currentPassword` (re-authentication; members have no second factor); platform admins and API keys do not.",
         "operationId": "PaymentOrdersController_saveConfig",
         "parameters": [],
         "requestBody": {

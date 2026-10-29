@@ -57,24 +57,29 @@ function fixture(rows: Record<string, unknown>[]) {
   const created: Record<string, unknown>[] = [];
   const emitted: { type: string; status: string; previousStatus: string | null; refunded?: string }[] = [];
   const audits: AuditEntry[] = [];
+  const claims: Record<string, unknown>[] = [];
   const client = {
     paymentOrder: {
       findFirst: jest.fn(() => Promise.resolve(rows[0] ?? null)),
       findFirstOrThrow: jest.fn(() =>
         Promise.resolve({ status: rows[0]?.['status'] ?? 'PENDING', sequence: 1 }),
       ),
-      updateMany: jest.fn((args: { data: Record<string, unknown> }) => {
+      updateMany: jest.fn((args: { where?: Record<string, unknown>; data: Record<string, unknown> }) => {
         writes.push({ many: args.data });
+        claims.push(args.where ?? {});
         return Promise.resolve({ count: 1 });
       }),
       update: jest.fn((args: { data: Record<string, unknown> }) => {
         writes.push(args.data);
         const merged: Record<string, unknown> = { ...(rows[0] ?? {}) };
         for (const [k, v] of Object.entries(args.data)) {
+          const increment = typeof v === 'object' && v !== null && 'increment' in v ? v.increment : undefined;
           merged[k] =
-            k === 'sequence' && typeof v === 'object' && v !== null
-              ? Number(merged[k] ?? 0) + ((v as { increment?: number }).increment ?? 0)
-              : v;
+            increment === undefined
+              ? v
+              : merged[k] instanceof Prisma.Decimal
+                ? merged[k].plus(increment as Prisma.Decimal)
+                : Number(merged[k] ?? 0) + Number(increment);
         }
         rows[0] = merged;
         return Promise.resolve(merged);
@@ -168,6 +173,7 @@ function fixture(rows: Record<string, unknown>[]) {
       quickLinks,
     ),
     writes,
+    claims,
     created,
     emitted,
     audits,
@@ -275,6 +281,17 @@ describe('Partial refunds', () => {
         refunded: '70.00',
       },
     ]);
+  });
+
+  it('claims on the refunded total it read and adds the refund in the database (no lost update)', async () => {
+    const f = fixture([row({ status: 'PARTIALLY_REFUNDED', refundedAmount: new Prisma.Decimal('30.00') })]);
+    await f.service.refund('order-1', 'otra', '20.00');
+    // A refund that completed between the read and this claim moved the total, so
+    // this claim loses instead of refunding against a stale remainder.
+    expect(f.claims[0]).toMatchObject({ refundedAmount: new Prisma.Decimal('30.00') });
+    const written = f.writes.find((w) => 'refundedAmount' in w)?.['refundedAmount'];
+    expect(written).toEqual({ increment: new Prisma.Decimal('20.00') });
+    expect((f.rows[0]?.['refundedAmount'] as Prisma.Decimal).toFixed(2)).toBe('50.00');
   });
 
   it('announces a second partial refund too, although the status stays PARTIALLY_REFUNDED', async () => {

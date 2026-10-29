@@ -105,7 +105,14 @@ describe('reconciliation (BN-TASK-016, integration)', () => {
       if (tx === undefined) {
         throw new Error('not found');
       }
-      return { transactionTokenId: id, ...tx };
+      // Like Netpay: the transaction names the order it was charged for.
+      const bound = await tenantPrisma.forTenantTransaction(SCHEMA, (client) =>
+        client.paymentOrder.findFirst({
+          where: { netpayTransactionId: id },
+          select: { orderReference: true },
+        }),
+      );
+      return { transactionTokenId: id, merchantReferenceCode: bound?.orderReference, ...tx };
     },
   } as unknown as NetpayClient;
   /** Two configuration versions: orders of v1 must be checked with v1's key. */

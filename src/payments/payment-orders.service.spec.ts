@@ -230,10 +230,12 @@ function serviceOver(
     Promise.resolve({ sessionId: 'sess_probe', hostedCheckoutUrl: 'https://pay.example/hosted/sess_probe' }),
   );
   const createCharge = jest.fn((..._args: unknown[]) =>
-    Promise.resolve({ transactionTokenId: 'txn-charged', status: 'DONE', amount: 150.75 } as Record<
-      string,
-      unknown
-    >),
+    Promise.resolve({
+      transactionTokenId: 'txn-charged',
+      status: 'DONE',
+      amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
+    } as Record<string, unknown>),
   );
   const createClient = jest.fn((..._args: unknown[]) =>
     Promise.resolve({ id: 'cus_new' } as Record<string, unknown>),
@@ -304,7 +306,11 @@ function serviceOver(
 
 describe('PaymentOrdersService verification', () => {
   it('marks an order paid only when Netpay confirms it and the amount matches', async () => {
-    const { service, emitted } = serviceOver([order()], { status: 'DONE', amount: 150.75 });
+    const { service, emitted } = serviceOver([order()], {
+      status: 'DONE',
+      amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
+    });
     const result = await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
     expect(result.status).toBe('PAID');
     expect(emitted).toContain('PAID');
@@ -347,16 +353,65 @@ describe('PaymentOrdersService verification', () => {
 
   it('does not conclude anything when the provider omits an amount', async () => {
     // Missing data is not agreement: without an amount there is nothing to
-    // compare, so the order stays unconfirmed.
-    const { service } = serviceOver([order()], { status: 'DONE' });
+    // compare, so the order stays unconfirmed (fails closed).
+    const { service, emitted, writes } = serviceOver([order()], {
+      status: 'DONE',
+      merchantReferenceCode: 'acme_abc',
+    });
     const result = await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
-    expect(result.status).toBe('PAID');
+    expect(result.status).toBe('PENDING_VERIFICATION');
+    expect(emitted).not.toContain('PAID');
+    expect(writes.some((w) => typeof w['failureReason'] === 'string')).toBe(true);
+  });
+
+  it('does not settle a paid transaction that names no order', async () => {
+    // Without `merchantReferenceCode` nothing ties the transaction to this order:
+    // someone else's genuine payment of the same amount must not settle it.
+    const { service, emitted } = serviceOver([order()], { status: 'DONE', amount: 150.75 });
+    const result = await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
+    expect(result.status).toBe('PENDING_VERIFICATION');
+    expect(emitted).not.toContain('PAID');
+  });
+
+  it('refuses a transaction already bound to another order', async () => {
+    const { service, emitted } = serviceOver([order()], {
+      status: 'DONE',
+      amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
+    });
+    // The lookup for "another order with this transaction" finds one.
+    const other = order({ id: 'order-2', netpayTransactionId: 'txn-1' });
+    const internals = service as unknown as { tenantPrisma: { forTenantTransaction: unknown } };
+    const real = internals.tenantPrisma.forTenantTransaction as (
+      s: string,
+      cb: (c: unknown) => Promise<unknown>,
+    ) => Promise<unknown>;
+    internals.tenantPrisma.forTenantTransaction = (schema: string, cb: (c: unknown) => Promise<unknown>) =>
+      real(schema, (client) => {
+        const c = client as {
+          paymentOrder: { findFirst: (a: { where: Record<string, unknown> }) => unknown };
+        };
+        const original = c.paymentOrder.findFirst;
+        return cb({
+          ...c,
+          paymentOrder: {
+            ...c.paymentOrder,
+            findFirst: (args: { where: Record<string, unknown> }) =>
+              'netpayTransactionId' in args.where ? Promise.resolve(other) : original(args),
+          },
+        });
+      });
+    await expect(service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID)).rejects.toThrow(
+      /already bound to a different order/,
+    );
+    expect(emitted).not.toContain('PAID');
   });
 
   it('is idempotent: a redelivered verification does not re-apply', async () => {
     const { service, emitted } = serviceOver([order({ status: 'PAID' })], {
       status: 'DONE',
       amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
     });
     const result = await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
     expect(result.changed).toBe(false);
@@ -1004,7 +1059,11 @@ describe('PaymentOrdersService stored-card ownership and digits (BN-TASK-053)', 
   });
 
   it('records the customer when a charge saves the card, so it can be charged again', async () => {
-    const f = serviceOver([order({ netpayTransactionId: null })], { status: 'DONE', amount: 150.75 });
+    const f = serviceOver([order({ netpayTransactionId: null })], {
+      status: 'DONE',
+      amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
+    });
     await f.service.chargeToken('order-1', {
       cardToken: 'token_abcdefghij',
       billing: billing(),
@@ -1023,7 +1082,11 @@ describe('PaymentOrdersService status changes: audit and metrics (BN-TASK-030, B
   afterEach(() => jest.restoreAllMocks());
 
   it('audits a webhook-driven PENDING → PAID as the system, with the tenant and the order', async () => {
-    const { service, audits } = serviceOver([order()], { status: 'DONE', amount: 150.75 });
+    const { service, audits } = serviceOver([order()], {
+      status: 'DONE',
+      amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
+    });
     await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
     expect(audits).toEqual([
       expect.objectContaining({
@@ -1045,7 +1108,11 @@ describe('PaymentOrdersService status changes: audit and metrics (BN-TASK-030, B
 
   it('logs payment_status_change for the log-based metric', async () => {
     const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    const { service } = serviceOver([order()], { status: 'DONE', amount: 150.75 });
+    const { service } = serviceOver([order()], {
+      status: 'DONE',
+      amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
+    });
     await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
     expect(log).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1059,7 +1126,11 @@ describe('PaymentOrdersService status changes: audit and metrics (BN-TASK-030, B
 
   it('neither audits nor logs a verification that changed nothing', async () => {
     const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    const { service, audits } = serviceOver([order({ status: 'PAID' })], { status: 'DONE', amount: 150.75 });
+    const { service, audits } = serviceOver([order({ status: 'PAID' })], {
+      status: 'DONE',
+      amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
+    });
     await service.verifyOrderInSchema(SCHEMA, 'order-1', 'txn-1', TENANT_ID);
     expect(audits).toHaveLength(0);
     expect(log).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'payment_status_change' }));
@@ -1114,6 +1185,7 @@ describe('PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TA
     const f = serviceOver([order({ status: 'FAILED', netpayTransactionId: 'txn-1' })], {
       status: 'DONE',
       amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
     });
     const result = await charge(f.service);
     expect(f.createCharge).toHaveBeenCalledTimes(1);
@@ -1158,6 +1230,7 @@ describe('PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TA
     const f = serviceOver([previous], {
       status: 'DONE',
       amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
     });
     const refused = await charge(f.service).catch((error: unknown) => error);
     expect(refused).toMatchObject({ code: 'ORDER_STATE_CONFLICT', status: 409 });
@@ -1198,6 +1271,7 @@ describe('PaymentOrdersService unknown outcomes and attempts (BN-TASK-014, BN-TA
     const f = serviceOver([order({ status: 'CHARGE_UNKNOWN', netpayTransactionId: null })], {
       status: 'DONE',
       amount: 150.75,
+      merchantReferenceCode: 'acme_abc',
     });
     await f.service.verifyOrder('order-1', 'txn-found');
     expect(f.attempts[0]).toMatchObject({

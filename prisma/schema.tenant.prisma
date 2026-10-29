@@ -443,6 +443,8 @@ model PaymentOrder {
   pendingProviderResults PendingProviderResult[]
 
   @@index([tenantId, status])
+  // Also UNIQUE where not null: partial index "payment_orders_netpayTransactionId_key"
+  // from tenant migration 0022, which Prisma cannot express. Keep it out of any diff.
   @@index([netpayTransactionId])
   @@index([paymentReference])
   @@index([status, updatedAt])

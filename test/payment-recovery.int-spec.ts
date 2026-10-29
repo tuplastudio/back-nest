@@ -140,11 +140,20 @@ describe('payment recovery paths (BN-TASK-010/011/014/015, integration)', () => 
   const transactions = new Map<string, { status: string; amount: number }>();
   let nextCharge: () => Promise<Record<string, unknown>> = () =>
     Promise.resolve({ transactionTokenId: 'unset', status: 'success' });
+  /** Order reference Netpay names for a transaction not bound yet (settlement fails closed without it). */
+  const refs = new Map<string, string>();
   const netpay = {
-    getTransaction: (_env: string, _key: string, id: string) => {
+    getTransaction: async (_env: string, _key: string, id: string) => {
       calls.push(`get:${id}`);
       const tx = transactions.get(id) ?? { status: 'DONE', amount: 100 };
-      return Promise.resolve({ transactionTokenId: id, ...tx });
+      // Like Netpay: the transaction names the order it was charged for.
+      const bound = await tenantPrisma.forTenantTransaction(SCHEMA, (client) =>
+        client.paymentOrder.findFirst({
+          where: { netpayTransactionId: id },
+          select: { orderReference: true },
+        }),
+      );
+      return { transactionTokenId: id, merchantReferenceCode: refs.get(id) ?? bound?.orderReference, ...tx };
     },
     refund: () => {
       calls.push('refund');
@@ -277,6 +286,7 @@ describe('payment recovery paths (BN-TASK-010/011/014/015, integration)', () => 
   describe('pending provider results (BN-TASK-011)', () => {
     it('keeps a confirmed refund whose local write failed, holds the claim, and applies it once', async () => {
       const order = await newOrder();
+      refs.set(`txn_ref_${RUN}`, order.orderReference);
       await service().verifyOrderInSchema(SCHEMA, order.id, `txn_ref_${RUN}`, TENANT_ID);
 
       await expect(
@@ -400,6 +410,7 @@ describe('payment recovery paths (BN-TASK-010/011/014/015, integration)', () => 
       // The transaction turned up (Netpay Manager, or the notification): verify settles it.
       const tx = `txn_found_${RUN}`;
       transactions.set(tx, { status: 'DONE', amount: 100 });
+      refs.set(tx, order.orderReference);
       const verified = await service().verifyOrderInSchema(SCHEMA, order.id, tx, TENANT_ID);
       expect(verified.status).toBe('PAID');
       expect(await attemptsOf(order.id)).toEqual([

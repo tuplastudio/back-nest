@@ -255,7 +255,7 @@ export class AuthController {
   @ApiOkResponse({ type: () => TokenResponseDto })
   async verifyMfa(@Body() body: MfaCodeDto, @Req() req: Request): Promise<TokenResponseDto> {
     const adminId = this.adminIdOf(req);
-    if (!(await this.mfa.verify(adminId, body.code))) {
+    if (!(await this.mfa.verify(adminId, body.code, this.auditContext(req)))) {
       throw new InvalidMfaCodeException();
     }
     const session = await this.auth.issueSession(

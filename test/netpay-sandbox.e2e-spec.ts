@@ -337,7 +337,7 @@ suite('Netpay sandbox (real provider)', () => {
       'POST',
       '/t/payments/config',
       ownerToken,
-      { publicKey: PK, secretKey: SK, environment: 'SANDBOX' },
+      { publicKey: PK, secretKey: SK, environment: 'SANDBOX', currentPassword: PASSWORD },
       tenantHeader(),
     );
     expect(res.status).toBe(200);

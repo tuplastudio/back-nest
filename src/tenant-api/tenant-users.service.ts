@@ -11,13 +11,19 @@ import { TokenService } from '../auth/token.service';
 import { RequestContextService } from '../tenancy/request-context.service';
 import {
   AppException,
-  AccountLockedException,
   AuthorizationException,
   ConflictException,
   InvalidCredentialsException,
   NotFoundException,
   TokenReuseDetectedException,
+  ValidationException,
 } from '../common/errors/app.exception';
+
+/** Consecutive failures before a member account is locked. */
+const MAX_FAILED_ATTEMPTS = 5;
+
+/** How long a member lock lasts. */
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 
 /**
  * Result of a successful tenant member sign-in.
@@ -143,8 +149,9 @@ export class TenantUsersService {
    * @param email Submitted e-mail address.
    * @param password Submitted password.
    * @returns The issued token pair and profile summary.
-   * @throws {InvalidCredentialsException} On bad credentials or an inactive account.
-   * @throws {AccountLockedException} When the account is locked out.
+   * @throws {InvalidCredentialsException} On bad credentials, an inactive account
+   * or a locked one: the lock is checked before the password, so a locked
+   * account answers the same 401 whatever password is sent.
    */
   async signIn(email: string, password: string): Promise<TenantSignInResult> {
     const tenant = this.requestContext.requireTenant();
@@ -156,19 +163,23 @@ export class TenantUsersService {
     const user = await this.tenantPrisma.forCurrentTenantTransaction((client) =>
       client.user.findUnique({ where: { emailLookup: lookup } }),
     );
-    const verification = await this.passwords.verify(user?.passwordHash ?? null, password);
+    // The lock is decided before the password is looked at, so a locked account
+    // cannot tell a right password from a wrong one. A locked or unknown account
+    // is verified against the dummy hash: every path costs the same CPU.
+    const locked = user !== null && isLocked(user);
+    const verification = await this.passwords.verify(locked ? null : (user?.passwordHash ?? null), password);
 
-    if (!user || !verification.valid || user.deletedAt) {
-      if (user && !user.deletedAt) {
-        await this.registerFailedAttempt(user);
+    if (!user || locked || !verification.valid || user.deletedAt) {
+      if (user && !user.deletedAt && !locked) {
+        await this.registerFailedAttempt(user.id);
       }
       await this.audit.record({
         tenantId: tenant.id,
         actorType: AuditActorType.SYSTEM,
         action: 'tenant.auth.sign-in',
         resourceType: 'user',
-        outcome: AuditOutcome.FAILURE,
-        metadata: { emailLookup: lookup },
+        outcome: locked ? AuditOutcome.DENIED : AuditOutcome.FAILURE,
+        metadata: { emailLookup: lookup, ...(locked ? { reason: 'locked' } : {}) },
         ...this.requestMeta(),
       });
       throw new InvalidCredentialsException();
@@ -176,10 +187,6 @@ export class TenantUsersService {
 
     if (user.status !== MemberStatus.ACTIVE) {
       throw new InvalidCredentialsException();
-    }
-
-    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
-      throw new AccountLockedException(Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000));
     }
 
     // Rehash outside the transaction for the same CPU reason as above.
@@ -608,27 +615,76 @@ export class TenantUsersService {
   }
 
   /**
+   * Re-authenticates the calling member with their password before a sensitive
+   * change (replacing the tenant's Netpay keys). Members have no second factor,
+   * so a stolen session alone must not be enough. A wrong password spends the
+   * same lockout budget as a failed sign-in.
+   *
+   * @param userId The calling member.
+   * @param password Password submitted with the change.
+   * @throws {ValidationException} When no password was sent.
+   * @throws {InvalidCredentialsException} When it is wrong, or the account is locked.
+   */
+  async confirmPassword(userId: string, password: string | undefined): Promise<void> {
+    if (password === undefined || password === '') {
+      throw new ValidationException(
+        'currentPassword is required to change this setting from a member session.',
+      );
+    }
+    const tenant = this.requestContext.requireTenant();
+    const user = await this.tenantPrisma.forCurrentTenantTransaction((client) =>
+      client.user.findUnique({ where: { id: userId } }),
+    );
+    const locked = user !== null && isLocked(user);
+    const verification = await this.passwords.verify(locked ? null : (user?.passwordHash ?? null), password);
+    if (user && !locked && verification.valid && !user.deletedAt) {
+      return;
+    }
+    if (user && !locked && !user.deletedAt) {
+      await this.registerFailedAttempt(user.id);
+    }
+    await this.audit.record({
+      tenantId: tenant.id,
+      actorType: AuditActorType.TENANT_USER,
+      actorId: userId,
+      action: 'tenant.auth.reauthenticate',
+      resourceType: 'user',
+      resourceId: userId,
+      outcome: locked ? AuditOutcome.DENIED : AuditOutcome.FAILURE,
+      ...(locked ? { metadata: { reason: 'locked' } } : {}),
+      ...this.requestMeta(),
+    });
+    throw new InvalidCredentialsException();
+  }
+
+  /**
    * Records a failed sign-in and locks the account once the budget is spent.
    *
-   * @param client Tenant-scoped client.
-   * @param user The member being attacked.
+   * The counter is incremented in the database, never computed from a row read
+   * earlier, so concurrent failures cannot overwrite each other; the lock is a
+   * conditional update on it, and resets it for the next window.
+   *
+   * @param userId The member being attacked.
    */
-  private async registerFailedAttempt(user: User): Promise<void> {
-    const attempts = user.failedLoginAttempts + 1;
-    const shouldLock = attempts >= 5;
+  private async registerFailedAttempt(userId: string): Promise<void> {
+    const locked = await this.tenantPrisma.forCurrentTenantTransaction(async (client) => {
+      const counted = await client.user.update({
+        where: { id: userId },
+        data: { failedLoginAttempts: { increment: 1 } },
+        select: { failedLoginAttempts: true },
+      });
+      if (counted.failedLoginAttempts < MAX_FAILED_ATTEMPTS) {
+        return false;
+      }
+      const result = await client.user.updateMany({
+        where: { id: userId, failedLoginAttempts: { gte: MAX_FAILED_ATTEMPTS } },
+        data: { failedLoginAttempts: 0, lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
+      });
+      return result.count === 1;
+    });
 
-    await this.tenantPrisma.forCurrentTenantTransaction((client) =>
-      client.user.update({
-        where: { id: user.id },
-        data: {
-          failedLoginAttempts: shouldLock ? 0 : attempts,
-          lockedUntil: shouldLock ? new Date(Date.now() + 15 * 60 * 1000) : user.lockedUntil,
-        },
-      }),
-    );
-
-    if (shouldLock) {
-      this.logger.warn(`Locked tenant member ${user.id} after repeated failed sign-in attempts.`);
+    if (locked) {
+      this.logger.warn(`Locked tenant member ${userId} after repeated failed sign-in attempts.`);
     }
   }
 
@@ -641,4 +697,14 @@ export class TenantUsersService {
     const context = this.requestContext.get();
     return { ipHash: context.ipHash, userAgentHash: context.userAgentHash };
   }
+}
+
+/**
+ * Whether a member account is locked right now.
+ *
+ * @param user Lock column of the account.
+ * @returns `true` while `lockedUntil` is in the future.
+ */
+function isLocked(user: { lockedUntil: Date | null }): boolean {
+  return user.lockedUntil !== null && user.lockedUntil.getTime() > Date.now();
 }

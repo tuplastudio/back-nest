@@ -937,6 +937,21 @@ export class PaymentOrdersService {
       );
       throw new ConflictException('The transaction was charged for a different order.');
     }
+    // One transaction settles one order. Without this a genuine paid transaction could
+    // be replayed against a second order of the same amount; the partial unique index
+    // of tenant migration 0022 enforces the same rule in the database.
+    const boundElsewhere = await this.tenantPrisma.forTenantTransaction(schemaName, (client) =>
+      client.paymentOrder.findFirst({
+        where: { netpayTransactionId: transactionId, id: { not: orderId } },
+        select: { id: true },
+      }),
+    );
+    if (boundElsewhere !== null && boundElsewhere.id !== orderId) {
+      this.logger.warn(
+        `Transaction ${transactionId} is already bound to another order; refusing ${orderId}.`,
+      );
+      throw new ConflictException('The transaction is already bound to a different order.');
+    }
 
     const expected = existing.amount.toFixed(2);
     const reported = toAmountString(transaction.amount);
@@ -965,7 +980,21 @@ export class PaymentOrdersService {
       };
     }
 
-    if (status !== null && PROVIDER_SETTLED.has(status)) {
+    // Fail closed: a settlement is only believed when Netpay names this order and
+    // the amount. Either one missing proves nothing, so the order is not paid; it
+    // stays under verification with the reason recorded, for reconciliation or a
+    // person to settle.
+    const unprovenSettlement =
+      status !== null &&
+      PROVIDER_SETTLED.has(status) &&
+      (transaction.merchantReferenceCode !== existing.orderReference || reported === null);
+    if (unprovenSettlement) {
+      this.logger.warn(
+        `Transaction ${transactionId} reported ${status} without naming order ${existing.id} and its amount; not settling it.`,
+      );
+    }
+
+    if (status !== null && PROVIDER_SETTLED.has(status) && !unprovenSettlement) {
       const updated = await this.applyStatus(
         schemaName,
         existing.id,
@@ -1035,13 +1064,23 @@ export class PaymentOrdersService {
       };
     }
 
-    // `IN_PROCESS`, or a status we do not recognise: nothing is concluded.
+    // `IN_PROCESS`, a status we do not recognise, or a settlement Netpay did not
+    // tie to this order and amount: nothing is concluded.
     const updated = await this.applyStatus(
       schemaName,
       existing.id,
       'PENDING_VERIFICATION',
       now,
-      { netpayTransactionId: transactionId, lastVerifiedAt: now },
+      {
+        netpayTransactionId: transactionId,
+        lastVerifiedAt: now,
+        ...(unprovenSettlement
+          ? {
+              failureReason:
+                'The provider reported the charge as settled without naming this order and its amount; it needs a manual verification.',
+            }
+          : {}),
+      },
       // A CHARGE_UNKNOWN attempt learns its transaction here; it is still undecided.
       { tenantId, source, attempt: { kind: 'settle', transactionId, status: ATTEMPT.SUBMITTED } },
     );
@@ -1896,8 +1935,13 @@ export class PaymentOrdersService {
     const schemaName = this.tenantPrisma.requireCurrentSchema();
     const tenantId = this.currentTenantId();
     // Claimed before the provider is called: two concurrent refunds would both
-    // see a settled order and both reverse the transaction.
-    await this.claimOrder(existing.id, 'refund', { status: { in: [...REFUNDABLE_STATUSES] } });
+    // see a settled order and both reverse the transaction. The claim also requires
+    // the refunded total read above, so `remaining` cannot be stale: a refund that
+    // completed in between (and released its claim) makes this claim lose.
+    await this.claimOrder(existing.id, 'refund', {
+      status: { in: [...REFUNDABLE_STATUSES] },
+      refundedAmount: existing.refundedAmount,
+    });
     try {
       await this.reverseAtProvider(
         config,
@@ -1925,7 +1969,8 @@ export class PaymentOrdersService {
         full ? STATUS_REFUNDED : STATUS_PARTIALLY_REFUNDED,
         new Date(),
         {
-          refundedAmount: total,
+          // Added in the database rather than overwritten with a total computed here.
+          refundedAmount: { increment: requested },
           failureReason: null,
           operationClaim: null,
           operationClaimedAt: null,

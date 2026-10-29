@@ -5,7 +5,8 @@ import { ApiKeyStatus, AuditActorType } from '../generated/control-plane/enums';
 import type { ApiKeyModel as ApiKey } from '../generated/control-plane/models/ApiKey';
 import { AuditLogService } from '../audit/audit-log.service';
 import { AppConfig } from '../config/app-config.service';
-import { ConflictException, NotFoundException } from '../common/errors/app.exception';
+import { AuthorizationException, ConflictException, NotFoundException } from '../common/errors/app.exception';
+import { AuthorizationService } from '../auth/authorization.service';
 import { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
 import { RequestContextService } from '../tenancy/request-context.service';
 
@@ -33,8 +34,13 @@ export const GRANTABLE_SCOPES = [
   // rotation and replay are mutations and require `webhooks:write`.
   'webhooks:read',
   'webhooks:write',
+  // Key management through the API. Grantable by a platform administrator only
+  // (see ApiKeyService.assertCallerMayGrant): no member role holds it as a permission.
   'admin:*',
 ] as const;
+
+/** The key-management scope, which only a platform administrator may grant. */
+const ADMIN_SCOPE = 'admin:*';
 
 /** A scope that may be granted to an API key. */
 export type GrantableScope = (typeof GRANTABLE_SCOPES)[number];
@@ -92,12 +98,14 @@ export class ApiKeyService {
    * @param config Validated application configuration.
    * @param audit Audit trail writer.
    * @param requestContext Request-scoped context holder.
+   * @param authorization Resolves the calling member's or admin's permissions.
    */
   constructor(
     private readonly prisma: ControlPlanePrismaService,
     private readonly config: AppConfig,
     private readonly audit: AuditLogService,
     private readonly requestContext: RequestContextService,
+    private readonly authorization: AuthorizationService,
   ) {}
 
   /**
@@ -110,6 +118,7 @@ export class ApiKeyService {
    * @param createdBy Actor recorded as the creator.
    * @returns The metadata row and the one-time clear-text secret.
    * @throws {ConflictException} When a scope is not grantable.
+   * @throws {AuthorizationException} When the caller does not hold a requested scope itself.
    */
   async issue(
     tenantId: string,
@@ -119,6 +128,7 @@ export class ApiKeyService {
     createdBy: { type: AuditActorType; id: string | null },
   ): Promise<IssuedApiKey> {
     this.assertGrantableScopes(scopes);
+    await this.assertCallerMayGrant(scopes);
 
     const publicPart = randomBytes(ApiKeyService.PUBLIC_PART_BYTES).toString('hex');
     const secretPart = randomBytes(32).toString('base64url');
@@ -222,6 +232,7 @@ export class ApiKeyService {
    * @param apiKeyId Key to rotate.
    * @returns The new key row and its one-time secret.
    * @throws {NotFoundException} When the key does not exist or is not active.
+   * @throws {AuthorizationException} When the key holds a scope the caller does not.
    */
   async rotate(tenantId: string, apiKeyId: string): Promise<IssuedApiKey> {
     const existing = await this.prisma.client.apiKey.findFirst({
@@ -233,6 +244,8 @@ export class ApiKeyService {
     if (existing.status !== ApiKeyStatus.ACTIVE) {
       throw new ConflictException(`Only active API keys can be rotated (current: ${existing.status}).`);
     }
+    // Rotation hands out a fresh secret for the key's scopes: the same as minting it.
+    await this.assertCallerMayGrant(existing.scopes);
 
     const publicPart = randomBytes(ApiKeyService.PUBLIC_PART_BYTES).toString('hex');
     const secretPart = randomBytes(32).toString('base64url');
@@ -418,6 +431,42 @@ export class ApiKeyService {
       throw new ConflictException(
         `Unsupported scope(s): ${invalid.join(', ')}. Grantable scopes: ${GRANTABLE_SCOPES.join(', ')}.`,
       );
+    }
+  }
+
+  /**
+   * Refuses a scope the caller does not hold itself, so a credential can never
+   * be worth more than the principal that minted it.
+   *
+   *  * A member or platform admin needs the RBAC permission of the same name
+   *    (scopes and permissions share the catalogue vocabulary). A tenant ADMIN,
+   *    whose role deliberately lacks `webhooks:*`, cannot launder that authority
+   *    through a key.
+   *  * `admin:*` is not a permission: only a platform administrator grants it.
+   *  * An API key (holding `admin:*`) only passes on scopes it holds, and never
+   *    `admin:*` itself, so keys cannot breed more powerful keys.
+   *
+   * @param scopes Scopes the new (or rotated) key would carry.
+   * @throws {AuthorizationException} When any scope exceeds the caller's own.
+   */
+  private async assertCallerMayGrant(scopes: readonly string[]): Promise<void> {
+    const principal = this.requestContext.principal;
+    if (principal === null || principal === undefined) {
+      throw new AuthorizationException('Authentication required.');
+    }
+    let held: (scope: string) => boolean;
+    if (principal.kind === 'api-key') {
+      held = (scope) => scope !== ADMIN_SCOPE && principal.scopes.includes(scope);
+    } else {
+      const { permissions } = await this.authorization.resolve(principal);
+      held = (scope) =>
+        scope === ADMIN_SCOPE ? principal.kind === 'platform-admin' : permissions.has(scope);
+    }
+    const beyond = scopes.filter((scope) => !held(scope));
+    if (beyond.length > 0) {
+      throw new AuthorizationException(`You cannot grant scope(s) you do not hold: ${beyond.join(', ')}.`, {
+        scopes: beyond,
+      });
     }
   }
 

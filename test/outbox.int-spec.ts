@@ -108,10 +108,17 @@ describe('payment event outbox (BN-TASK-004, integration)', () => {
     resolvedAt: Date.now(),
   };
 
+  /** Order reference Netpay names for each transaction (settlement fails closed without it). */
+  const refs = new Map<string, string>();
   /** Netpay stand-in: every transaction is settled for the amount asked. */
   const netpay = {
     getTransaction: (_env: string, _key: string, id: string) =>
-      Promise.resolve({ transactionTokenId: id, status: 'DONE', amount: 100 }),
+      Promise.resolve({
+        transactionTokenId: id,
+        status: 'DONE',
+        amount: 100,
+        merchantReferenceCode: refs.get(id),
+      }),
     refund: () => Promise.resolve(),
     cancelCharge: () => Promise.resolve('CANCELED'),
   } as unknown as NetpayClient;
@@ -261,6 +268,7 @@ describe('payment event outbox (BN-TASK-004, integration)', () => {
         throw new Error('crash after the event write');
       }
     }
+    refs.set('txn_rollback', order.orderReference);
     await expect(
       service(new FailingAfterWrite()).verifyOrderInSchema(SCHEMA, order.id, 'txn_rollback', TENANT_ID),
     ).rejects.toThrow('crash after the event write');
@@ -272,6 +280,7 @@ describe('payment event outbox (BN-TASK-004, integration)', () => {
   it('delivers, after a restart, an event committed before the process died, as its snapshot', async () => {
     const order = await newOrder();
     // Commit PAID and its event. No dispatcher is running: the process "dies" here.
+    refs.set('txn_restart', order.orderReference);
     const result = await service().verifyOrderInSchema(SCHEMA, order.id, 'txn_restart', TENANT_ID);
     expect(result.status).toBe('PAID');
     const [paid] = await outboxOf(order.id);
@@ -332,6 +341,7 @@ describe('payment event outbox (BN-TASK-004, integration)', () => {
 
   it('gives a partial refund sequence + 1 and its refundedAmount, then REFUNDED for the rest', async () => {
     const order = await newOrder();
+    refs.set('txn_partial', order.orderReference);
     await service().verifyOrderInSchema(SCHEMA, order.id, 'txn_partial', TENANT_ID);
     await requestContext.run({ tenant }, () => service().refund(order.id, 'partial', '30.00'));
     await requestContext.run({ tenant }, () => service().refund(order.id, 'rest'));
@@ -364,6 +374,7 @@ describe('payment event outbox (BN-TASK-004, integration)', () => {
 
   it('fans an event out once even when two dispatchers race for it', async () => {
     const order = await newOrder();
+    refs.set('txn_race', order.orderReference);
     await service().verifyOrderInSchema(SCHEMA, order.id, 'txn_race', TENANT_ID);
     const received: Received[] = [];
     await Promise.all([dispatcher(received).drainOnce(), dispatcher(received).drainOnce()]);

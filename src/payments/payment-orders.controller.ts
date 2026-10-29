@@ -56,8 +56,9 @@ import {
 } from './netpay-endpoints';
 import { ValidationException } from '../common/errors/app.exception';
 import { Idempotent } from '../common/idempotency/idempotent.decorator';
-import { CurrentTenant } from '../common/decorators/current-tenant.decorator';
-import type { TenantContext } from '../tenancy/tenant-context.interface';
+import { CurrentPrincipal, CurrentTenant } from '../common/decorators/current-tenant.decorator';
+import type { Principal, TenantContext } from '../tenancy/tenant-context.interface';
+import { TenantUsersService } from '../tenant-api/tenant-users.service';
 
 /** Message for the certification's digits-only rule. */
 const DIGITS_RULE = { message: 'must contain digits only.' };
@@ -420,6 +421,16 @@ export class SavePaymentConfigDto {
   @ArrayMaxSize(10)
   @Matches(/^[A-Z]{3}$/, { each: true })
   allowedCurrencies?: string[];
+
+  /**
+   * The caller's own password. Required when a tenant member replaces the keys:
+   * members have no second factor, so the session alone does not authorise it.
+   * Ignored for platform administrators and API keys.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  currentPassword?: string;
 }
 
 /** Body for changing the tenant's payment settings without touching the keys. */
@@ -503,6 +514,7 @@ export class PaymentOrdersController {
     private readonly netpay: NetpayClient,
     private readonly tenantPrisma: TenantPrismaService,
     private readonly drift: WebhookDriftService,
+    private readonly tenantUsers: TenantUsersService,
   ) {}
 
   /**
@@ -845,10 +857,14 @@ export class PaymentOrdersController {
   @ApiOperation({
     summary: 'Store this tenant’s Netpay credentials (a new configuration version)',
     description:
-      'Append-only (BN-REQ-CFG-002): a change writes the next version and orders keep the version they were created with. A first configuration, or a change of environment or secret key, returns a new `webhookToken` once, retires the previous one and clears `webhookRegisteredAt`: register the new URL with Netpay (BN-REQ-CFG-003).',
+      'Append-only (BN-REQ-CFG-002): a change writes the next version and orders keep the version they were created with. A first configuration, or a change of environment or secret key, returns a new `webhookToken` once, retires the previous one and clears `webhookRegisteredAt`: register the new URL with Netpay (BN-REQ-CFG-003). A tenant member session must also send its own password as `currentPassword` (re-authentication; members have no second factor); platform admins and API keys do not.',
   })
   @HttpCode(HttpStatus.OK)
-  async saveConfig(@Body() body: SavePaymentConfigDto) {
+  async saveConfig(@Body() body: SavePaymentConfigDto, @CurrentPrincipal() principal: Principal) {
+    if (principal.kind === 'tenant-user') {
+      // Replacing the keys redirects the tenant's money: a member re-authenticates.
+      await this.tenantUsers.confirmPassword(principal.id, body.currentPassword);
+    }
     const { config, webhookToken } = await this.config.save({
       publicKey: body.publicKey,
       secretKey: body.secretKey,

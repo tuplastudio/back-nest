@@ -334,6 +334,15 @@ describe('Security hardening (e2e)', () => {
       body: order,
     });
     expect(errorCode(fresh.body)).not.toBe('STEP_UP_REQUIRED');
+
+    // Minting a key is a standing channel to the same payments: step-up too.
+    const staleKey = await api('POST', '/api-keys', {
+      token: sign(Math.floor(Date.now() / 1000) - 600),
+      tenant: tenantId,
+      body: { name: 'stale-session', scopes: ['payments:refund'] },
+    });
+    expect(staleKey.status).toBe(403);
+    expect(errorCode(staleKey.body)).toBe('STEP_UP_REQUIRED');
   });
 
   // --- BN-TASK-029: webhooks scopes ------------------------------------------

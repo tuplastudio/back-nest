@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
+import { TenantApiModule } from '../tenant-api/tenant-api.module';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service';
 import { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
 import { PaymentSecretBox } from './payment-secret-box';
@@ -53,7 +54,8 @@ export const OUTBOUND_TRANSPORT = Symbol('OutboundTransport');
  * tested with no network.
  */
 @Module({
-  imports: [AuthModule],
+  // TenantApiModule: a member replacing the Netpay keys re-enters their password.
+  imports: [AuthModule, TenantApiModule],
   controllers: [
     PaymentOrdersController,
     NetpayWebhookController,

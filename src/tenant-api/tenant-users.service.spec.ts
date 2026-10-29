@@ -347,3 +347,119 @@ describe('TenantUsersService.acceptInvitation (BN-REQ-SEC-002 invitation flow)',
     ).rejects.toMatchObject({ code: 'INVALID_INVITATION' });
   });
 });
+
+/**
+ * A member account behind sign-in and re-authentication, over a store that
+ * applies `{ increment }` the way the database does.
+ */
+function lockoutService(over: Record<string, unknown> = {}) {
+  const user: Record<string, unknown> = {
+    id: 'member-1',
+    passwordHash: 'real-hash',
+    status: 'ACTIVE',
+    deletedAt: null,
+    lockedUntil: null,
+    failedLoginAttempts: 0,
+    displayName: 'Member',
+    emailMasked: 'm***@x.test',
+    role: MemberRole.ADMIN,
+    ...over,
+  };
+  const updates: Record<string, unknown>[] = [];
+  const audits: { action: string; outcome?: string; metadata?: Record<string, unknown> }[] = [];
+  const client = {
+    user: {
+      findUnique: jest.fn(() => Promise.resolve({ ...user })),
+      update: jest.fn((args: { data: Record<string, unknown> }) => {
+        updates.push(args.data);
+        const inc = (args.data['failedLoginAttempts'] as { increment?: number } | undefined)?.increment;
+        if (inc !== undefined) {
+          user['failedLoginAttempts'] = Number(user['failedLoginAttempts']) + inc;
+        }
+        return Promise.resolve({ ...user });
+      }),
+      updateMany: jest.fn(
+        (args: { where: { failedLoginAttempts?: { gte: number } }; data: Record<string, unknown> }) => {
+          const gte = args.where.failedLoginAttempts?.gte ?? 0;
+          if (Number(user['failedLoginAttempts']) < gte) {
+            return Promise.resolve({ count: 0 });
+          }
+          Object.assign(user, args.data);
+          return Promise.resolve({ count: 1 });
+        },
+      ),
+    },
+  };
+  const verify = jest.fn((hash: string | null, password: string) =>
+    Promise.resolve({ valid: hash === 'real-hash' && password === 'right', needsRehash: false }),
+  );
+  const context = new RequestContextService();
+  const service = new TenantUsersService(
+    { forCurrentTenantTransaction: <T>(cb: (c: unknown) => Promise<T>) => cb(client) } as never,
+    { verify } as never,
+    { issuePair: jest.fn() } as never,
+    { blindIndex: jest.fn().mockReturnValue('blind-index') } as never,
+    {
+      record: (entry: { action: string; outcome?: string; metadata?: Record<string, unknown> }) => {
+        audits.push(entry);
+        return Promise.resolve();
+      },
+    } as never,
+    context,
+    {} as never,
+  );
+  const run = <T>(fn: () => Promise<T>): Promise<T> => context.run({ tenant: tenantContext() }, fn);
+  return { service, user, updates, audits, verify, run };
+}
+
+describe('TenantUsersService lockout (no oracle, atomic counter)', () => {
+  it('answers a locked account with 401 even for the right password, without checking it', async () => {
+    const f = lockoutService({ lockedUntil: new Date(Date.now() + 60_000) });
+    await expect(f.run(() => f.service.signIn('m@x.test', 'right'))).rejects.toMatchObject({
+      code: 'INVALID_CREDENTIALS',
+    });
+    expect(f.verify).toHaveBeenCalledWith(null, 'right');
+    expect(f.audits[0]).toMatchObject({ outcome: 'DENIED', metadata: { reason: 'locked' } });
+    expect(f.updates).toHaveLength(0);
+  });
+
+  it('increments in the database and locks at the fifth failure', async () => {
+    const f = lockoutService({ failedLoginAttempts: 4 });
+    await expect(f.run(() => f.service.signIn('m@x.test', 'wrong'))).rejects.toMatchObject({
+      code: 'INVALID_CREDENTIALS',
+    });
+    expect(f.updates[0]).toMatchObject({ failedLoginAttempts: { increment: 1 } });
+    expect((f.user['lockedUntil'] as Date).getTime()).toBeGreaterThan(Date.now());
+    expect(f.user['failedLoginAttempts']).toBe(0);
+  });
+});
+
+describe('TenantUsersService.confirmPassword (re-authentication before replacing Netpay keys)', () => {
+  it('passes with the right password', async () => {
+    const f = lockoutService();
+    await expect(f.run(() => f.service.confirmPassword('member-1', 'right'))).resolves.toBeUndefined();
+  });
+
+  it('requires the password to be sent', async () => {
+    const f = lockoutService();
+    await expect(f.run(() => f.service.confirmPassword('member-1', undefined))).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+    });
+  });
+
+  it('refuses a wrong password and spends the lockout budget', async () => {
+    const f = lockoutService();
+    await expect(f.run(() => f.service.confirmPassword('member-1', 'wrong'))).rejects.toMatchObject({
+      code: 'INVALID_CREDENTIALS',
+    });
+    expect(f.updates[0]).toMatchObject({ failedLoginAttempts: { increment: 1 } });
+  });
+
+  it('refuses while the account is locked, even with the right password', async () => {
+    const f = lockoutService({ lockedUntil: new Date(Date.now() + 60_000) });
+    await expect(f.run(() => f.service.confirmPassword('member-1', 'right'))).rejects.toMatchObject({
+      code: 'INVALID_CREDENTIALS',
+    });
+    expect(f.verify).toHaveBeenCalledWith(null, 'right');
+  });
+});

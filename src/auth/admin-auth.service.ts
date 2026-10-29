@@ -1,19 +1,18 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AuditActorType, AuditOutcome, PlatformRole } from '../generated/control-plane/enums';
-import type { PlatformAdminModel as PlatformAdmin } from '../generated/control-plane/models/PlatformAdmin';
 import { AuditLogService } from '../audit/audit-log.service';
 import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
 import { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
 import { AppConfig } from '../config/app-config.service';
 import {
-  AccountLockedException,
   ConflictException,
   InvalidCredentialsException,
   TokenReuseDetectedException,
 } from '../common/errors/app.exception';
 import { PiiCryptoService } from '../pii/pii-crypto.service';
 import { AdminMfaService, InvalidMfaCodeException } from './admin-mfa.service';
+import { isAdminLocked, registerAdminFailedAttempt } from './admin-lockout';
 
 /**
  * Context about the calling client, captured for the audit trail.
@@ -114,8 +113,9 @@ export class AdminAuthService {
    * @param secondFactor Optional TOTP or recovery code; when valid the session
    * is MFA-verified from the start.
    * @returns The issued token pair and profile fields.
-   * @throws {InvalidCredentialsException} On bad credentials.
-   * @throws {AccountLockedException} When the account is currently locked.
+   * @throws {InvalidCredentialsException} On bad credentials, or while the
+   * account is locked: the lock is checked before the password, so a locked
+   * account answers the same 401 whatever password is sent.
    * @throws {InvalidMfaCodeException} When a second factor is sent and is wrong.
    */
   async signIn(
@@ -131,25 +131,28 @@ export class AdminAuthService {
       where: { emailLookup: lookup },
     });
 
-    // Verify against the dummy hash when the account is unknown, so both paths
-    // cost the same amount of CPU.
-    const verification = await this.passwords.verify(admin?.passwordHash ?? null, password);
+    // The lock is decided before the password is looked at: otherwise a locked
+    // account would still tell a right password from a wrong one. A locked or
+    // unknown account is verified against the dummy hash, so every path costs
+    // the same amount of CPU.
+    const locked = admin !== null && isAdminLocked(admin);
+    const verification = await this.passwords.verify(locked ? null : (admin?.passwordHash ?? null), password);
 
-    if (!admin || !verification.valid) {
-      if (admin) {
-        await this.registerFailedAttempt(admin, context);
+    if (!admin || locked || !verification.valid) {
+      if (admin && !locked) {
+        await this.registerFailedAttempt(admin.id, context);
       }
       await this.audit.record({
         tenantId: null,
         actorType: AuditActorType.SYSTEM,
         action: 'auth.sign-in',
         resourceType: 'platform-admin',
-        outcome: AuditOutcome.FAILURE,
+        outcome: locked ? AuditOutcome.DENIED : AuditOutcome.FAILURE,
         ipHash: context.ipHash,
         userAgentHash: context.userAgentHash,
         // The e-mail is hashed, never stored, so the attempt is still traceable
         // without recording PII.
-        metadata: { emailLookup: lookup },
+        metadata: { emailLookup: lookup, ...(locked ? { reason: 'locked' } : {}) },
       });
       throw new InvalidCredentialsException();
     }
@@ -171,21 +174,15 @@ export class AdminAuthService {
       throw new InvalidCredentialsException();
     }
 
-    if (admin.lockedUntil && admin.lockedUntil.getTime() > Date.now()) {
-      const retryAfterSeconds = Math.ceil((admin.lockedUntil.getTime() - Date.now()) / 1000);
-      throw new AccountLockedException(retryAfterSeconds);
-    }
-
     // Opportunistic hash upgrade: if the cost parameters increased since the
     // password was set, re-hash it now using the fresh password.
     const passwordHash = verification.needsRehash ? await this.passwords.hash(password) : admin.passwordHash;
 
     let mfaAt: number | undefined;
     if (secondFactor !== undefined && admin.mfaEnabledAt !== null) {
-      if (!(await this.mfa.verify(admin.id, secondFactor))) {
-        // A wrong second factor after a right password counts towards lockout
-        // like a wrong password, so the code cannot be brute-forced.
-        await this.registerFailedAttempt(admin, context);
+      if (!(await this.mfa.verify(admin.id, secondFactor, context))) {
+        // A wrong second factor counts towards lockout like a wrong password;
+        // AdminMfaService.verify records it, for every route that checks a code.
         throw new InvalidMfaCodeException();
       }
       mfaAt = Math.floor(Date.now() / 1000);
@@ -409,9 +406,13 @@ export class AdminAuthService {
     mfaAt: number | undefined,
   ): Promise<SignInResult> {
     const admin = await this.prisma.client.platformAdmin.findUniqueOrThrow({ where: { id: adminId } });
-    const verification = await this.passwords.verify(admin.passwordHash, currentPassword);
-    if (!verification.valid) {
-      await this.registerFailedAttempt(admin, context);
+    // Same rule as sign-in: a locked account is not asked about its password.
+    const locked = isAdminLocked(admin);
+    const verification = await this.passwords.verify(locked ? null : admin.passwordHash, currentPassword);
+    if (locked || !verification.valid) {
+      if (!locked) {
+        await this.registerFailedAttempt(admin.id, context);
+      }
       throw new InvalidCredentialsException();
     }
     if (currentPassword === newPassword) {
@@ -478,37 +479,14 @@ export class AdminAuthService {
   /**
    * Records a failed attempt and locks the account once the budget is spent.
    *
-   * @param admin The account being attacked.
+   * @param adminId The account being attacked.
    * @param context Request metadata.
    */
-  private async registerFailedAttempt(admin: PlatformAdmin, context: SignInContext): Promise<void> {
-    const attempts = admin.failedLoginAttempts + 1;
-    const shouldLock = attempts >= this.config.authMaxFailedAttempts;
-
-    await this.prisma.client.platformAdmin.update({
-      where: { id: admin.id },
-      data: {
-        failedLoginAttempts: shouldLock ? 0 : attempts,
-        lockedUntil: shouldLock
-          ? new Date(Date.now() + this.config.authLockoutDurationMs)
-          : admin.lockedUntil,
-        lastKnownIpHash: context.ipHash ?? admin.lastKnownIpHash,
-      },
-    });
-
-    if (shouldLock) {
-      this.logger.warn(`Locked platform admin ${admin.id} after repeated failed sign-in attempts.`);
-      await this.audit.record({
-        tenantId: null,
-        actorType: AuditActorType.SYSTEM,
-        action: 'auth.account-locked',
-        resourceType: 'platform-admin',
-        resourceId: admin.id,
-        outcome: AuditOutcome.DENIED,
-        ipHash: context.ipHash,
-        userAgentHash: context.userAgentHash,
-        metadata: { attempts, lockoutSeconds: Math.round(this.config.authLockoutDurationMs / 1000) },
-      });
-    }
+  private async registerFailedAttempt(adminId: string, context: SignInContext): Promise<void> {
+    await registerAdminFailedAttempt(
+      { prisma: this.prisma, audit: this.audit, config: this.config, logger: this.logger },
+      adminId,
+      context,
+    );
   }
 }

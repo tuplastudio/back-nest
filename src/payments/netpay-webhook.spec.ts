@@ -126,6 +126,27 @@ describe('Inbound notification dedupe (BN-TASK-012)', () => {
     expect(f.verifyOrderInSchema).toHaveBeenCalledTimes(2);
   });
 
+  it('does not let a forged copy pre-empt the real notification (claimed status not confirmed)', async () => {
+    const f = fixture({ id: 'order-1', orderReference: 'acme_orderref' });
+    // Forged "DONE" while Netpay still has the charge pending: nothing is concluded.
+    f.verifyOrderInSchema.mockResolvedValueOnce({ status: 'PENDING_VERIFICATION' });
+    await f.service.receive('token', PAID);
+    // Netpay's own notification, same (event, transaction, status), once it settled.
+    await f.service.receive('token', PAID);
+    expect(f.verifyOrderInSchema).toHaveBeenCalledTimes(2);
+    // Now confirmed: further copies are duplicates again.
+    await f.service.receive('token', PAID);
+    expect(f.verifyOrderInSchema).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not hold the key for a notification whose order is unknown', async () => {
+    const f = fixture(null);
+    await f.service.receive('token', PAID);
+    expect(f.client.inboundEventSeen.deleteMany).toHaveBeenLastCalledWith({
+      where: { key: inboundDedupeKey('sessionLink.paid', 'tx-1', 'DONE') },
+    });
+  });
+
   it('lets a retry verify again when the verification itself failed', async () => {
     const f = fixture({ id: 'order-1', orderReference: 'acme_orderref' });
     f.verifyOrderInSchema.mockRejectedValueOnce(new Error('timeout'));

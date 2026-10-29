@@ -1,11 +1,12 @@
 import 'reflect-metadata';
 import { jest } from '@jest/globals';
 import { ApiKeyService } from './api-key.service';
-import { ConflictException, NotFoundException } from '../common/errors/app.exception';
+import { AuthorizationException, ConflictException, NotFoundException } from '../common/errors/app.exception';
 import { RequestContextService } from '../tenancy/request-context.service';
 import type { ControlPlanePrismaService } from '../prisma/control-plane-prisma.service';
 import type { AuditLogService } from '../audit/audit-log.service';
 import type { AppConfig } from '../config/app-config.service';
+import type { AuthorizationService } from '../auth/authorization.service';
 import type { Principal } from '../tenancy/tenant-context.interface';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -16,7 +17,7 @@ const caller: Principal = {
   id: 'caller',
   name: 'existing-integration',
   tenantId: TENANT,
-  scopes: [],
+  scopes: ['admin:*', 'projects:read'],
 };
 
 interface Captured {
@@ -24,7 +25,11 @@ interface Captured {
   audits: Array<{ action: string; metadata?: unknown }>;
 }
 
-function serviceFor(existing: Record<string, unknown> | null = null) {
+function serviceFor(
+  existing: Record<string, unknown> | null = null,
+  principal: Principal = caller,
+  permissions: readonly string[] = [],
+) {
   const captured: Captured = { creates: [], audits: [] };
 
   const prisma = {
@@ -58,8 +63,13 @@ function serviceFor(existing: Record<string, unknown> | null = null) {
     apiKeyDefaultTtlMs: 90 * 24 * 3_600_000,
   } as unknown as AppConfig;
 
-  const service = new ApiKeyService(prisma, config, audit, context);
-  const run = <T>(fn: () => Promise<T>): Promise<T> => context.run({ principal: caller }, fn);
+  // RBAC, as AuthorizationService resolves it for a member or platform admin.
+  const authorization = {
+    resolve: () => Promise.resolve({ roleIds: [], roleNames: [], permissions: new Set(permissions) }),
+  } as unknown as AuthorizationService;
+
+  const service = new ApiKeyService(prisma, config, audit, context, authorization);
+  const run = <T>(fn: () => Promise<T>): Promise<T> => context.run({ principal }, fn);
 
   return { service, captured, run };
 }
@@ -114,6 +124,89 @@ describe('ApiKeyService.issue', () => {
     await expect(
       run(() => service.issue(TENANT, 'ci', ['root:everything'] as never, null, actor)),
     ).rejects.toBeInstanceOf(ConflictException);
+    expect(captured.creates).toHaveLength(0);
+  });
+});
+
+describe('ApiKeyService: a key never carries more than its issuer holds', () => {
+  const member: Principal = {
+    kind: 'tenant-user',
+    id: 'member-1',
+    displayName: 'Tenant admin',
+    role: 'ADMIN' as never,
+    tenantId: TENANT,
+  };
+  const platformAdmin: Principal = {
+    kind: 'platform-admin',
+    id: 'admin-1',
+    displayName: 'Provisioning',
+    role: 'ADMIN',
+    tenantId: TENANT,
+  };
+  // The seeded tenant-admin role: payments, but deliberately no webhooks.
+  const tenantAdminPermissions = ['api-keys:issue', 'payments:read', 'payments:write', 'payments:refund'];
+
+  it('refuses webhooks:write to a tenant admin whose role lacks it', async () => {
+    const { service, captured, run } = serviceFor(null, member, tenantAdminPermissions);
+    await expect(
+      run(() => service.issue(TENANT, 'leak', ['payments:read', 'webhooks:write'], null, actor)),
+    ).rejects.toBeInstanceOf(AuthorizationException);
+    expect(captured.creates).toHaveLength(0);
+  });
+
+  it('refuses admin:* to a tenant member, whatever their permissions', async () => {
+    const { service, captured, run } = serviceFor(null, member, [
+      ...tenantAdminPermissions,
+      'webhooks:write',
+    ]);
+    await expect(
+      run(() => service.issue(TENANT, 'breeder', ['admin:*'], null, actor)),
+    ).rejects.toBeInstanceOf(AuthorizationException);
+    expect(captured.creates).toHaveLength(0);
+  });
+
+  it('lets a tenant admin issue the scopes its role holds', async () => {
+    const { service, captured, run } = serviceFor(null, member, tenantAdminPermissions);
+    await run(() => service.issue(TENANT, 'erp', ['payments:read', 'payments:write'], null, actor));
+    expect(captured.creates).toHaveLength(1);
+  });
+
+  it('keeps the platform provisioning flow: payments:read/write/refund, and admin:*', async () => {
+    const { service, captured, run } = serviceFor(null, platformAdmin, [
+      'api-keys:issue',
+      'payments:read',
+      'payments:write',
+      'payments:refund',
+    ]);
+    await run(() =>
+      service.issue(TENANT, 'plane', ['payments:read', 'payments:write', 'payments:refund'], null, actor),
+    );
+    await run(() => service.issue(TENANT, 'ops', ['admin:*'], null, actor));
+    expect(captured.creates).toHaveLength(2);
+  });
+
+  it('lets a key pass on only scopes it holds, never admin:* itself', async () => {
+    const { service, captured, run } = serviceFor();
+    await expect(
+      run(() => service.issue(TENANT, 'escalate', ['webhooks:write'], null, actor)),
+    ).rejects.toBeInstanceOf(AuthorizationException);
+    await expect(run(() => service.issue(TENANT, 'breed', ['admin:*'], null, actor))).rejects.toBeInstanceOf(
+      AuthorizationException,
+    );
+    expect(captured.creates).toHaveLength(0);
+  });
+
+  it('refuses to rotate (and hand out a secret for) a key holding more than the caller', async () => {
+    const stronger = {
+      id: 'key-9',
+      tenantId: TENANT,
+      name: 'webhooks',
+      status: 'ACTIVE',
+      scopes: ['webhooks:write'],
+      expiresAt: null,
+    };
+    const { service, captured, run } = serviceFor(stronger);
+    await expect(run(() => service.rotate(TENANT, 'key-9'))).rejects.toBeInstanceOf(AuthorizationException);
     expect(captured.creates).toHaveLength(0);
   });
 });

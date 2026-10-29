@@ -52,7 +52,8 @@ import { NotFoundException } from '../common/errors/app.exception';
  *
  * Read operations accept either a session token or an API key, so a pipeline can
  * rotate its own credentials without a human. Write operations require a human
- * session or a key holding `admin:*`.
+ * session or a key holding `admin:*`, and a key never carries a scope its issuer
+ * does not hold (`ApiKeyService.assertCallerMayGrant`).
  */
 @ApiTags('api-keys')
 @ApiBearerAuth('bearer-jwt')
@@ -129,6 +130,10 @@ export class ApiKeysController {
   @ApiCreatedResponse({ type: () => ApiKeyCreatedDto })
   @ApiBadRequestResponse({ description: 'Invalid payload.' })
   @ApiConflictResponse({ description: 'An unsupported scope was requested.' })
+  @ApiForbiddenResponse({
+    description:
+      'A requested scope exceeds the caller’s own permissions (or scopes, for a key); `admin:*` is granted by platform administrators only.',
+  })
   async create(
     @CurrentTenant() tenant: TenantContext,
     @Body() body: CreateApiKeyDto,

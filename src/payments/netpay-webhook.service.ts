@@ -9,6 +9,12 @@ import { NetpayClient } from './netpay.client';
 export const INBOUND_DEDUPE_WINDOW_MS = 10 * 60_000;
 
 /**
+ * Order statuses that conclude nothing: a verification ending here did not
+ * confirm what the notification claimed.
+ */
+const UNDECIDED_ORDER_STATUSES: readonly string[] = ['PENDING', 'PENDING_VERIFICATION', 'CHARGE_UNKNOWN'];
+
+/**
  * Deterministic dedupe key of an inbound notification.
  *
  * `sha256(eventType|transactionId|status)`: the same notification redelivered by
@@ -125,18 +131,6 @@ export class NetpayWebhookService {
     const eventType = typeof payload.event === 'string' ? payload.event : 'unknown';
     const data = payload.data ?? {};
     const transactionId = typeof data['transactionId'] === 'string' ? data['transactionId'] : null;
-    const reference = typeof data['reference'] === 'string' ? data['reference'] : null;
-    // A Checkout Hosted notification names the payment by `sessionId` and carries
-    // neither the order reference nor the merchant reference code.
-    const sessionId = typeof data['sessionId'] === 'string' ? data['sessionId'] : null;
-    // A cash notification (`oxxopay.paid`, `cep.*`) carries the merchant reference the
-    // reference was created with, which is the order reference.
-    const merchantRef =
-      typeof data['merchantRefCode'] === 'string'
-        ? data['merchantRefCode']
-        : typeof data['merchantReferenceCode'] === 'string'
-          ? data['merchantReferenceCode']
-          : null;
     const statusField = data['status'] ?? data['transactionStatus'];
     const status = typeof statusField === 'string' ? statusField : null;
     const eventId = `ntf_${randomUUID().replace(/-/g, '')}`;
@@ -154,6 +148,56 @@ export class NetpayWebhookService {
       return;
     }
 
+    // The key is computed from the unsigned payload, so whoever holds the webhook
+    // URL could send the real (event, transaction, status) first and have Netpay's
+    // own notification dropped as a duplicate. It is therefore kept only once
+    // Netpay confirmed something; otherwise it is released on the way out and the
+    // next copy is processed.
+    let confirmed = false;
+    try {
+      confirmed = await this.process(schemaName, tenantId, eventId, eventType, data, transactionId);
+    } finally {
+      if (!confirmed) {
+        await this.releaseDedupeKey(schemaName, dedupeKey);
+      }
+    }
+  }
+
+  /**
+   * Looks the notification's order up and verifies it with Netpay.
+   *
+   * @param schemaName Tenant schema.
+   * @param tenantId Tenant.
+   * @param eventId Stored notification id.
+   * @param eventType Netpay event name.
+   * @param data Payload `data`.
+   * @param transactionId Transaction named by the payload, if any.
+   * @returns `true` when Netpay confirmed what the notification is about: a cash
+   *   reference that belongs to the order, or a verification that decided the
+   *   order's status.
+   */
+  private async process(
+    schemaName: string,
+    tenantId: string,
+    eventId: string,
+    eventType: string,
+    data: Record<string, unknown>,
+    transactionId: string | null,
+  ): Promise<boolean> {
+    const reference = typeof data['reference'] === 'string' ? data['reference'] : null;
+    // A Checkout Hosted notification names the payment by `sessionId` and carries
+    // neither the order reference nor the merchant reference code.
+    const sessionId = typeof data['sessionId'] === 'string' ? data['sessionId'] : null;
+    // A cash notification (`oxxopay.paid`, `cep.*`) carries the merchant reference the
+    // reference was created with, which is the order reference.
+    const merchantRef =
+      typeof data['merchantRefCode'] === 'string'
+        ? data['merchantRefCode']
+        : typeof data['merchantReferenceCode'] === 'string'
+          ? data['merchantReferenceCode']
+          : null;
+
+    let confirmed = false;
     const order = await this.findOrder(schemaName, reference ?? merchantRef, sessionId, merchantRef);
     const orderId = order?.id ?? null;
     if (order !== null && reference !== null && /^(cep|oxxopay)\./.test(eventType)) {
@@ -162,6 +206,7 @@ export class NetpayWebhookService {
       // that the transaction it names belongs to this order (BN-THR-015).
       if (await this.providerConfirms(schemaName, transactionId, order.orderReference)) {
         await this.orders.attachCashReferenceInSchema(schemaName, order.id, reference, null);
+        confirmed = true;
       } else {
         this.logger.warn(`Ignored an unconfirmed cash reference on a ${eventType} notification.`);
       }
@@ -169,28 +214,29 @@ export class NetpayWebhookService {
 
     if (transactionId === null) {
       await this.markProcessed(schemaName, eventId, 'IGNORED_NO_TRANSACTION');
-      return;
+      return confirmed;
     }
     if (orderId === null) {
       await this.markProcessed(schemaName, eventId, 'UNKNOWN_ORDER');
-      return;
+      return confirmed;
     }
     if (eventType === 'cep.created') {
       // A reference was created; there is no payment to verify yet.
       await this.markProcessed(schemaName, eventId, 'REFERENCE_CREATED');
-      return;
+      return confirmed;
     }
 
     try {
       const result = await this.orders.verifyOrderInSchema(schemaName, orderId, transactionId, tenantId);
       await this.markProcessed(schemaName, eventId, result.status);
+      return confirmed || !UNDECIDED_ORDER_STATUSES.includes(result.status);
     } catch {
       // Verification failing leaves the order unconfirmed. It is never promoted
-      // to paid on the strength of the notification. The dedupe key is released so
-      // Netpay's own retry can verify again instead of being dropped as a duplicate.
+      // to paid on the strength of the notification. The dedupe key is released
+      // (by the caller) so Netpay's own retry can verify again.
       this.logger.error(`Verification failed for a ${eventType} notification.`);
-      await this.releaseDedupeKey(schemaName, dedupeKey);
       await this.markProcessed(schemaName, eventId, 'VERIFICATION_FAILED');
+      return confirmed;
     }
   }
 

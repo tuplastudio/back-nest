@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { AuditActorType, AuditOutcome } from '../generated/control-plane/enums';
 import { AuditLogService } from '../audit/audit-log.service';
 import { AppConfig } from '../config/app-config.service';
@@ -14,6 +14,7 @@ import {
   otpauthUrl,
   verifyTotp,
 } from './totp';
+import { isAdminLocked, registerAdminFailedAttempt } from './admin-lockout';
 
 /** AAD binding an MFA secret to its administrator. */
 export function mfaSecretAad(adminId: string): string {
@@ -37,6 +38,8 @@ export class InvalidMfaCodeException extends AppException {
  */
 @Injectable()
 export class AdminMfaService {
+  private readonly logger = new Logger(AdminMfaService.name);
+
   constructor(
     private readonly prisma: ControlPlanePrismaService,
     private readonly crypto: PiiCryptoService,
@@ -114,11 +117,20 @@ export class AdminMfaService {
   /**
    * Verifies a TOTP code or consumes a recovery code.
    *
+   * A wrong code spends the account's lockout budget (the same counter as a
+   * wrong password), and a locked account accepts no code at all, so a six-digit
+   * code cannot be brute-forced from any number of IPs or sessions.
+   *
    * @param adminId Administrator.
    * @param code TOTP code or recovery code.
+   * @param context Request metadata for the lockout audit, when available.
    * @returns `true` when accepted.
    */
-  async verify(adminId: string, code: string): Promise<boolean> {
+  async verify(
+    adminId: string,
+    code: string,
+    context?: { ipHash: string | null; userAgentHash: string | null },
+  ): Promise<boolean> {
     const admin = await this.prisma.client.platformAdmin.findUnique({
       where: { id: adminId },
       select: {
@@ -126,9 +138,14 @@ export class AdminMfaService {
         mfaSecretCiphertext: true,
         mfaLastUsedStep: true,
         mfaRecoveryCodeHashes: true,
+        lockedUntil: true,
       },
     });
     if (!admin || admin.mfaEnabledAt === null || admin.mfaSecretCiphertext === null) {
+      return false;
+    }
+    if (isAdminLocked(admin)) {
+      await this.record(adminId, 'auth.mfa.verify', AuditOutcome.DENIED, { reason: 'locked' });
       return false;
     }
     const step = verifyTotp(
@@ -149,6 +166,11 @@ export class AdminMfaService {
     const hash = hashRecoveryCode(code);
     if (!admin.mfaRecoveryCodeHashes.includes(hash)) {
       await this.record(adminId, 'auth.mfa.verify', AuditOutcome.FAILURE);
+      await registerAdminFailedAttempt(
+        { prisma: this.prisma, audit: this.audit, config: this.config, logger: this.logger },
+        adminId,
+        context,
+      );
       return false;
     }
     const updated = await this.prisma.client.platformAdmin.updateMany({

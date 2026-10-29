@@ -83,7 +83,7 @@ interface ProviderCall {
 /** State of the stand-in provider, reset between tests that care. */
 const provider = {
   calls: [] as ProviderCall[],
-  transactions: new Map<string, { status: string; amount: number }>(),
+  transactions: new Map<string, { status: string; amount: number; merchantReferenceCode?: string }>(),
   /** Status to answer the next provider request with, then cleared. */
   failNext: 0,
   /** Amount to bind to the next amount token instead of the requested one. */
@@ -246,7 +246,7 @@ async function startProvider(): Promise<void> {
           reply(400, { message: 'Invalid Token' });
           return;
         }
-        const billing = body['billing'] as { address?: unknown } | undefined;
+        const billing = body['billing'] as { address?: unknown; merchantReferenceCode?: string } | undefined;
         if (billing?.address === undefined) {
           reply(500, { message: 'No message available' });
           return;
@@ -255,7 +255,11 @@ async function startProvider(): Promise<void> {
         const id = `txn_charge_${RUN_ID}_${provider.counter}`;
         if (provider.declineNext) {
           provider.declineNext = false;
-          provider.transactions.set(id, { status: 'REJECT', amount: Number(body['amount']) });
+          provider.transactions.set(id, {
+            status: 'REJECT',
+            amount: Number(body['amount']),
+            merchantReferenceCode: billing.merchantReferenceCode,
+          });
           reply(409, {
             transactionTokenId: id,
             status: 'failed',
@@ -265,7 +269,12 @@ async function startProvider(): Promise<void> {
           return;
         }
         const status = provider.threeDS ? 'WAIT_THREEDS' : provider.chargeStatus;
-        provider.transactions.set(id, { status, amount: Number(body['amount']) });
+        // Like Netpay, the transaction remembers the order reference it was charged for.
+        provider.transactions.set(id, {
+          status,
+          amount: Number(body['amount']),
+          merchantReferenceCode: billing.merchantReferenceCode,
+        });
         reply(200, {
           transactionTokenId: id,
           status: provider.threeDS ? 'review' : 'success',
@@ -311,7 +320,7 @@ async function startProvider(): Promise<void> {
           reply(404, { message: 'not found' });
           return;
         }
-        reply(200, { status: tx.status, amount: tx.amount });
+        reply(200, { status: tx.status, amount: tx.amount, merchantReferenceCode: tx.merchantReferenceCode });
         return;
       }
       if (method === 'PUT' && path.startsWith('/v2/transactions/') && path.endsWith('/refund')) {
@@ -809,6 +818,8 @@ describe('payments and outbound webhooks (e2e)', () => {
     publicKey: 'pk_netpay_e2enotarealkey',
     secretKey: 'sk_netpay_e2enotarealkey',
     environment: 'SANDBOX',
+    // A member replacing the keys re-enters its password; platform admins ignore it.
+    currentPassword: TENANT_PASSWORD,
   };
 
   /**
@@ -1369,7 +1380,13 @@ describe('payments and outbound webhooks (e2e)', () => {
       );
       expect(created.status).toBe(201);
       const token = await signInAs(email, 'Api-Admin-Secret!1');
-      const configure = await call('POST', '/t/payments/config', token, VALID_CONFIG, tenantHeader());
+      const configure = await call(
+        'POST',
+        '/t/payments/config',
+        token,
+        { ...VALID_CONFIG, currentPassword: 'Api-Admin-Secret!1' },
+        tenantHeader(),
+      );
       expect(configure.status).toBe(200);
       const hook = await call(
         'POST',
@@ -1851,7 +1868,11 @@ describe('payments and outbound webhooks (e2e)', () => {
 
       // The new token works for its own tenant.
       const freshTx = `txn_fresh_${RUN_ID}`;
-      provider.transactions.set(freshTx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(freshTx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: rivalReference,
+      });
       await call('POST', `/payments/webhook/${rivalToken2}`, undefined, {
         event: 'sessionLink.paid',
         data: { transactionId: freshTx, reference: rivalReference, status: 'PAID' },
@@ -1860,7 +1881,7 @@ describe('payments and outbound webhooks (e2e)', () => {
 
       // And tenant A's token, rotated before all of this, still settles A's order.
       const txA = `txn_after_${RUN_ID}`;
-      provider.transactions.set(txA, { status: 'DONE', amount: 650 });
+      provider.transactions.set(txA, { status: 'DONE', amount: 650, merchantReferenceCode: orderAReference });
       await call('POST', `/payments/webhook/${myToken}`, undefined, {
         event: 'sessionLink.paid',
         data: { transactionId: txA, reference: orderAReference, status: 'PAID' },
@@ -2119,7 +2140,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('settles an order only after the provider confirms the transaction', async () => {
       const { id, row } = await createOrder(`E2E-PAID-${RUN_ID}`);
       const tx = `txn_paid_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
 
       const res = await notify(row.orderReference, tx);
       expect(res.status).toBe(202);
@@ -2142,7 +2167,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('does not settle on a notification that claims PAID while the provider says declined', async () => {
       const { id, row } = await createOrder(`E2E-DECL-${RUN_ID}`);
       const tx = `txn_declined_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'REJECT', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'REJECT',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, tx, 'PAID');
       const after = await waitForStatus(id, ['FAILED']);
       expect(after.status).toBe('FAILED');
@@ -2152,7 +2181,7 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('never settles when the provider reports a different amount', async () => {
       const { id, row } = await createOrder(`E2E-MISMATCH-${RUN_ID}`);
       const tx = `txn_mismatch_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 1 });
+      provider.transactions.set(tx, { status: 'DONE', amount: 1, merchantReferenceCode: row.orderReference });
       await notify(row.orderReference, tx);
       const after = await waitForStatus(id, ['AMOUNT_MISMATCH']);
       expect(after.status).toBe('AMOUNT_MISMATCH');
@@ -2162,7 +2191,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('keeps an in-process transaction pending verification', async () => {
       const { id, row } = await createOrder(`E2E-INPROC-${RUN_ID}`);
       const tx = `txn_inproc_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'IN_PROCESS', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'IN_PROCESS',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, tx);
       const after = await waitForStatus(id, ['PENDING_VERIFICATION']);
       expect(after.status).toBe('PENDING_VERIFICATION');
@@ -2192,7 +2225,11 @@ describe('payments and outbound webhooks (e2e)', () => {
 
       // The genuine notification still settles the order.
       const tx = `txn_real_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, tx);
       const settled = await waitForStatus(id, ['PAID']);
       expect(settled.status).toBe('PAID');
@@ -2202,11 +2239,19 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('refuses to bind an order to a second transaction', async () => {
       const { id, row } = await createOrder(`E2E-REBIND-${RUN_ID}`);
       const first = `txn_first_${RUN_ID}`;
-      provider.transactions.set(first, { status: 'IN_PROCESS', amount: 650 });
+      provider.transactions.set(first, {
+        status: 'IN_PROCESS',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, first);
       await waitForStatus(id, ['PENDING_VERIFICATION']);
       const second = `txn_second_${RUN_ID}`;
-      provider.transactions.set(second, { status: 'DONE', amount: 650 });
+      provider.transactions.set(second, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, second);
       await new Promise((r) => setTimeout(r, 1_500));
       const after = await orderRow(id);
@@ -2306,7 +2351,11 @@ describe('payments and outbound webhooks (e2e)', () => {
       );
       expect(again.status).toBe(409);
       // The notification settles it once the provider says DONE.
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, tx);
       expect((await waitForStatus(id, ['PAID'])).status).toBe('PAID');
     });
@@ -2640,7 +2689,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('refunds a settled order once', async () => {
       const { id, row } = await createOrder(`E2E-REFUND-OK-${RUN_ID}`);
       const tx = `txn_refund_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, tx);
       await waitForStatus(id, ['PAID']);
 
@@ -2681,7 +2734,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('audits every status change and writes each event to the outbox, partial refunds included (BN-TASK-030, BN-TASK-004, BN-TASK-019)', async () => {
       const { id, row } = await createOrder(`E2E-AUDIT-${RUN_ID}`);
       const tx = `txn_audit_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, tx);
       await waitForStatus(id, ['PAID']);
 
@@ -2754,7 +2811,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('lets only a role with payments:refund refund', async () => {
       const { id, row } = await createOrder(`E2E-REFUND-RBAC-${RUN_ID}`);
       const tx = `txn_refund_rbac_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, tx);
       await waitForStatus(id, ['PAID']);
       for (const token of [viewerAccessToken, auditorAccessToken]) {
@@ -2767,7 +2828,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('reverses a settled order at most once under concurrent refunds', async () => {
       const { id, row } = await createOrder(`E2E-RACE-REFUND-${RUN_ID}`);
       const tx = `txn_race_refund_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, tx);
       await waitForStatus(id, ['PAID']);
       provider.calls.length = 0;
@@ -2787,7 +2852,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('keeps the refund claim when the provider outcome is unknown, so a retry cannot reverse twice', async () => {
       const { id, row } = await createOrder(`E2E-RETRY-REFUND-${RUN_ID}`);
       const tx = `txn_retry_refund_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, tx);
       await waitForStatus(id, ['PAID']);
       provider.failNext = 500;
@@ -2848,7 +2917,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('verifies a burst of identical notifications without corrupting the order', async () => {
       const { id, row } = await createOrder(`E2E-RACE-NOTIFY-${RUN_ID}`);
       const tx = `txn_race_notify_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       const replies = await Promise.all(Array.from({ length: 8 }, () => notify(row.orderReference, tx)));
       expect(replies.every((r) => r.status === 202)).toBe(true);
       const settled = await waitForStatus(id, ['PAID']);
@@ -2867,7 +2940,11 @@ describe('payments and outbound webhooks (e2e)', () => {
       const paidOrder = async (code: string) => {
         const { id, row } = await createOrder(code);
         const tx = `txn_${code.toLowerCase()}`;
-        provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+        provider.transactions.set(tx, {
+          status: 'DONE',
+          amount: 650,
+          merchantReferenceCode: row.orderReference,
+        });
         await notify(row.orderReference, tx);
         await waitForStatus(id, ['PAID']);
         return { id, tx };
@@ -3090,7 +3167,11 @@ describe('payments and outbound webhooks (e2e)', () => {
         const blind = await call('POST', `/t/payments/orders/${id}/verify`, ownerToken, {}, tenantHeader());
         expect(blind.status).toBe(400);
         const tx = `txn_unknown_${RUN_ID}`;
-        provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+        provider.transactions.set(tx, {
+          status: 'DONE',
+          amount: 650,
+          merchantReferenceCode: (await orderRow(id)).orderReference,
+        });
         const verified = await call(
           'POST',
           `/t/payments/orders/${id}/verify`,
@@ -3175,7 +3256,11 @@ describe('payments and outbound webhooks (e2e)', () => {
         provider.threeDS = false;
         const tx1 = String(challenged.body['transactionTokenId']);
         // The buyer finished 3-D Secure elsewhere and Netpay charged the card.
-        provider.transactions.set(tx1, { status: 'DONE', amount: 650 });
+        provider.transactions.set(tx1, {
+          status: 'DONE',
+          amount: 650,
+          merchantReferenceCode: (await orderRow(id)).orderReference,
+        });
 
         provider.calls.length = 0;
         const retry = await chargeOf(id);
@@ -3267,7 +3352,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('settles a hosted payment from a notification that names only the session', async () => {
       const { id, row } = await createOrder(`E2E-HOSTED-PAID-${RUN_ID}`);
       const tx = `txn_hosted_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       const res = await notifyHosted(row.checkoutSessionId!, tx);
       expect(res.status).toBe(202);
       const paid = await waitForStatus(id, ['PAID']);
@@ -3298,7 +3387,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('treats sessionLink.failed by what the provider reports, not by the event name', async () => {
       const { id, row } = await createOrder(`E2E-HOSTED-FAILED-${RUN_ID}`);
       const tx = `txn_hosted_failed_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'REJECT', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'REJECT',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notifyHosted(row.checkoutSessionId!, tx, 'sessionLink.failed');
       expect((await waitForStatus(id, ['FAILED'])).status).toBe('FAILED');
     });
@@ -3307,7 +3400,7 @@ describe('payments and outbound webhooks (e2e)', () => {
       const { id, row } = await createOrder(`E2E-HOSTED-AMOUNT-${RUN_ID}`);
       const tx = `txn_hosted_amount_${RUN_ID}`;
       // The payload claims 650.00; the provider says only 1.00 moved.
-      provider.transactions.set(tx, { status: 'DONE', amount: 1 });
+      provider.transactions.set(tx, { status: 'DONE', amount: 1, merchantReferenceCode: row.orderReference });
       await notifyHosted(row.checkoutSessionId!, tx, 'sessionLink.paid', '650.00');
       expect((await waitForStatus(id, ['AMOUNT_MISMATCH'])).status).toBe('AMOUNT_MISMATCH');
     });
@@ -3322,7 +3415,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     ])('maps the provider status %s to %s', async (providerStatus, expected) => {
       const { id, row } = await createOrder(`E2E-MAP-${providerStatus}-${RUN_ID}`);
       const tx = `txn_map_${providerStatus}_${RUN_ID}`;
-      provider.transactions.set(tx, { status: providerStatus, amount: 650 });
+      provider.transactions.set(tx, {
+        status: providerStatus,
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notifyHosted(row.checkoutSessionId!, tx);
       expect((await waitForStatus(id, [expected])).status).toBe(expected);
     });
@@ -3330,7 +3427,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('does not read the legacy status names as success', async () => {
       const { id, row } = await createOrder(`E2E-LEGACY-${RUN_ID}`);
       const tx = `txn_legacy_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'APPROVED', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'APPROVED',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notifyHosted(row.checkoutSessionId!, tx);
       await new Promise((r) => setTimeout(r, 1_500));
       expect((await orderRow(id)).status).not.toBe('PAID');
@@ -3523,7 +3624,11 @@ describe('payments and outbound webhooks (e2e)', () => {
     it('carries the refund motive to Netpay', async () => {
       const { id, row } = await createOrder(`E2E-MOTIVE-${RUN_ID}`);
       const tx = `txn_motive_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
       await notify(row.orderReference, tx);
       await waitForStatus(id, ['PAID']);
       provider.calls.length = 0;
@@ -3810,7 +3915,11 @@ describe('payments and outbound webhooks (e2e)', () => {
         (await call('POST', `/t/payments/orders/${id}/cancel`, ownerToken, undefined, tenantHeader())).status,
       ).toBe(200);
       const tx = `txn_late_${RUN_ID}`;
-      provider.transactions.set(tx, { status: 'DONE', amount: 650 });
+      provider.transactions.set(tx, {
+        status: 'DONE',
+        amount: 650,
+        merchantReferenceCode: row.orderReference,
+      });
 
       expect((await notifyHosted(row.checkoutSessionId!, tx)).status).toBe(202);
 
@@ -4013,10 +4122,11 @@ describe('payments and outbound webhooks (e2e)', () => {
   });
   describe('consumer disconnect and internal routes', () => {
     it('lets a consumer disconnect: disable its endpoint and revoke its own key (BN-TASK-050)', async () => {
+      // `admin:*` (the key revokes itself below) is granted by a platform admin only.
       const issued = await call(
         'POST',
         '/api-keys',
-        ownerToken,
+        adminAccessToken,
         { name: `consumer-${RUN_ID}`, scopes: ['admin:*', 'webhooks:read', 'webhooks:write'] },
         tenantHeader(),
       );

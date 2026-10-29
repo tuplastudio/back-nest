@@ -14,7 +14,10 @@ import { SCOPES_KEY } from '../common/decorators/scopes.decorator';
  *    `403 PASSWORD_CHANGE_REQUIRED`.
  *  * **Step-up.** A platform admin writing payments of a tenant — always a
  *    cross-tenant act for a platform principal — must have verified MFA within
- *    the last 5 minutes. `403 STEP_UP_REQUIRED`.
+ *    the last 5 minutes. `403 STEP_UP_REQUIRED`. The same holds for minting,
+ *    rotating or revoking an API key and for changing outbound webhooks: a key
+ *    or an endpoint is a standing channel to the same payments, so a stale
+ *    session must not be able to open one and use it instead.
  */
 
 /** Maximum age of the MFA verification for a step-up route, in seconds. */
@@ -100,8 +103,9 @@ export function evaluateAdminSession(facts: AdminSessionFacts): AppException | n
  * Whether a route needs step-up for a platform admin.
  *
  * Explicit `@RequireStepUp()`, or any non-read request to a route that requires
- * a `payments:*` scope — the payment write surface — so the payment controllers
- * need no extra decorator.
+ * a `payments:*` or `webhooks:*` scope, or `admin:*` (API key management) — the
+ * payment write surface and the credentials that reach it — so those
+ * controllers need no extra decorator.
  *
  * @param context Execution context.
  * @returns `true` when step-up applies.
@@ -121,7 +125,11 @@ export function routeRequiresStepUp(context: ExecutionContext): boolean {
   }
   const scopes = (Reflect.getMetadata(SCOPES_KEY, handler) ?? Reflect.getMetadata(SCOPES_KEY, controller)) as
     string[] | undefined;
-  return scopes?.some((scope) => scope.startsWith('payments:')) ?? false;
+  return (
+    scopes?.some(
+      (scope) => scope.startsWith('payments:') || scope.startsWith('webhooks:') || scope === 'admin:*',
+    ) ?? false
+  );
 }
 
 /**
