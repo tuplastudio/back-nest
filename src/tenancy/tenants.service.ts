@@ -112,8 +112,15 @@ export class TenantsService {
 
     const existing = await this.prisma.client.tenant.findUnique({
       where: { slug: input.slug },
-      select: { id: true },
+      select: { id: true, slug: true, status: true },
     });
+    // A create that failed mid-provisioning left the row in PROVISIONING: creating it
+    // again retries the (idempotent) schema provisioning instead of a permanent 409.
+    if (existing?.status === TenantStatus.PROVISIONING) {
+      this.logger.warn(`Retrying provisioning for tenant "${existing.slug}" (${existing.id}).`);
+      await this.provisionAndActivate(existing);
+      return this.toDetail(await this.requireTenant(existing.id));
+    }
     if (existing) {
       throw new ConflictException(`Tenant slug "${input.slug}" is already in use.`);
     }
@@ -145,6 +152,17 @@ export class TenantsService {
       ...this.requestMeta(),
     });
 
+    await this.provisionAndActivate(tenant);
+
+    this.logger.log(`Created tenant "${tenant.slug}" (${tenant.id}).`);
+    // Re-read so the response reflects the post-provisioning state (ACTIVE with
+    // the applied schema version) rather than the row as first inserted.
+    const activated = await this.requireTenant(tenant.id);
+    return this.toDetail(activated);
+  }
+
+  /** Provisions the schema and activates the tenant; on failure the row stays PROVISIONING. */
+  private async provisionAndActivate(tenant: { id: string; slug: string }): Promise<void> {
     try {
       await this.provisioner.provisionSchema(tenant.slug);
       await this.provisioner.markActive(tenant.id);
@@ -167,12 +185,6 @@ export class TenantsService {
       });
       throw error;
     }
-
-    this.logger.log(`Created tenant "${tenant.slug}" (${tenant.id}).`);
-    // Re-read so the response reflects the post-provisioning state (ACTIVE with
-    // the applied schema version) rather than the row as first inserted.
-    const activated = await this.requireTenant(tenant.id);
-    return this.toDetail(activated);
   }
 
   /**
