@@ -16,7 +16,7 @@ describe('PaymentOrdersController.chargeStored', () => {
   } as never;
 
   function controller(enabled: boolean | undefined) {
-    const chargeToken = jest.fn(async () => ({ orderStatus: 'PAID' }));
+    const chargeToken = jest.fn(() => Promise.resolve({ orderStatus: 'PAID' }));
     const config = enabled === undefined ? undefined : ({ netpayMerchantInitiatedEnabled: enabled } as never);
     const instance = new PaymentOrdersController(
       { chargeToken } as never,
