@@ -381,3 +381,45 @@ export class ReturnUrlNotAllowedException extends AppException {
     super(message, 'RETURN_URL_NOT_ALLOWED', HttpStatus.UNPROCESSABLE_ENTITY, { field, origin });
   }
 }
+
+/**
+ * The order's gateway (Stripe, Mercado Pago) is not connected for this tenant, or
+ * the gateway no longer authorises this platform on the account (docs 33).
+ */
+export class GatewayNotConnectedException extends AppException {
+  constructor(provider: string, message?: string) {
+    super(
+      message ?? `${provider} is not connected for this tenant.`,
+      'GATEWAY_NOT_CONNECTED',
+      HttpStatus.CONFLICT,
+      { provider },
+    );
+  }
+}
+
+/**
+ * The order's gateway cannot charge a stored card without the buyer (Mercado Pago
+ * needs a CVV token for every charge; docs 33, D6).
+ */
+export class GatewayAutopayUnsupportedException extends AppException {
+  constructor(provider: string) {
+    super(
+      `${provider} does not support charging a stored card without the buyer.`,
+      'GATEWAY_AUTOPAY_UNSUPPORTED',
+      HttpStatus.CONFLICT,
+      { provider },
+    );
+  }
+}
+
+/** The API keys a tenant pasted for a gateway were refused by that gateway (docs 33, D8). */
+export class GatewayCredentialsInvalidException extends AppException {
+  constructor(provider: string, message?: string) {
+    super(
+      message ?? `${provider} refused these credentials.`,
+      'GATEWAY_CREDENTIALS_INVALID',
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      { provider },
+    );
+  }
+}

@@ -2095,6 +2095,7 @@
     },
     "/api/v1/t/payments/orders/{id}/charge-stored": {
       "post": {
+        "description": "Netpay orders: needs `billing` and NETPAY_MIT_ENABLED. Stripe orders: an off-session PaymentIntent on the saved `cus_…` / `pm_…`, no flag needed. Mercado Pago orders: 409 `GATEWAY_AUTOPAY_UNSUPPORTED`.",
         "operationId": "PaymentOrdersController_chargeStored",
         "parameters": [
           {
@@ -3068,6 +3069,155 @@
           }
         },
         "summary": "Public view of a payment quick link (merchant, concept, amount, checkout URL)",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/gateways": {
+      "get": {
+        "operationId": "PaymentGatewaysController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "`{ data: [{ provider, available, connected, environment, … }] }`."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List payment gateways (Netpay, Stripe, Mercado Pago, Conekta, Openpay) and their connection",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/gateways/{provider}/connect": {
+      "post": {
+        "description": "Answers `{ authorizeUrl }`. `returnUrl` must be on an origin in PAYMENT_GATEWAY_RETURN_ORIGINS (422 `RETURN_URL_NOT_ALLOWED`). After the merchant authorises, the callback redirects to `returnUrl?gateway=<provider>&status=connected` (or `status=error&reason=<code>`).",
+        "operationId": "PaymentGatewaysController_connect",
+        "parameters": [
+          {
+            "name": "provider",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectGatewayDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start connecting a Stripe / Mercado Pago account (OAuth)",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/gateways/{provider}/credentials": {
+      "put": {
+        "description": "Conekta: `{ privateKey, publicKey }`. Openpay: `{ merchantId, privateKey, publicKey, environment }`. The keys are checked against the gateway (422 `GATEWAY_CREDENTIALS_INVALID` when refused), stored encrypted, never returned. Answers the provider’s `GET /gateways` row.",
+        "operationId": "PaymentGatewaysController_saveCredentials",
+        "parameters": [
+          {
+            "name": "provider",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GatewayCredentialsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Connect Conekta / Openpay with the tenant’s API keys",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/t/payments/gateways/{provider}": {
+      "delete": {
+        "operationId": "PaymentGatewaysController_disconnect",
+        "parameters": [
+          {
+            "name": "provider",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Disconnect a gateway account (Stripe, Mercado Pago, Conekta, Openpay)",
         "tags": [
           "payments"
         ]
@@ -4281,6 +4431,14 @@
         "properties": {}
       },
       "ToggleWebhookEndpointDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ConnectGatewayDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "GatewayCredentialsDto": {
         "type": "object",
         "properties": {}
       },

@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { type NestExpressApplication } from '@nestjs/platform-express';
 import { json, urlencoded } from 'express';
 import type { Request, Response } from 'express';
+import type { IncomingMessage } from 'node:http';
 import { AppModule } from './app.module';
 import { AppConfig } from './config/app-config.service';
 import { applyHttpSettings } from './bootstrap/apply-http-settings';
@@ -62,7 +63,17 @@ async function bootstrap(): Promise<void> {
   );
 
   // Size-capped body parsers, registered before any route can read a body.
-  app.use(json({ limit: MAX_BODY_SIZE }));
+  app.use(
+    json({
+      limit: MAX_BODY_SIZE,
+      // The Stripe webhook signature covers the exact bytes, so that route keeps them.
+      verify: (request: IncomingMessage & { rawBody?: Buffer }, _response, buffer) => {
+        if (request.url?.includes('/payments/gateway-webhook/') === true) {
+          request.rawBody = buffer;
+        }
+      },
+    }),
+  );
   app.use(urlencoded({ extended: false, limit: MAX_BODY_SIZE }));
 
   applyHttpSettings(app, config, redaction);

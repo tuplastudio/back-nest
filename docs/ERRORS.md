@@ -200,6 +200,14 @@ BN-REQ-PAY-008). `details`: `{ currency, allowed }`. Una orden alojada u OXXO en
 **Qué hacer:** cobrar en una moneda habilitada, o habilitarla con `PATCH /api/v1/t/payments/config`
 (`allowedCurrencies`).
 
+### `GATEWAY_NOT_CONNECTED` / `GATEWAY_AUTOPAY_UNSUPPORTED` — `409`; `GATEWAY_CREDENTIALS_INVALID` — `422`
+
+Pasarelas alternativas (Stripe, Mercado Pago, Conekta, Openpay; docs 33 del plano).
+`GATEWAY_NOT_CONNECTED`: la orden o la operación necesita una cuenta que el tenant no tiene conectada, o la
+pasarela ya no autoriza la cuenta (401/403 de la pasarela); `details.provider` la nombra. `GATEWAY_AUTOPAY_UNSUPPORTED`:
+`charge-stored` sobre una orden de una pasarela que no cobra tarjetas guardadas sin el comprador (todas menos Stripe).
+`GATEWAY_CREDENTIALS_INVALID`: las llaves de Conekta / Openpay tienen otra forma o la pasarela las rechazó; no se guardó nada.
+
 ### 2.1 Idempotencia: `Idempotency-Key`
 
 `POST /api/v1/t/payments/orders`, `POST /api/v1/t/payments/orders/:id/charge`, `…/confirm` y `…/refund` aceptan

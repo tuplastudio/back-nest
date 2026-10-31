@@ -429,6 +429,17 @@ model PaymentOrder {
   /// until then, so concurrent workers never check the same order in one pass.
   reconcileLeaseUntil DateTime?
 
+  /// Gateway that holds the payment: `NETPAY`, `STRIPE`, `MERCADOPAGO`, `CONEKTA` or `OPENPAY`
+  /// (tenant migration 0023). For a gateway, `netpayTransactionId` holds the gateway's id
+  /// (`pi_…`, MP payment, Conekta order, Openpay charge) and `checkoutSessionId` its hosted checkout.
+  provider String @default("NETPAY") @db.VarChar(16)
+
+  /// Card the buyer saved on a Stripe Checkout with `saveCard`, for `charge-stored`.
+  gatewayCustomerId      String? @db.VarChar(120)
+  gatewayPaymentMethodId String? @db.VarChar(120)
+  gatewayCardBrand       String? @db.VarChar(32)
+  gatewayCardLast4       String? @db.VarChar(4)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -621,6 +632,45 @@ model PaymentCustomer {
 
   @@index([tenantId])
   @@map("payment_customers")
+}
+
+/// A tenant's connected account on an alternative gateway (docs 33).
+///
+/// One row per provider, rewritten on every connect. Stripe only needs the account id
+/// (charges go through the platform key + `Stripe-Account`); Mercado Pago keeps the
+/// seller's OAuth tokens and Conekta / Openpay the tenant's private key in
+/// `accessTokenCiphertext`, encrypted with `PaymentSecretBox.aadForGateway`.
+model PaymentGatewayAccount {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// `STRIPE`, `MERCADOPAGO`, `CONEKTA` or `OPENPAY`.
+  provider String @unique @db.VarChar(16)
+
+  /// `acct_…` (Stripe), the seller's `user_id` (Mercado Pago), the public key (Conekta)
+  /// or the merchant id (Openpay).
+  externalAccountId String @db.VarChar(64)
+
+  /// `SANDBOX` or `LIVE`.
+  environment String @db.VarChar(8)
+
+  accessTokenCiphertext  String?   @db.Text
+  refreshTokenCiphertext String?   @db.Text
+  tokenExpiresAt         DateTime?
+
+  /// The gateway's public key (Mercado Pago, Conekta, Openpay); not a secret.
+  publicKey String? @db.VarChar(255)
+
+  /// Webhook this system registered with a keys gateway (Conekta, Openpay), deleted on disconnect.
+  webhookId String? @db.VarChar(64)
+
+  connectedAt    DateTime
+  /// Set by a disconnect or a deauthorization; the row stays so old orders can still be read.
+  disconnectedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("payment_gateway_accounts")
 }
 
 // ---------------------------------------------------------------------------

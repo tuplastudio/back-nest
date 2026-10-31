@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Prisma, type PrismaClient as TenantClient } from '../generated/tenant-plane/client';
 import type { PaymentStatus } from '../generated/tenant-plane/enums';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service';
@@ -28,6 +28,8 @@ import { paymentUrls } from '../config/payment-urls';
 import {
   ConflictException,
   CurrencyNotEnabledException,
+  GatewayAutopayUnsupportedException,
+  GatewayNotConnectedException,
   NotFoundException,
   OrderStateConflictException,
   ProviderResultPendingException,
@@ -41,6 +43,19 @@ import { AuditLogService } from '../audit/audit-log.service';
 import { PaymentQuickLinksService, type QuickLinkRef } from './payment-quick-links.service';
 import { auditActorOf } from '../audit/audit-actor';
 import { logPaymentStatusChange } from '../common/logging/payment-log-events';
+import {
+  PaymentGatewaysService,
+  type GatewayLookup,
+  type GatewayScope,
+} from './gateways/payment-gateways.service';
+import {
+  GATEWAY_CHECKOUT_TTL_MS,
+  GATEWAY_PROVIDERS,
+  stripeIntentToTransaction,
+  type GatewayProvider,
+  type PaymentProvider,
+} from './gateways/gateway-endpoints';
+import { GATEWAY_ADAPTERS } from './gateways/gateway-adapters';
 
 /** What a caller sees about an order. Never contains a provider credential. */
 export interface PaymentOrderView {
@@ -50,7 +65,17 @@ export interface PaymentOrderView {
   readonly amount: string;
   readonly currency: string;
   readonly status: string;
+  /** Netpay transaction, or the gateway's id (`pi_…`, MP payment id) for STRIPE / MERCADOPAGO. */
   readonly netpayTransactionId: string | null;
+  /** Gateway that holds the payment (docs 33). */
+  readonly provider: PaymentProvider;
+  /** Card a Stripe Checkout with `saveCard` left for `charge-stored`; `null` otherwise. */
+  readonly savedCard: {
+    readonly clientId: string;
+    readonly cardToken: string;
+    readonly brand: string | null;
+    readonly last4: string | null;
+  } | null;
   /** How the buyer paid: `CARD` or `OXXO`. Null until Netpay says. */
   readonly paymentMethod: string | null;
   /** Cash reference (OXXO Pay) the buyer takes to a store. */
@@ -67,6 +92,8 @@ export interface PaymentOrderView {
    */
   readonly checkout: {
     readonly mode: CheckoutMode;
+    /** Gateway whose page `hostedCheckoutUrl` opens. */
+    readonly provider: PaymentProvider;
     readonly environment: 'SANDBOX' | 'LIVE';
     readonly publicKey: string;
     readonly amountToken: string | null;
@@ -237,6 +264,13 @@ type OrderRow = {
   configId?: string | null;
   verifiedAmount?: Prisma.Decimal | null;
   paidAfterCancelAt?: Date | null;
+  /** Absent on rows read by older selects and test doubles: Netpay. */
+  provider?: string;
+  checkoutSessionId?: string | null;
+  gatewayCustomerId?: string | null;
+  gatewayPaymentMethodId?: string | null;
+  gatewayCardBrand?: string | null;
+  gatewayCardLast4?: string | null;
 };
 
 /**
@@ -475,6 +509,7 @@ export class PaymentOrdersService {
     private readonly events: PaymentEvents,
     private readonly audit: AuditLogService,
     private readonly quickLinks: PaymentQuickLinksService,
+    @Optional() private readonly gateways?: PaymentGatewaysService,
   ) {}
 
   /**
@@ -507,10 +542,21 @@ export class PaymentOrdersService {
     expirationDays?: number;
     /** Genera un quick link público (`QUICK_LINK_BASE_URL/<code>`) y fija a él las URLs de retorno. Sólo `hosted`. */
     quickLink?: boolean;
+    /** Gateway that takes the payment (docs 33). Default `NETPAY`. */
+    provider?: PaymentProvider;
+    /** Stripe hosted only: keep the card for later `charge-stored`. */
+    saveCard?: boolean;
   }): Promise<PaymentOrderView> {
     const amount = this.normaliseAmount(input.amount);
     if (amount === null) {
       throw new ValidationException('Amount must be a positive value with at most two decimals.');
+    }
+    const provider = input.provider ?? 'NETPAY';
+    if (input.saveCard === true && (provider !== 'STRIPE' || (input.checkoutMode ?? 'hosted') !== 'hosted')) {
+      throw new ValidationException('saveCard is only available on a Stripe hosted order.');
+    }
+    if (provider !== 'NETPAY') {
+      return this.createGatewayOrder(provider, amount, input);
     }
     if (input.installments !== undefined) {
       // Checked before the call: Netpay refuses an unavailable plan, and the
@@ -725,6 +771,481 @@ export class PaymentOrdersService {
   }
 
   /**
+   * Creates an order on an alternative gateway (docs 33).
+   *
+   * Does not need a Netpay configuration: when there is one it lends the reference
+   * prefix and the return-URL allowlist, otherwise the prefix is `VND`. `hosted`
+   * opens a Stripe Checkout Session / Checkout Pro preference; `custom` creates no
+   * session and is only charged through `charge-stored`.
+   *
+   * @param provider Gateway.
+   * @param amount Normalised two-decimal amount.
+   * @param input The create body.
+   * @returns The order, with the gateway's checkout URL.
+   */
+  private async createGatewayOrder(
+    provider: GatewayProvider,
+    amount: string,
+    input: {
+      merchantReferenceCode: string;
+      currency?: string;
+      checkoutMode?: CheckoutMode;
+      successUrl?: string;
+      cancelUrl?: string;
+      quickLink?: boolean;
+      saveCard?: boolean;
+      buyer?: OxxoBuyer;
+    },
+  ): Promise<PaymentOrderView> {
+    const gateways = this.requireGateways();
+    const checkoutMode = input.checkoutMode ?? 'hosted';
+    if (checkoutMode !== 'hosted' && checkoutMode !== 'custom') {
+      throw new ValidationException(`A ${provider} order is hosted or custom.`);
+    }
+    const currency = (input.currency ?? 'MXN').toUpperCase();
+    if (currency !== 'MXN') {
+      throw new ValidationException(`${provider} orders settle in MXN only.`);
+    }
+    if (input.quickLink === true && checkoutMode !== 'hosted') {
+      throw new ValidationException('A quick link needs the hosted checkout.');
+    }
+    const tenantId = this.currentTenantId();
+    const schemaName = this.tenantPrisma.requireCurrentSchema();
+    const scope: GatewayScope = { schemaName, tenantId };
+    const environment = await gateways.connectedEnvironment(scope, provider);
+    const netpay = await this.config.getCurrent().catch((error: unknown) => {
+      if (error instanceof NotFoundException) {
+        return null;
+      }
+      throw error;
+    });
+    const quickLinkCode =
+      input.quickLink === true && this.quickLinks.enabled() ? this.quickLinks.newCode() : null;
+    const returnUrls = quickLinkCode === null ? null : this.quickLinks.returnUrls(quickLinkCode);
+    if (checkoutMode === 'hosted' && returnUrls === null) {
+      for (const [field, url] of [
+        ['successUrl', input.successUrl],
+        ['cancelUrl', input.cancelUrl],
+      ] as const) {
+        if (url !== undefined) {
+          this.assertReturnUrl(field, url, netpay?.allowedReturnOrigins ?? []);
+        }
+      }
+    }
+    const successUrl = returnUrls?.successUrl ?? input.successUrl ?? paymentUrls().redirectUrl;
+    const cancelUrl = returnUrls?.cancelUrl ?? input.cancelUrl ?? paymentUrls().cancelUrl;
+    const orderReference = PaymentConfigService.newOrderReference(netpay?.orderReferencePrefix ?? 'VND');
+
+    const order = await this.tenantPrisma.forCurrentTenantTransaction((client) =>
+      client.paymentOrder.create({
+        data: {
+          tenantId,
+          orderReference,
+          merchantReferenceCode: input.merchantReferenceCode,
+          amount: new Prisma.Decimal(amount),
+          currency,
+          status: 'PENDING',
+          checkoutMode,
+          provider,
+        },
+        select: this.orderSelect(),
+      }),
+    );
+    await this.statusChanged(order.id, null, 'PENDING', tenantId, null);
+
+    let hostedCheckoutUrl: string | null = null;
+    let quickLink: QuickLinkRef | null = null;
+    if (checkoutMode === 'hosted') {
+      try {
+        const session = await gateways.createHostedCheckout(scope, provider, {
+          orderId: order.id,
+          orderReference,
+          title: netpayText(input.merchantReferenceCode).slice(0, 120) || orderReference,
+          amount,
+          successUrl,
+          cancelUrl,
+          saveCard: input.saveCard === true,
+          buyer: input.buyer ?? null,
+        });
+        hostedCheckoutUrl = session.url;
+        // The webhook and reconciliation find the payment through this id.
+        await this.tenantPrisma.forCurrentTenantTransaction((client) =>
+          client.paymentOrder.update({
+            where: { id: order.id },
+            data: { checkoutSessionId: session.sessionId, updatedAt: new Date() },
+          }),
+        );
+        if (quickLinkCode !== null) {
+          quickLink = await this.quickLinks.register({
+            code: quickLinkCode,
+            tenantId,
+            schemaName,
+            orderId: order.id,
+            hostedCheckoutUrl,
+          });
+        }
+      } catch (error) {
+        await this.tenantPrisma.forCurrentTenantTransaction((client) =>
+          client.paymentOrder.update({
+            where: { id: order.id },
+            data: { failureReason: 'Checkout session could not be created.', updatedAt: new Date() },
+          }),
+        );
+        this.logger.error(`Failed to create a ${provider} checkout for order ${order.id}`);
+        throw error;
+      }
+    }
+    return {
+      ...this.toView({ ...order, provider, netpayTransactionId: null, amountToken: null }),
+      checkout: this.checkoutConfig(
+        { publicKey: '', environment },
+        {
+          orderReference,
+          merchantReferenceCode: input.merchantReferenceCode,
+          amount,
+          currency,
+          mode: checkoutMode,
+          amountToken: null,
+          hostedCheckoutUrl,
+          provider,
+          redirectUrl: successUrl,
+          cancelUrl,
+        },
+      ),
+      quickLink,
+    };
+  }
+
+  /**
+   * The gateway that holds an order's payment, read for the controller's dispatch.
+   *
+   * @param orderId Order.
+   * @returns `NETPAY`, `STRIPE` or `MERCADOPAGO`.
+   * @throws {NotFoundException} When the order is not this tenant's.
+   */
+  async providerOf(orderId: string): Promise<PaymentProvider> {
+    const row = await this.tenantPrisma.forCurrentTenantTransaction((client) =>
+      client.paymentOrder.findFirst({ where: { id: orderId }, select: { provider: true } }),
+    );
+    if (row === null) {
+      throw new NotFoundException('The requested resource was not found.');
+    }
+    return (row.provider ?? 'NETPAY') as PaymentProvider;
+  }
+
+  /**
+   * Verifies a gateway order of the current tenant (`POST /orders/:id/verify`).
+   *
+   * @param orderId Order.
+   * @param transactionId Gateway transaction to ask about; found by the order otherwise.
+   * @returns What the verification concluded.
+   */
+  async verifyGatewayOrder(orderId: string, transactionId: string | null): Promise<VerificationResult> {
+    return this.verifyGatewayOrderInSchema(
+      this.tenantPrisma.requireCurrentSchema(),
+      orderId,
+      this.currentTenantId(),
+      transactionId,
+    );
+  }
+
+  /**
+   * Asks the order's gateway about its payment and applies the answer with the same
+   * rules as a Netpay verification (exact amount, the order's reference, one
+   * transaction ⇒ one order). Whatever triggered it — a signed webhook, the
+   * reconciliation, a merchant — only says "go and ask".
+   *
+   * @param schemaName Tenant schema.
+   * @param orderId Order.
+   * @param tenantId Tenant.
+   * @param transactionId Transaction a webhook named; the order's own otherwise.
+   * @param source What caused it.
+   * @returns What the verification concluded.
+   */
+  async verifyGatewayOrderInSchema(
+    schemaName: string,
+    orderId: string,
+    tenantId: string,
+    transactionId: string | null,
+    source?: string,
+  ): Promise<VerificationResult> {
+    const existing = await this.tenantPrisma.forTenantTransaction(schemaName, (client) =>
+      client.paymentOrder.findFirst({ where: { id: orderId }, select: this.orderSelect() }),
+    );
+    if (existing === null) {
+      throw new NotFoundException('The requested resource was not found.');
+    }
+    const gateway = this.gatewayOf(existing);
+    if (gateway === null) {
+      throw new ValidationException('This order is not a gateway order.');
+    }
+    const unchanged = { orderId, status: existing.status, changed: false, emittedEvent: null };
+    if (SETTLED_ORDER_STATUSES.includes(existing.status)) {
+      return unchanged;
+    }
+    if (TERMINAL_UNPAID_STATUSES.includes(existing.status) && (existing.paidAfterCancelAt ?? null) !== null) {
+      return unchanged;
+    }
+    // A Mercado Pago preference may take a new payment after a rejected one: a FAILED
+    // order is searched by reference rather than re-asked about the rejected payment.
+    const bound =
+      gateway === 'MERCADOPAGO' && existing.status === 'FAILED' ? null : existing.netpayTransactionId;
+    const found = await this.requireGateways().lookup({ schemaName, tenantId }, gateway, {
+      transactionId: transactionId ?? bound,
+      sessionId: existing.checkoutSessionId ?? null,
+      orderReference: existing.orderReference,
+    });
+    if (found === null) {
+      return unchanged;
+    }
+    return this.applyGatewayLookup(schemaName, existing, found, tenantId, source);
+  }
+
+  /**
+   * Finds a gateway order of a tenant by what a webhook names.
+   *
+   * @param schemaName Tenant schema.
+   * @param provider The webhook's gateway; an order of another gateway never matches.
+   * @param where Checkout session, order reference or transaction.
+   * @returns The order id, or `null`.
+   */
+  async findGatewayOrderIdInSchema(
+    schemaName: string,
+    provider: GatewayProvider,
+    where: { checkoutSessionId?: string; orderReference?: string; netpayTransactionId?: string },
+  ): Promise<string | null> {
+    const or = Object.entries(where)
+      .filter(([, value]) => typeof value === 'string' && value !== '')
+      .map(([key, value]) => ({ [key]: value }));
+    if (or.length === 0) {
+      return null;
+    }
+    const row = await this.tenantPrisma.forTenantTransaction(schemaName, (client) =>
+      client.paymentOrder.findFirst({ where: { OR: or, provider }, select: { id: true } }),
+    );
+    return row?.id ?? null;
+  }
+
+  /**
+   * Applies a gateway lookup through {@link applyVerification}, then keeps the card
+   * a paid Stripe Checkout saved.
+   */
+  private async applyGatewayLookup(
+    schemaName: string,
+    existing: OrderRow,
+    found: GatewayLookup,
+    tenantId: string,
+    source?: string,
+  ): Promise<VerificationResult> {
+    if (
+      existing.netpayTransactionId !== null &&
+      existing.netpayTransactionId !== found.transactionId &&
+      existing.status !== 'FAILED'
+    ) {
+      throw new ConflictException('This order is already bound to a different transaction.');
+    }
+    const result = await this.applyVerification(
+      schemaName,
+      existing,
+      found.transactionId,
+      found.transaction,
+      tenantId,
+      source,
+    );
+    if (found.savedCard !== null && result.status === STATUS_PAID) {
+      const card = found.savedCard;
+      await this.tenantPrisma.forTenantTransaction(schemaName, (client) =>
+        client.paymentOrder.update({
+          where: { id: existing.id },
+          data: {
+            gatewayCustomerId: card.clientId,
+            gatewayPaymentMethodId: card.cardToken,
+            gatewayCardBrand: card.brand?.slice(0, 32) ?? null,
+            gatewayCardLast4: card.last4?.slice(0, 4) ?? null,
+          },
+        }),
+      );
+    }
+    return result;
+  }
+
+  /**
+   * One gateway transaction, mapped for verification.
+   *
+   * @param schemaName Tenant schema.
+   * @param row The order.
+   * @param transactionId Gateway id.
+   * @param tenantId Tenant.
+   * @returns The transaction.
+   */
+  private async gatewayTransaction(
+    schemaName: string,
+    row: OrderRow,
+    transactionId: string,
+    tenantId: string,
+  ): Promise<NetpayTransaction> {
+    const found = await this.requireGateways().lookup(
+      { schemaName, tenantId },
+      this.gatewayOf(row) as GatewayProvider,
+      { transactionId, sessionId: null, orderReference: row.orderReference },
+    );
+    if (found === null) {
+      throw new NotFoundException('The gateway does not know this transaction.');
+    }
+    return found.transaction;
+  }
+
+  /**
+   * Charges the card a Stripe Checkout saved, with the buyer absent (docs 33, D6, D11).
+   *
+   * Same guarantees as the Netpay charge: the order is claimed before Stripe is
+   * called, an unknown outcome leaves it CHARGE_UNKNOWN with the claim held, and the
+   * PaymentIntent is applied through the same verification. The PaymentIntent's
+   * idempotency key names the order and its previous transaction, so a retried
+   * request reaches the same charge. Only Stripe can do this; any other gateway is 409
+   * `GATEWAY_AUTOPAY_UNSUPPORTED`.
+   *
+   * @param orderId Order.
+   * @param input Saved customer (`cus_…`) and payment method (`pm_…`).
+   * @returns The charge outcome.
+   */
+  async chargeStoredGateway(
+    orderId: string,
+    input: { clientId: string; cardToken: string },
+  ): Promise<ChargeResult> {
+    const existing = await this.tenantPrisma.forCurrentTenantTransaction((client) =>
+      client.paymentOrder.findFirst({ where: { id: orderId }, select: this.orderSelect() }),
+    );
+    if (existing === null) {
+      throw new NotFoundException('The requested resource was not found.');
+    }
+    const gateway = this.gatewayOf(existing);
+    if (gateway !== null && !GATEWAY_ADAPTERS[gateway].supportsAutopay) {
+      throw new GatewayAutopayUnsupportedException(gateway);
+    }
+    if (gateway !== 'STRIPE') {
+      throw new ValidationException('This order is not a Stripe order.');
+    }
+    if (!/^cus_[A-Za-z0-9]+$/.test(input.clientId) || !/^pm_[A-Za-z0-9]+$/.test(input.cardToken)) {
+      throw new ValidationException(
+        'A Stripe stored charge needs the saved customer (cus_…) and payment method (pm_…).',
+      );
+    }
+    if (SETTLED_ORDER_STATUSES.includes(existing.status)) {
+      throw new OrderStateConflictException('This order is already settled.', { status: existing.status });
+    }
+    if (!CHARGEABLE_STATUSES.includes(existing.status)) {
+      throw new OrderStateConflictException(`An order in ${existing.status} cannot be charged.`, {
+        status: existing.status,
+      });
+    }
+    if (existing.netpayTransactionId !== null && existing.status !== 'FAILED') {
+      throw new OrderStateConflictException(
+        'A previous charge of this order is still undecided; verify the order before charging again.',
+        { status: existing.status },
+      );
+    }
+    const schemaName = this.tenantPrisma.requireCurrentSchema();
+    const tenantId = this.currentTenantId();
+    await this.claimOrder(existing.id, 'charge', {
+      status: { in: [...CHARGEABLE_STATUSES] },
+      netpayTransactionId: existing.netpayTransactionId,
+    });
+    const legacyBound = existing.netpayTransactionId !== null;
+    const amount = existing.amount.toFixed(2);
+    let chargeSent = false;
+    let keepClaim = false;
+    try {
+      chargeSent = true;
+      const intent = await this.requireGateways().chargeStoredStripe(
+        { schemaName, tenantId },
+        {
+          orderReference: existing.orderReference,
+          amount,
+          currency: existing.currency,
+          description: `Order ${existing.merchantReferenceCode}`.slice(0, 200),
+          customer: input.clientId,
+          paymentMethod: input.cardToken,
+          idempotencyKey: `bn-charge-${existing.id}-${existing.netpayTransactionId ?? 'first'}`,
+        },
+      );
+      const transaction = stripeIntentToTransaction(intent);
+      const declined = transaction.status === 'FAILED';
+      const decline = classifyDecline({ code: transaction.responseCode, message: transaction.responseMsg });
+      const recorded: PendingPayload = {
+        kind: 'charge',
+        outcome: declined ? 'declined' : 'submitted',
+        transactionId: intent.id,
+        priorStatus: existing.status,
+        legacyBound,
+        ...(declined
+          ? {
+              failureReason: transaction.responseMsg ?? 'The provider declined the charge.',
+              failureCode: decline.failureCode,
+              providerFailureCode: decline.providerCode,
+            }
+          : {}),
+      };
+      let orderStatus: string;
+      try {
+        const updated = await this.tenantPrisma.forTenantTransaction(schemaName, (client) =>
+          this.applyChargeResultIn(client, existing.id, recorded, tenantId, new Date()),
+        );
+        await this.reportChange(existing.id, updated, tenantId);
+        orderStatus = updated.row.status;
+      } catch (writeError) {
+        keepClaim = true;
+        await this.holdPendingResult(schemaName, existing.id, recorded, writeError);
+        throw new ProviderResultPendingException('charge');
+      }
+      if (!declined) {
+        try {
+          const result = await this.applyVerification(schemaName, existing, intent.id, transaction, tenantId);
+          orderStatus = result.status;
+        } catch {
+          this.logger.warn(`Could not verify order ${existing.id} right after the Stripe charge.`);
+        }
+      }
+      return {
+        transactionTokenId: intent.id,
+        status: intent.status ?? null,
+        amount,
+        currency: existing.currency,
+        orderStatus,
+        ...(declined
+          ? {
+              declineReason: transaction.responseMsg ?? 'The provider declined the charge.',
+              failureCode: decline.failureCode,
+            }
+          : {}),
+      };
+    } catch (error) {
+      if (chargeSent && isProviderOutcomeUnknown(error)) {
+        await this.markChargeUnknown(schemaName, existing, tenantId, legacyBound);
+      } else if (!keepClaim) {
+        await this.releaseClaim(existing.id);
+      }
+      throw error;
+    }
+  }
+
+  /** The alternative gateway of an order, `null` for Netpay. */
+  private gatewayOf(row: { provider?: string | null }): GatewayProvider | null {
+    return GATEWAY_PROVIDERS.find((provider) => provider === row.provider) ?? null;
+  }
+
+  /** The gateway service; absent only in a process built without it (some tests). */
+  private requireGateways(): PaymentGatewaysService {
+    if (this.gateways === undefined) {
+      throw new GatewayNotConnectedException(
+        'GATEWAY',
+        'Alternative gateways are not available in this process.',
+      );
+    }
+    return this.gateways;
+  }
+
+  /**
    * Reads one order belonging to the current tenant.
    *
    * @param id Order id.
@@ -886,6 +1407,9 @@ export class PaymentOrdersService {
     );
     if (existing === null) {
       throw new NotFoundException('The requested resource was not found.');
+    }
+    if (this.gatewayOf(existing) !== null) {
+      return this.verifyGatewayOrderInSchema(schemaName, orderId, tenantId, transactionId);
     }
     if (existing.netpayTransactionId !== null && existing.netpayTransactionId !== transactionId) {
       throw new ConflictException('This order is already bound to a different transaction.');
@@ -1957,8 +2481,9 @@ export class PaymentOrdersService {
         `The refund exceeds what was charged: ${remaining.toFixed(2)} of ${existing.amount.toFixed(2)} is left to refund.`,
       );
     }
-    // The keys the order was charged with (BN-REQ-CFG-002).
-    const config = await this.config.getUsable(existing.configId ?? null);
+    const gateway = this.gatewayOf(existing);
+    // The keys the order was charged with (BN-REQ-CFG-002). A gateway order has none.
+    const config = gateway === null ? await this.config.getUsable(existing.configId ?? null) : null;
     const schemaName = this.tenantPrisma.requireCurrentSchema();
     const tenantId = this.currentTenantId();
     // Claimed before the provider is called: two concurrent refunds would both
@@ -1970,13 +2495,25 @@ export class PaymentOrdersService {
       refundedAmount: existing.refundedAmount,
     });
     try {
-      await this.reverseAtProvider(
-        config,
-        existing.netpayTransactionId,
-        requested,
-        motive,
-        existing.refundedAmount.isZero() && requested.equals(existing.amount),
-      );
+      if (config !== null) {
+        await this.reverseAtProvider(
+          config,
+          existing.netpayTransactionId,
+          requested,
+          motive,
+          existing.refundedAmount.isZero() && requested.equals(existing.amount),
+        );
+      } else {
+        // The key names this exact refund (order, total before it, amount), so a retry
+        // after an unknown outcome is deduplicated by the gateway instead of refunding twice.
+        await this.requireGateways().refund(
+          { schemaName, tenantId },
+          gateway as GatewayProvider,
+          existing.netpayTransactionId,
+          requested.toFixed(2),
+          `bn-refund-${existing.id}-${existing.refundedAmount.toFixed(2)}-${requested.toFixed(2)}`,
+        );
+      }
     } catch (error) {
       // An unknown outcome keeps the claim (BN-REQ-PAY-011): the reversal may have
       // been carried out, and a retry must not reverse twice.
@@ -2271,8 +2808,13 @@ export class PaymentOrdersService {
     transactionId: string,
     tenantId: string,
   ): Promise<void> {
-    const config = await this.config.getUsable(existing.configId ?? null);
-    const transaction = await this.netpay.getTransaction(config.environment, config.secretKey, transactionId);
+    let transaction: NetpayTransaction;
+    if (this.gatewayOf(existing) !== null) {
+      transaction = await this.gatewayTransaction(schemaName, existing, transactionId, tenantId);
+    } else {
+      const config = await this.config.getUsable(existing.configId ?? null);
+      transaction = await this.netpay.getTransaction(config.environment, config.secretKey, transactionId);
+    }
     const status = parseStatus(transaction.status);
     if (status !== null && PROVIDER_SETTLED.has(status)) {
       await this.applyVerification(schemaName, existing, transactionId, transaction, tenantId);
@@ -2370,7 +2912,12 @@ export class PaymentOrdersService {
       return unchanged('skipped');
     }
     let config: { environment: NetpayEnvironment; secretKey: string } | null = null;
+    const gateway = this.gatewayOf(row);
     const ask = async (transactionId: string): Promise<NetpayTransaction> => {
+      if (gateway !== null) {
+        await ctx.beforeProviderCall();
+        return this.gatewayTransaction(schemaName, row, transactionId, tenant.id);
+      }
       config ??= await this.config.getUsableInSchema(schemaName, row.configId ?? null);
       await ctx.beforeProviderCall();
       return this.netpay.getTransaction(config.environment, config.secretKey, transactionId);
@@ -2381,6 +2928,51 @@ export class PaymentOrdersService {
       corrected,
       action,
     });
+
+    // A hosted gateway order learns its transaction only from the gateway: asked by
+    // its Checkout Session / reference until it is paid, or until the checkout expired.
+    const lateCheck = TERMINAL_UNPAID_STATUSES.includes(from) && (row.paidAfterCancelAt ?? null) === null;
+    if (
+      gateway !== null &&
+      row.netpayTransactionId === null &&
+      (row.checkoutSessionId ?? null) !== null &&
+      (lateCheck || EXPIRABLE_STATUSES.includes(from))
+    ) {
+      await ctx.beforeProviderCall();
+      const found = await this.requireGateways().lookup({ schemaName, tenantId: tenant.id }, gateway, {
+        transactionId: null,
+        sessionId: row.checkoutSessionId ?? null,
+        orderReference: row.orderReference,
+      });
+      if (found === null) {
+        const checkoutGone =
+          row.createdAt.getTime() + GATEWAY_CHECKOUT_TTL_MS + ctx.referenceGraceMs < ctx.now.getTime();
+        if (lateCheck || !checkoutGone) {
+          return unchanged();
+        }
+        const updated = await this.applyStatus(
+          schemaName,
+          row.id,
+          STATUS_EXPIRED,
+          ctx.now,
+          {
+            failureReason: 'The hosted checkout expired unpaid.',
+            operationClaim: null,
+            operationClaimedAt: null,
+          },
+          { tenantId: tenant.id, expectFrom: EXPIRABLE_STATUSES, source },
+        );
+        return changed(updated.row.status, 'expired');
+      }
+      if (lateCheck && found.transaction.status !== 'DONE') {
+        return unchanged();
+      }
+      const result = await this.applyGatewayLookup(schemaName, row, found, tenant.id, source);
+      if (lateCheck) {
+        return result.changed ? changed(result.status, 'paid_after_cancel', true) : unchanged();
+      }
+      return changed(result.status, 'verified');
+    }
 
     if (TERMINAL_UNPAID_STATUSES.includes(from)) {
       if (row.netpayTransactionId === null || (row.paidAfterCancelAt ?? null) !== null) {
@@ -3205,6 +3797,12 @@ export class PaymentOrdersService {
       verifiedAmount: true,
       paidAfterCancelAt: true,
       configId: true,
+      provider: true,
+      checkoutSessionId: true,
+      gatewayCustomerId: true,
+      gatewayPaymentMethodId: true,
+      gatewayCardBrand: true,
+      gatewayCardLast4: true,
       createdAt: true,
       updatedAt: true,
     };
@@ -3233,6 +3831,11 @@ export class PaymentOrdersService {
     refundedAmount: Prisma.Decimal;
     verifiedAmount?: Prisma.Decimal | null;
     paidAfterCancelAt?: Date | null;
+    provider?: string;
+    gatewayCustomerId?: string | null;
+    gatewayPaymentMethodId?: string | null;
+    gatewayCardBrand?: string | null;
+    gatewayCardLast4?: string | null;
     createdAt: Date;
     updatedAt: Date;
   }): PaymentOrderView {
@@ -3244,6 +3847,16 @@ export class PaymentOrdersService {
       currency: row.currency,
       status: row.status,
       netpayTransactionId: row.netpayTransactionId,
+      provider: (row.provider ?? 'NETPAY') as PaymentProvider,
+      savedCard:
+        (row.gatewayCustomerId ?? null) !== null && (row.gatewayPaymentMethodId ?? null) !== null
+          ? {
+              clientId: row.gatewayCustomerId as string,
+              cardToken: row.gatewayPaymentMethodId as string,
+              brand: row.gatewayCardBrand ?? null,
+              last4: row.gatewayCardLast4 ?? null,
+            }
+          : null,
       paymentMethod: row.paymentMethod,
       paymentReference: row.paymentReference,
       paymentReferenceExpiresAt: row.paymentReferenceExpiresAt?.toISOString() ?? null,
@@ -3280,10 +3893,16 @@ export class PaymentOrdersService {
       amountToken: string | null;
       /** Netpay's payment page; null outside `hosted`. */
       hostedCheckoutUrl: string | null;
+      /** Gateway of the page; Netpay when absent. */
+      provider?: PaymentProvider;
+      /** Return URLs of a gateway checkout; the configured defaults otherwise. */
+      redirectUrl?: string;
+      cancelUrl?: string;
     },
   ): NonNullable<PaymentOrderView['checkout']> {
     return {
       mode: order.mode,
+      provider: order.provider ?? 'NETPAY',
       environment: config.environment,
       publicKey: config.publicKey,
       amountToken: order.amountToken,
@@ -3294,8 +3913,8 @@ export class PaymentOrdersService {
       // The button must run in sandbox mode while the merchant is on the sandbox
       // keys; deriving it here avoids a storefront that silently charges live.
       sandboxMode: config.environment === 'SANDBOX',
-      redirectUrl: paymentUrls().redirectUrl,
-      cancelUrl: paymentUrls().cancelUrl,
+      redirectUrl: order.redirectUrl ?? paymentUrls().redirectUrl,
+      cancelUrl: order.cancelUrl ?? paymentUrls().cancelUrl,
     };
   }
 }

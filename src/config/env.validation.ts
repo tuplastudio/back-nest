@@ -175,6 +175,37 @@ export const envSchema = z
       .regex(/^https?:\/\/[^/\s?#]+$/, 'PUBLIC_BASE_URL must be an origin such as https://api.example.com.')
       .optional(),
 
+    // Alternative gateways (docs 33). A gateway missing any of its variables is
+    // reported `available: false` and cannot be connected; nothing else changes.
+    STRIPE_SECRET_KEY: z
+      .string()
+      .regex(
+        /^sk_(test|live)_[A-Za-z0-9]+$/,
+        'STRIPE_SECRET_KEY must be a Stripe secret key (sk_test_… / sk_live_…).',
+      )
+      .optional(),
+    STRIPE_CONNECT_CLIENT_ID: z
+      .string()
+      .regex(/^ca_[A-Za-z0-9]+$/, 'STRIPE_CONNECT_CLIENT_ID must be a Connect client id (ca_…).')
+      .optional(),
+    STRIPE_WEBHOOK_SECRET: z
+      .string()
+      .regex(/^whsec_[A-Za-z0-9+/=]+$/, 'STRIPE_WEBHOOK_SECRET must be a webhook signing secret (whsec_…).')
+      .optional(),
+    MP_CLIENT_ID: z.string().regex(/^\d+$/, 'MP_CLIENT_ID must be the numeric app id.').optional(),
+    MP_CLIENT_SECRET: z.string().min(16).optional(),
+    MP_WEBHOOK_SECRET: z.string().min(16).optional(),
+    // Origins the gateway OAuth callback may send the merchant back to (comma separated).
+    PAYMENT_GATEWAY_RETURN_ORIGINS: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((entry) => entry.trim().replace(/\/+$/, ''))
+          .filter((entry) => entry.length > 0),
+      ),
+
     // Reconciliation of non-terminal orders (BN-REQ-REC-001…004). The in-process
     // timer runs while an instance is alive; with min-instances 0 that means only
     // while there is traffic, so staging also gets a Cloud Scheduler call to
@@ -445,6 +476,25 @@ export function validateEnv(raw: NodeJS.ProcessEnv = process.env): Record<string
       keysJson: env.NETPAY_KEYS_JSON ?? null,
       merchantInitiatedEnabled: env.NETPAY_MIT_ENABLED === 'true',
       ...paymentUrls,
+    },
+    gateways: {
+      stripe:
+        env.STRIPE_SECRET_KEY && env.STRIPE_CONNECT_CLIENT_ID && env.STRIPE_WEBHOOK_SECRET
+          ? {
+              secretKey: env.STRIPE_SECRET_KEY,
+              clientId: env.STRIPE_CONNECT_CLIENT_ID,
+              webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+            }
+          : null,
+      mercadoPago:
+        env.MP_CLIENT_ID && env.MP_CLIENT_SECRET && env.MP_WEBHOOK_SECRET
+          ? {
+              clientId: env.MP_CLIENT_ID,
+              clientSecret: env.MP_CLIENT_SECRET,
+              webhookSecret: env.MP_WEBHOOK_SECRET,
+            }
+          : null,
+      returnOrigins: env.PAYMENT_GATEWAY_RETURN_ORIGINS,
     },
     outboundWebhooks: {
       enabled: env.OUTBOUND_WEBHOOK_ENABLED,

@@ -252,6 +252,20 @@ export class AppConfig {
     return this.config.get<boolean>('payments.merchantInitiatedEnabled') ?? false;
   }
 
+  /**
+   * Platform credentials of the alternative gateways (docs 33). A gateway is `null`
+   * when any of its variables is missing, which reports it unavailable.
+   */
+  get paymentGateways(): PaymentGatewaysConfig {
+    return (
+      this.config.get<PaymentGatewaysConfig>('gateways') ?? {
+        stripe: null,
+        mercadoPago: null,
+        returnOrigins: [],
+      }
+    );
+  }
+
   /** `NETPAY_KEYS_JSON`, or `null` for a one-key ring of `NETPAY_ENCRYPTION_KEY`. */
   get paymentsKeysJson(): string | null {
     return this.config.get<string | null>('payments.keysJson') ?? null;
@@ -382,3 +396,19 @@ export function configNamespace<T>(config: ConfigService, namespace: string) {
 
 /** Inferred shape of the validated configuration object. */
 export type AppConfigShape = z.infer<typeof envSchema>;
+
+/** Platform credentials of Stripe Connect and Mercado Pago (`STRIPE_*`, `MP_*`). */
+export interface PaymentGatewaysConfig {
+  readonly stripe: {
+    readonly secretKey: string;
+    readonly clientId: string;
+    readonly webhookSecret: string;
+  } | null;
+  readonly mercadoPago: {
+    readonly clientId: string;
+    readonly clientSecret: string;
+    readonly webhookSecret: string;
+  } | null;
+  /** `PAYMENT_GATEWAY_RETURN_ORIGINS`. */
+  readonly returnOrigins: readonly string[];
+}

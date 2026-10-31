@@ -146,6 +146,18 @@ export class PaymentSecretBox {
   static aadForEndpoint(endpointId: string): string {
     return `webhook:endpoint:${endpointId}`;
   }
+
+  /**
+   * Builds the additional authenticated data for a gateway OAuth token.
+   *
+   * @param tenantId Tenant that connected the account.
+   * @param provider `MERCADOPAGO` (the only gateway that hands over tokens).
+   * @param kind `access` or `refresh`, so the two tokens cannot be swapped.
+   * @returns AAD string.
+   */
+  static aadForGateway(tenantId: string, provider: string, kind: 'access' | 'refresh'): string {
+    return `gateway:${provider}:${kind}:${tenantId}`;
+  }
 }
 
 /**

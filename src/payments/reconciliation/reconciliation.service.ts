@@ -290,11 +290,13 @@ export class ReconciliationService implements OnApplicationBootstrap, OnModuleDe
             AND "updatedAt" < ${cutoff}::timestamp(3)
             AND (
               ("status"::text IN ${SQL_ACTIVE}
-                AND ("netpayTransactionId" IS NOT NULL OR "paymentReferenceExpiresAt" < ${at}::timestamp(3)))
+                AND ("netpayTransactionId" IS NOT NULL OR "paymentReferenceExpiresAt" < ${at}::timestamp(3)
+                  OR ("provider" <> 'NETPAY' AND "checkoutSessionId" IS NOT NULL)))
               OR "status"::text = 'CHARGE_UNKNOWN'
               OR ("status"::text IN ${SQL_REFUNDABLE} AND "operationClaim" = 'refund')
               OR ("status"::text IN ${SQL_TERMINAL_UNPAID}
-                AND "netpayTransactionId" IS NOT NULL
+                AND ("netpayTransactionId" IS NOT NULL
+                  OR ("provider" <> 'NETPAY' AND "checkoutSessionId" IS NOT NULL))
                 AND "paidAfterCancelAt" IS NULL
                 AND "updatedAt" > ${lateFrom}::timestamp(3))
             )

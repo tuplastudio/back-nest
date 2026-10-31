@@ -18,6 +18,7 @@ import { TenantGuard } from '../tenancy/tenant.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { RequireScopes } from '../common/decorators/scopes.decorator';
 import { PaymentOrdersService, type CheckoutMode } from './payment-orders.service';
+import type { PaymentProvider } from './gateways/gateway-endpoints';
 import { PaymentConfigService } from './payment-config.service';
 import { WebhookDriftService } from './webhook-drift.service';
 import { NetpayClient } from './netpay.client';
@@ -61,6 +62,9 @@ import { Idempotent } from '../common/idempotency/idempotent.decorator';
 import { CurrentPrincipal, CurrentTenant } from '../common/decorators/current-tenant.decorator';
 import type { Principal, TenantContext } from '../tenancy/tenant-context.interface';
 import { TenantUsersService } from '../tenant-api/tenant-users.service';
+
+/** A Netpay card token or a Stripe payment method; never a card number. */
+const STORED_CARD_TOKEN_PATTERN = new RegExp(`${NETPAY_CARD_TOKEN_PATTERN.source}|^pm_[A-Za-z0-9]{6,}$`);
 
 /** Message for the certification's digits-only rule. */
 const DIGITS_RULE = { message: 'must contain digits only.' };
@@ -177,6 +181,16 @@ export class CreatePaymentOrderDto {
   @IsOptional()
   @IsBoolean()
   quickLink?: boolean;
+
+  /** Gateway that takes the payment (docs 33). Default `netpay`; the others are `hosted` or `custom`. */
+  @IsOptional()
+  @IsIn(['netpay', 'stripe', 'mercadopago', 'conekta', 'openpay'])
+  provider?: 'netpay' | 'stripe' | 'mercadopago' | 'conekta' | 'openpay';
+
+  /** Stripe hosted only: keep the buyer's card for later `charge-stored` (`savedCard` on the paid order). */
+  @IsOptional()
+  @IsBoolean()
+  saveCard?: boolean;
 }
 
 /** Body for storing a buyer's card with the provider. */
@@ -254,20 +268,21 @@ export class ChargeTokenBillingDto {
 
 /** Body for a merchant-initiated charge to a stored card (recurring billing, no buyer present). */
 export class ChargeStoredCardDto {
-  /** The Netpay customer that holds the card, as returned in `savedCard` by the first charge. */
+  /** The customer that holds the card (Netpay id, or Stripe `cus_…`), as returned in `savedCard`. */
   @IsString()
   @Matches(NETPAY_CLIENT_ID_PATTERN)
   clientId!: string;
 
-  /** The stored card token. A card number is never accepted. */
+  /** The stored card token (Netpay `token_…`, or Stripe `pm_…`). A card number is never accepted. */
   @IsString()
-  @Matches(NETPAY_CARD_TOKEN_PATTERN, { message: 'cardToken must be a Netpay token, not card data.' })
+  @Matches(STORED_CARD_TOKEN_PATTERN, { message: 'cardToken must be a stored card token, not card data.' })
   cardToken!: string;
 
-  @IsDefined()
+  /** Required for a Netpay order; ignored for Stripe. */
+  @IsOptional()
   @ValidateNested()
   @Type(() => ChargeTokenBillingDto)
-  billing!: ChargeTokenBillingDto;
+  billing?: ChargeTokenBillingDto;
 }
 
 /** Body for charging a tokenized card. */
@@ -564,6 +579,8 @@ export class PaymentOrdersController {
       buyer: body.buyer,
       expirationDays: body.expirationDays,
       quickLink: body.quickLink,
+      provider: body.provider === undefined ? undefined : (body.provider.toUpperCase() as PaymentProvider),
+      saveCard: body.saveCard,
     });
   }
 
@@ -647,6 +664,10 @@ export class PaymentOrdersController {
   @HttpCode(HttpStatus.OK)
   async verify(@Param('id') id: string, @Body() body: VerifyOrderDto) {
     const order = await this.orders.findById(id);
+    if (order.provider !== 'NETPAY') {
+      // A gateway can be asked by the order itself (Checkout Session / reference).
+      return this.orders.verifyGatewayOrder(id, body.transactionId ?? null);
+    }
     const transactionId = body.transactionId ?? order.netpayTransactionId;
     if (transactionId === null || transactionId === undefined) {
       // Netpay offers no search by order reference, so an order whose charge got no
@@ -702,13 +723,23 @@ export class PaymentOrdersController {
   @Idempotent()
   @RequirePermissions('payments:write')
   @RequireScopes('payments:write')
-  @ApiOperation({ summary: 'Charge a stored card without the buyer present (recurring)' })
+  @ApiOperation({
+    summary: 'Charge a stored card without the buyer present (recurring)',
+    description:
+      'Netpay orders: needs `billing` and NETPAY_MIT_ENABLED. Stripe orders: an off-session PaymentIntent on the saved `cus_…` / `pm_…`, no flag needed. Mercado Pago orders: 409 `GATEWAY_AUTOPAY_UNSUPPORTED`.',
+  })
   @HttpCode(HttpStatus.OK)
-  chargeStored(@Param('id') id: string, @Body() body: ChargeStoredCardDto) {
+  async chargeStored(@Param('id') id: string, @Body() body: ChargeStoredCardDto) {
+    if ((await this.orders.providerOf(id)) !== 'NETPAY') {
+      return this.orders.chargeStoredGateway(id, { clientId: body.clientId, cardToken: body.cardToken });
+    }
     // Netpay's published docs say the issuer refuses a charge without CVV: this
     // stays off until Netpay confirms the merchant account supports recurring charges.
     if (this.appConfig?.netpayMerchantInitiatedEnabled !== true) {
       throw new ValidationException('Merchant-initiated charges are not enabled for this deployment.');
+    }
+    if (body.billing === undefined) {
+      throw new ValidationException('billing is required to charge a Netpay stored card.');
     }
     return this.orders.chargeToken(id, {
       cardToken: body.cardToken,

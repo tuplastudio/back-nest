@@ -28,6 +28,13 @@ import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interc
 import { AppConfig } from '../config/app-config.service';
 import { ReconciliationService } from './reconciliation/reconciliation.service';
 import { WebhookDriftService } from './webhook-drift.service';
+import { PaymentGatewaysService } from './gateways/payment-gateways.service';
+import { GatewayWebhookService } from './gateways/gateway-webhook.service';
+import {
+  GatewayOAuthCallbackController,
+  GatewayWebhookController,
+  PaymentGatewaysController,
+} from './gateways/payment-gateways.controller';
 
 /** A tenant's webhook drift is checked against Netpay at most this often by reconciliation. */
 const DRIFT_CHECK_INTERVAL_MS = 3_600_000;
@@ -61,6 +68,9 @@ export const OUTBOUND_TRANSPORT = Symbol('OutboundTransport');
     NetpayWebhookController,
     OutboundWebhookController,
     PaymentQuickLinksController,
+    PaymentGatewaysController,
+    GatewayOAuthCallbackController,
+    GatewayWebhookController,
   ],
   providers: [
     PaymentQuickLinksService,
@@ -185,6 +195,8 @@ export const OUTBOUND_TRANSPORT = Symbol('OutboundTransport');
     },
     PaymentConfigService,
     PaymentOrdersService,
+    PaymentGatewaysService,
+    GatewayWebhookService,
     PaymentEvents,
     NetpayWebhookService,
     OutboundWebhookService,

@@ -516,6 +516,32 @@ model PaymentWebhookRegistry {
   @@map("payment_webhook_registry")
 }
 
+/// Routes a gateway webhook to the tenant it belongs to (docs 33).
+///
+/// Stripe / Mercado Pago webhooks name the account (`event.account` / `user_id`);
+/// Conekta / Openpay ones carry an opaque per-tenant token in the URL, stored here
+/// as its SHA-256. Either way this is the index that turns it into a tenant.
+model PaymentGatewayRoute {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// `STRIPE`, `MERCADOPAGO`, `CONEKTA` or `OPENPAY`.
+  provider String @db.VarChar(16)
+
+  /// `acct_…`, the Mercado Pago `user_id`, or the hex SHA-256 of a webhook token.
+  externalAccountId String @unique @db.VarChar(64)
+
+  tenantId String @db.Uuid
+
+  schemaName String @db.VarChar(63)
+
+  createdAt DateTime @default(now())
+
+  revokedAt DateTime?
+
+  @@index([tenantId])
+  @@map("payment_gateway_routes")
+}
+
 /// Environment a tenant's Netpay account runs against.
 enum PaymentWebhookEnvironment {
   SANDBOX
