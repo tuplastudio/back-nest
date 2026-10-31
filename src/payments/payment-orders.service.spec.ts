@@ -680,6 +680,33 @@ describe('PaymentOrdersService charging a token', () => {
     expect(JSON.stringify(result)).not.toContain('123');
   });
 
+  it('merchant-initiated: charges the stored card without cvv or browser data', async () => {
+    const { service, createCharge, createClient } = serviceOver([pending(), pending()], {});
+    const stored = {
+      cardToken: token,
+      billing: billing(),
+      clientId: 'cus_1',
+      merchantInitiated: true,
+      deviceFingerPrint: '',
+      deviceInformation: {},
+    };
+    {
+      await expect(service.chargeToken('order-1', { ...stored, clientId: undefined })).rejects.toThrow(
+        /needs the stored card/,
+      );
+      await expect(service.chargeToken('order-1', { ...stored, cvv: '123' })).rejects.toThrow(/takes no cvv/);
+      expect(createCharge).not.toHaveBeenCalled();
+      await service.chargeToken('order-1', stored);
+      const body = createCharge.mock.calls[0]?.[2] as Record<string, unknown>;
+      expect(body).not.toHaveProperty('cvv');
+      expect(body['saveCard']).toBe('false');
+      expect(body['client']).toEqual({ id: 'cus_1' });
+      expect(body['sessionId']).toBe('mit-acme_abc');
+      expect(body['deviceInformation']).toEqual({ deviceChannel: 'MerchantInitiated' });
+      expect(createClient).not.toHaveBeenCalled();
+    }
+  });
+
   it('refuses saveCard together with a stored card', async () => {
     const { service } = serviceOver([pending()], {});
     await expect(
@@ -702,8 +729,15 @@ describe('PaymentOrdersService charging a token', () => {
 
   it('keeps the card when the buyer asked to save it', async () => {
     const { service, deleteCard } = serviceOver([pending()], {});
-    await service.chargeToken('order-1', { cardToken: token, billing: billing(), saveCard: true, ...DEVICE });
+    const result = await service.chargeToken('order-1', {
+      cardToken: token,
+      billing: billing(),
+      saveCard: true,
+      ...DEVICE,
+    });
     expect(deleteCard).not.toHaveBeenCalled();
+    // The caller gets the stored card back, for later merchant-initiated charges.
+    expect(result.savedCard).toEqual({ clientId: 'cus_new', cardToken: token });
   });
 
   it('removes the one-time card even when 3-D Secure is pending, since confirm does not need it', async () => {

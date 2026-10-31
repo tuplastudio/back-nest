@@ -156,6 +156,10 @@ export const envSchema = z
     // On unless switched off (BN-REQ-EVT-003): a tenant with an ACTIVE endpoint
     // expects deliveries. Off is still possible (a canary, for instance), and
     // /health/ready then reports `degraded` while ACTIVE endpoints exist.
+    // Merchant-initiated charges to stored cards without CVV (recurring billing).
+    // Off unless Netpay confirms the merchant account supports them; read by
+    // `AppConfig.netpayMerchantInitiatedEnabled` (POST orders/:id/charge-stored).
+    NETPAY_MIT_ENABLED: z.enum(['true', 'false']).optional(),
     OUTBOUND_WEBHOOK_ENABLED: z
       .enum(['true', 'false'])
       .default('true')
@@ -439,6 +443,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv = process.env): Record<string
     payments: {
       encryptionKey: env.NETPAY_ENCRYPTION_KEY,
       keysJson: env.NETPAY_KEYS_JSON ?? null,
+      merchantInitiatedEnabled: env.NETPAY_MIT_ENABLED === 'true',
       ...paymentUrls,
     },
     outboundWebhooks: {

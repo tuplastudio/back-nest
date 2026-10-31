@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Optional,
   Param,
   Patch,
   Post,
@@ -55,6 +56,7 @@ import {
   type NetpayEnvironment,
 } from './netpay-endpoints';
 import { ValidationException } from '../common/errors/app.exception';
+import { AppConfig } from '../config/app-config.service';
 import { Idempotent } from '../common/idempotency/idempotent.decorator';
 import { CurrentPrincipal, CurrentTenant } from '../common/decorators/current-tenant.decorator';
 import type { Principal, TenantContext } from '../tenancy/tenant-context.interface';
@@ -248,6 +250,24 @@ export class ChargeTokenBillingDto {
   @ValidateNested()
   @Type(() => ChargeAddressDto)
   address!: ChargeAddressDto;
+}
+
+/** Body for a merchant-initiated charge to a stored card (recurring billing, no buyer present). */
+export class ChargeStoredCardDto {
+  /** The Netpay customer that holds the card, as returned in `savedCard` by the first charge. */
+  @IsString()
+  @Matches(NETPAY_CLIENT_ID_PATTERN)
+  clientId!: string;
+
+  /** The stored card token. A card number is never accepted. */
+  @IsString()
+  @Matches(NETPAY_CARD_TOKEN_PATTERN, { message: 'cardToken must be a Netpay token, not card data.' })
+  cardToken!: string;
+
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => ChargeTokenBillingDto)
+  billing!: ChargeTokenBillingDto;
 }
 
 /** Body for charging a tokenized card. */
@@ -515,6 +535,7 @@ export class PaymentOrdersController {
     private readonly tenantPrisma: TenantPrismaService,
     private readonly drift: WebhookDriftService,
     private readonly tenantUsers: TenantUsersService,
+    @Optional() private readonly appConfig?: AppConfig,
   ) {}
 
   /**
@@ -666,6 +687,36 @@ export class PaymentOrdersController {
       referenceId: body.referenceId,
       userAgent: body.userAgent,
       cardBrand: body.cardBrand,
+    });
+  }
+
+  /**
+   * Charges a stored card without the buyer present (recurring billing): no CVV,
+   * no browser data, no 3-D Secure. Disabled unless `NETPAY_MIT_ENABLED=true`.
+   *
+   * @param id Order id.
+   * @param body Stored card and billing data.
+   * @returns The transaction as Netpay reports it.
+   */
+  @Post('orders/:id/charge-stored')
+  @Idempotent()
+  @RequirePermissions('payments:write')
+  @RequireScopes('payments:write')
+  @ApiOperation({ summary: 'Charge a stored card without the buyer present (recurring)' })
+  @HttpCode(HttpStatus.OK)
+  chargeStored(@Param('id') id: string, @Body() body: ChargeStoredCardDto) {
+    // Netpay's published docs say the issuer refuses a charge without CVV: this
+    // stays off until Netpay confirms the merchant account supports recurring charges.
+    if (this.appConfig?.netpayMerchantInitiatedEnabled !== true) {
+      throw new ValidationException('Merchant-initiated charges are not enabled for this deployment.');
+    }
+    return this.orders.chargeToken(id, {
+      cardToken: body.cardToken,
+      billing: body.billing,
+      clientId: body.clientId,
+      merchantInitiated: true,
+      deviceFingerPrint: '',
+      deviceInformation: {},
     });
   }
 

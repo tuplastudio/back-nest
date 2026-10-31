@@ -308,6 +308,11 @@ export interface ChargeResult {
   readonly declineReason?: string;
   /** Stable decline code (BN-REQ-PAY-006), present when the charge was declined. */
   readonly failureCode?: DeclineCode;
+  /**
+   * The card this charge stored (`saveCard`), for later merchant-initiated charges.
+   * Only the provider's customer id and token: never a card number.
+   */
+  readonly savedCard?: { readonly clientId: string; readonly cardToken: string };
 }
 
 /**
@@ -1243,6 +1248,12 @@ export class PaymentOrdersService {
       userAgent?: string;
       /** Card brand reported at tokenisation, used to enforce the 18-installment rule. */
       cardBrand?: string;
+      /**
+       * Recurring charge the merchant starts with the buyer absent: a stored card
+       * (`clientId`), no CVV, no browser data and no 3-D Secure. See
+       * The deployment gate (`NETPAY_MIT_ENABLED`) is checked by the controller.
+       */
+      merchantInitiated?: boolean;
     },
   ): Promise<ChargeResult> {
     // Defence in depth: the DTO already rejects this shape, but a card number
@@ -1251,8 +1262,17 @@ export class PaymentOrdersService {
     if (!NETPAY_CARD_TOKEN_PATTERN.test(input.cardToken)) {
       throw new ValidationException('cardToken must be a Netpay token, not card data.');
     }
-    this.assertDeviceData(input.deviceFingerPrint, input.deviceInformation);
-    if (input.clientId !== undefined) {
+    if (input.merchantInitiated === true) {
+      if (input.clientId === undefined) {
+        throw new ValidationException('A merchant-initiated charge needs the stored card (clientId).');
+      }
+      if (input.cvv !== undefined || input.saveCard === true || input.installments !== undefined) {
+        throw new ValidationException('A merchant-initiated charge takes no cvv, saveCard or installments.');
+      }
+    } else {
+      this.assertDeviceData(input.deviceFingerPrint, input.deviceInformation);
+    }
+    if (input.clientId !== undefined && input.merchantInitiated !== true) {
       // Netpay: a stored card is charged with `saveCard` false and the security
       // code every time, because the stored token does not carry it.
       if (input.saveCard === true) {
@@ -1269,6 +1289,7 @@ export class PaymentOrdersService {
     if (input.clientId !== undefined) {
       await this.assertOwnCustomer(input.clientId);
     }
+    const mit = input.merchantInitiated === true;
     const existing = await this.tenantPrisma.forCurrentTenantTransaction((client) =>
       client.paymentOrder.findFirst({ where: { id: orderId }, select: this.orderSelect() }),
     );
@@ -1308,7 +1329,8 @@ export class PaymentOrdersService {
     // The fingerprint and the session id are one value: the one the browser
     // produced while tokenising. Netpay's 3DS 2.0 fails without it, so there is
     // no generated fallback.
-    const sessionId = input.deviceFingerPrint;
+    // A merchant-initiated charge has no browser: the session is named after the order.
+    const sessionId = mit ? `mit-${existing.orderReference}` : input.deviceFingerPrint;
     // Claimed before the provider is called: without it, two concurrent requests
     // both pass the checks above and the buyer is charged twice.
     //
@@ -1378,9 +1400,9 @@ export class PaymentOrdersService {
         },
         client: { id: clientId },
         // Only the documented fields travel, so a caller cannot pad the request.
-        deviceInformation: Object.fromEntries(
-          REQUIRED_DEVICE_FIELDS.map((key) => [key, input.deviceInformation[key]]),
-        ),
+        deviceInformation: mit
+          ? { deviceChannel: 'MerchantInitiated' }
+          : Object.fromEntries(REQUIRED_DEVICE_FIELDS.map((key) => [key, input.deviceInformation[key]])),
         ...(input.installments === undefined
           ? {}
           : { installments: { plan: { count: input.installments, interval: 'month' as const } } }),
@@ -1471,6 +1493,11 @@ export class PaymentOrdersService {
           ? { declineReason: transaction.declineReason }
           : {}),
         ...(transaction.failureCode === undefined ? {} : { failureCode: transaction.failureCode }),
+        ...(typeof recorded.savedCustomerId === 'string' &&
+        typeof recorded.savedCardToken === 'string' &&
+        !declined
+          ? { savedCard: { clientId: recorded.savedCustomerId, cardToken: recorded.savedCardToken } }
+          : {}),
       };
     } catch (error) {
       // An unknown outcome of the charge itself keeps the claim (BN-REQ-PAY-011) and

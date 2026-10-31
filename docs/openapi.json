@@ -2093,6 +2093,68 @@
         ]
       }
     },
+    "/api/v1/t/payments/orders/{id}/charge-stored": {
+      "post": {
+        "operationId": "PaymentOrdersController_chargeStored",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional; 1-255 printable ASCII characters, a UUID is recommended. A repeat with the same key and body within 24 h gets the stored response (header Idempotency-Replayed: true) without calling Netpay. After a 5xx/504 the key stays in progress for 10 min. See docs/ERRORS.md.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChargeStoredCardDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "409": {
+            "description": "IDEMPOTENCY_IN_PROGRESS (with Retry-After) while the first request with this key runs; CONFLICT / ORDER_STATE_CONFLICT when the order does not allow the operation."
+          },
+          "422": {
+            "description": "IDEMPOTENCY_KEY_REUSED: the key was already used with a different body."
+          },
+          "default": {
+            "description": "Error. Branch on error.code; see docs/ERRORS.md.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer-jwt": []
+          }
+        ],
+        "summary": "Charge a stored card without the buyer present (recurring)",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
     "/api/v1/t/payments/orders/{id}/confirm": {
       "post": {
         "operationId": "PaymentOrdersController_confirm",
@@ -4179,6 +4241,10 @@
         "properties": {}
       },
       "ChargeTokenDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ChargeStoredCardDto": {
         "type": "object",
         "properties": {}
       },

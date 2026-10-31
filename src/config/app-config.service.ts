@@ -247,6 +247,11 @@ export class AppConfig {
     return this.config.get<string | null>('auth.piiKeysJson') ?? null;
   }
 
+  /** `NETPAY_MIT_ENABLED`: recurring charges to stored cards without CVV. */
+  get netpayMerchantInitiatedEnabled(): boolean {
+    return this.config.get<boolean>('payments.merchantInitiatedEnabled') ?? false;
+  }
+
   /** `NETPAY_KEYS_JSON`, or `null` for a one-key ring of `NETPAY_ENCRYPTION_KEY`. */
   get paymentsKeysJson(): string | null {
     return this.config.get<string | null>('payments.keysJson') ?? null;
