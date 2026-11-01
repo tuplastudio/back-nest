@@ -143,6 +143,7 @@ export class GatewayWebhookService {
       this.logger.warn({ event: 'gateway_webhook_unrouted', provider: 'MERCADOPAGO' });
       return;
     }
+    // Mercado Pago orders are stored under MERCADOPAGO (searching another provider never matches).
     // Only the id is taken from the notification: the payment itself, and the
     // reference that names its order, come from Mercado Pago with the seller's token.
     let reference: string | null;
