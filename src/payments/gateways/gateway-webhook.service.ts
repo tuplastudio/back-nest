@@ -163,7 +163,7 @@ export class GatewayWebhookService {
     if (reference === null) {
       return;
     }
-    const orderId = await this.orders.findGatewayOrderIdInSchema(scope.schemaName, 'STRIPE', {
+    const orderId = await this.orders.findGatewayOrderIdInSchema(scope.schemaName, 'MERCADOPAGO', {
       orderReference: reference,
     });
     if (orderId !== null) {
