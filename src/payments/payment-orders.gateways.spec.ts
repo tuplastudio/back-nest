@@ -73,15 +73,12 @@ function fixture(rows: Row[], options: { routes?: (sent: Sent) => [number, unkno
   const merge = (data: Row): Row => {
     const merged: Row = { ...(rows[0] ?? {}) };
     for (const [k, v] of Object.entries(data)) {
-      const inc =
-        typeof v === 'object' && v !== null && 'increment' in v
-          ? (v as { increment: unknown }).increment
-          : undefined;
+      const inc = typeof v === 'object' && v !== null && 'increment' in v ? v.increment : undefined;
       merged[k] =
         inc === undefined
           ? v
           : merged[k] instanceof Prisma.Decimal
-            ? (merged[k] as Prisma.Decimal).plus(inc as Prisma.Decimal)
+            ? merged[k].plus(inc as Prisma.Decimal)
             : Number(merged[k] ?? 0) + Number(inc);
     }
     rows[0] = merged;
@@ -192,7 +189,7 @@ function fixture(rows: Row[], options: { routes?: (sent: Sent) => [number, unkno
 
   jest.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
     const call: Sent = {
-      url: String(input),
+      url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
       method: init?.method ?? 'GET',
       headers: (init?.headers ?? {}) as Record<string, string>,
       body: init?.body as string | undefined,
