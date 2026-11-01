@@ -44,15 +44,3 @@ CREATE TABLE IF NOT EXISTS "payment_gateway_accounts" (
 
 CREATE UNIQUE INDEX IF NOT EXISTS "payment_gateway_accounts_provider_key"
     ON "payment_gateway_accounts"("provider");
-
--- Row-level security, like every other tenant table (0002): the table holds the
--- encrypted gateway tokens, so a data-plane credential must never read another
--- tenant's row.
-ALTER TABLE "payment_gateway_accounts" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE "payment_gateway_accounts" FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "payment_gateway_accounts_tenant_isolation" ON "payment_gateway_accounts";
-CREATE POLICY "payment_gateway_accounts_tenant_isolation" ON "payment_gateway_accounts"
-    USING (current_setting('app.current_tenant', true) = __TENANT_SCHEMA_LITERAL__)
-    WITH CHECK (current_setting('app.current_tenant', true) = __TENANT_SCHEMA_LITERAL__);
-
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "payment_gateway_accounts" TO mtb_app;
