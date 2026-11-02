@@ -9,6 +9,7 @@ import { PaymentConfigService } from '../payment-config.service';
 import { PaymentSecretBox } from '../payment-secret-box';
 import {
   AppException,
+  GatewayAccountInUseException,
   GatewayCredentialsInvalidException,
   GatewayNotConnectedException,
   NotFoundException,
@@ -37,6 +38,7 @@ import {
   GATEWAY_ADAPTERS,
   KEYS_ADAPTERS,
   MP_API,
+  STRIPE_API,
   stripeRequest,
   type GatewayCall,
   type GatewayHttp,
@@ -137,6 +139,11 @@ export class PaymentGatewaysService {
     private readonly app: AppConfig,
     config: ConfigService,
   ) {
+    if (this.platform.stripePlatformModeRefused === true) {
+      this.logger.warn(
+        'Stripe is unavailable: STRIPE_CONNECT_CLIENT_ID is unset and the key is not a test key. Platform-account mode only accepts sk_test_ keys.',
+      );
+    }
     // Derived, so no new secret has to be provisioned, and never equal to the data key.
     this.stateKey = Buffer.from(
       hkdfSync('sha256', config.getOrThrow<string>('payments.encryptionKey'), '', 'gateway-oauth-state', 32),
@@ -203,7 +210,7 @@ export class PaymentGatewaysService {
    * @returns The gateway's authorization URL.
    * @throws {ReturnUrlNotAllowedException} 422 when `returnUrl` is not on an allowed origin.
    */
-  connect(provider: GatewayProvider, returnUrl: string): { authorizeUrl: string } {
+  async connect(provider: GatewayProvider, returnUrl: string): Promise<{ authorizeUrl: string }> {
     if (!isOAuthGateway(provider)) {
       throw new ValidationException(`${provider} is connected with its API keys (PUT credentials).`);
     }
@@ -214,6 +221,9 @@ export class PaymentGatewaysService {
         safeOrigin(returnUrl),
         'returnUrl must be on an origin listed in PAYMENT_GATEWAY_RETURN_ORIGINS.',
       );
+    }
+    if (provider === 'STRIPE' && this.stripePlatformMode()) {
+      return { authorizeUrl: await this.connectPlatformAccount(returnUrl) };
     }
     const state = signOAuthState(
       this.stateKey,
@@ -239,6 +249,66 @@ export class PaymentGatewaysService {
       redirect_uri: redirectUri,
     });
     return { authorizeUrl: `${MP_AUTHORIZE}?${query.toString()}` };
+  }
+
+  /** Stripe runs without Connect: the platform account itself is the merchant (staging only). */
+  stripePlatformMode(): boolean {
+    return this.platform.stripe !== null && this.platform.stripe.clientId === null;
+  }
+
+  private platformAccount: string | null = null;
+
+  /**
+   * The id of the platform's own Stripe account (`GET /v1/account`), cached in memory.
+   *
+   * @returns `acct_…`.
+   */
+  async platformAccountId(): Promise<string> {
+    if (this.platformAccount === null) {
+      const account = await this.call<{ id?: string }>('Stripe', `${STRIPE_API}/v1/account`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${this.platform.stripe?.secretKey ?? ''}` },
+      });
+      if (!/^acct_[A-Za-z0-9]+$/.test(account.id ?? '')) {
+        throw new UpstreamProviderException('Stripe', 'Stripe did not name the platform account.');
+      }
+      this.platformAccount = account.id as string;
+    }
+    return this.platformAccount;
+  }
+
+  /**
+   * Connects the calling tenant to the platform account without OAuth.
+   *
+   * @returns The return URL with `gateway=stripe&status=connected` appended.
+   * @throws {GatewayAccountInUseException} 409 when another tenant already holds the account.
+   */
+  private async connectPlatformAccount(returnUrl: string): Promise<string> {
+    const tenant = this.requestContext.requireTenant();
+    const accountId = await this.platformAccountId();
+    const existing = await this.controlPlane.client.paymentGatewayRoute.findUnique({
+      where: { externalAccountId: accountId },
+      select: { tenantId: true, revokedAt: true },
+    });
+    if (existing !== null && existing.tenantId !== tenant.id && existing.revokedAt === null) {
+      throw new GatewayAccountInUseException('STRIPE');
+    }
+    await this.storeAccount(
+      { schemaName: tenant.schemaName, tenantId: tenant.id },
+      'STRIPE',
+      {
+        externalAccountId: accountId,
+        environment: 'SANDBOX',
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        tokenExpiresAt: null,
+        publicKey: null,
+        webhookId: null,
+        connectedAt: new Date(),
+      },
+      accountId,
+    );
+    return withQuery(returnUrl, { gateway: 'stripe', status: 'connected' });
   }
 
   /**
@@ -388,7 +458,7 @@ export class PaymentGatewaysService {
     const scope: GatewayScope = { schemaName: tenant.schemaName, tenantId: tenant.id };
     const row = await this.accountIn(scope.schemaName, provider);
     if (row !== null && row.disconnectedAt === null) {
-      if (provider === 'STRIPE' && this.platform.stripe !== null) {
+      if (provider === 'STRIPE' && this.platform.stripe?.clientId) {
         try {
           await this.call('Stripe', `${STRIPE_CONNECT}/oauth/deauthorize`, {
             method: 'POST',
@@ -779,6 +849,7 @@ export class PaymentGatewaysService {
       externalAccountId: account.externalAccountId,
       environment: account.environment === 'LIVE' ? 'LIVE' : 'SANDBOX',
       secret,
+      ...(provider === 'STRIPE' && this.stripePlatformMode() ? { stripePlatformMode: true } : {}),
       http: this.http(provider, true),
     };
   }

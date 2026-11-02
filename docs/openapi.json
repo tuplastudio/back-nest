@@ -3101,7 +3101,7 @@
     },
     "/api/v1/t/payments/gateways/{provider}/connect": {
       "post": {
-        "description": "Answers `{ authorizeUrl }`. `returnUrl` must be on an origin in PAYMENT_GATEWAY_RETURN_ORIGINS (422 `RETURN_URL_NOT_ALLOWED`). After the merchant authorises, the callback redirects to `returnUrl?gateway=<provider>&status=connected` (or `status=error&reason=<code>`).",
+        "description": "Answers `{ authorizeUrl }`. `returnUrl` must be on an origin in PAYMENT_GATEWAY_RETURN_ORIGINS (422 `RETURN_URL_NOT_ALLOWED`). Stripe platform-account mode (sandbox key, no STRIPE_CONNECT_CLIENT_ID): no OAuth; the platform account is connected at once and `authorizeUrl` is `returnUrl` with `gateway=stripe&status=connected` (409 `GATEWAY_ACCOUNT_IN_USE` if another tenant holds it). Otherwise, after the merchant authorises, the callback redirects to `returnUrl?gateway=<provider>&status=connected` (or `status=error&reason=<code>`).",
         "operationId": "PaymentGatewaysController_connect",
         "parameters": [
           {

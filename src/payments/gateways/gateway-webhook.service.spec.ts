@@ -7,12 +7,14 @@ const WHSEC = 'whsec_test';
 const MP_SECRET = 'mp_secret';
 const SCOPE = { tenantId: 't1', schemaName: 'tenant_t1' };
 
-function setup(opts: { scope?: typeof SCOPE | null; orderId?: string | null } = {}) {
+function setup(opts: { scope?: typeof SCOPE | null; orderId?: string | null; platformMode?: boolean } = {}) {
   const gateways = {
     platform: { stripe: { webhookSecret: WHSEC }, mercadoPago: { webhookSecret: MP_SECRET } },
     resolveRoute: jest.fn((..._args: unknown[]) =>
       Promise.resolve(opts.scope === undefined ? SCOPE : opts.scope),
     ),
+    stripePlatformMode: () => opts.platformMode === true,
+    platformAccountId: jest.fn(() => Promise.resolve('acct_platform')),
     markDeauthorized: jest.fn((..._args: unknown[]) => Promise.resolve()),
     lookup: jest.fn((..._args: unknown[]) =>
       Promise.resolve({ transaction: { merchantReferenceCode: 'REF-1' } }),
@@ -67,6 +69,22 @@ describe('GatewayWebhookService.receiveStripe', () => {
       'pi_1',
       'webhook',
     );
+  });
+
+  it('treats an event without `account` as the platform account only in platform mode', async () => {
+    const { account: _drop, ...bare } = paid;
+    for (const platformMode of [true, false]) {
+      const { service, gateways, orders } = setup({ platformMode });
+      const { raw, sig } = stripeBody(bare);
+      await service.receiveStripe(raw, sig);
+      if (platformMode) {
+        expect(gateways.resolveRoute).toHaveBeenCalledWith('STRIPE', 'acct_platform');
+        expect(orders.verifyGatewayOrderInSchema).toHaveBeenCalledTimes(1);
+      } else {
+        expect(gateways.resolveRoute).not.toHaveBeenCalled();
+        expect(orders.verifyGatewayOrderInSchema).not.toHaveBeenCalled();
+      }
+    }
   });
 
   it('ignores a bad signature, a missing body and unparsable JSON without touching anything', async () => {

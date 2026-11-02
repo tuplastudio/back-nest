@@ -46,6 +46,8 @@ export interface GatewayCall {
   readonly environment: 'SANDBOX' | 'LIVE';
   /** Stripe platform key, MP seller token, Conekta / Openpay private key. */
   readonly secret: string;
+  /** Stripe platform-account mode: the platform is the merchant, so no `Stripe-Account` header. */
+  readonly stripePlatformMode?: boolean;
   readonly http: GatewayHttp;
 }
 
@@ -161,7 +163,7 @@ export function stripeRequest<T>(
     headers: {
       Authorization: `Bearer ${call.secret}`,
       'Content-Type': 'application/x-www-form-urlencoded',
-      'Stripe-Account': call.externalAccountId,
+      ...(call.stripePlatformMode === true ? {} : { 'Stripe-Account': call.externalAccountId }),
       ...(options.idempotencyKey === undefined ? {} : { 'Idempotency-Key': options.idempotencyKey }),
     },
     ...(options.form === undefined ? {} : { body: toStripeForm(options.form) }),

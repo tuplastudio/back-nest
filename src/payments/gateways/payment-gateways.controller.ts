@@ -109,7 +109,7 @@ export class PaymentGatewaysController {
   @ApiOperation({
     summary: 'Start connecting a Stripe / Mercado Pago account (OAuth)',
     description:
-      'Answers `{ authorizeUrl }`. `returnUrl` must be on an origin in PAYMENT_GATEWAY_RETURN_ORIGINS (422 `RETURN_URL_NOT_ALLOWED`). After the merchant authorises, the callback redirects to `returnUrl?gateway=<provider>&status=connected` (or `status=error&reason=<code>`).',
+      'Answers `{ authorizeUrl }`. `returnUrl` must be on an origin in PAYMENT_GATEWAY_RETURN_ORIGINS (422 `RETURN_URL_NOT_ALLOWED`). Stripe platform-account mode (sandbox key, no STRIPE_CONNECT_CLIENT_ID): no OAuth; the platform account is connected at once and `authorizeUrl` is `returnUrl` with `gateway=stripe&status=connected` (409 `GATEWAY_ACCOUNT_IN_USE` if another tenant holds it). Otherwise, after the merchant authorises, the callback redirects to `returnUrl?gateway=<provider>&status=connected` (or `status=error&reason=<code>`).',
   })
   connect(@Param('provider') provider: string, @Body() body: ConnectGatewayDto) {
     return this.gateways.connect(gatewayParam(provider), body.returnUrl);

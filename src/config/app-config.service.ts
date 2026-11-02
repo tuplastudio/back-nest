@@ -399,11 +399,14 @@ export type AppConfigShape = z.infer<typeof envSchema>;
 
 /** Platform credentials of Stripe Connect and Mercado Pago (`STRIPE_*`, `MP_*`). */
 export interface PaymentGatewaysConfig {
+  /** `clientId` null: platform-account mode (no Connect OAuth; sandbox keys only). */
   readonly stripe: {
     readonly secretKey: string;
-    readonly clientId: string;
+    readonly clientId: string | null;
     readonly webhookSecret: string;
   } | null;
+  /** A live key was set without a Connect client id: platform mode is refused. */
+  readonly stripePlatformModeRefused?: boolean;
   readonly mercadoPago: {
     readonly clientId: string;
     readonly clientSecret: string;

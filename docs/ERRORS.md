@@ -208,6 +208,8 @@ pasarela ya no autoriza la cuenta (401/403 de la pasarela); `details.provider` l
 `charge-stored` sobre una orden de una pasarela que no cobra tarjetas guardadas sin el comprador (todas menos Stripe).
 `GATEWAY_CREDENTIALS_INVALID`: las llaves de Conekta / Openpay tienen otra forma o la pasarela las rechazó; no se guardó nada.
 
+`GATEWAY_ACCOUNT_IN_USE` — `409`: Stripe en modo cuenta de plataforma (staging) y la cuenta de la plataforma ya está conectada a otro tenant.
+
 ### 2.1 Idempotencia: `Idempotency-Key`
 
 `POST /api/v1/t/payments/orders`, `POST /api/v1/t/payments/orders/:id/charge`, `…/confirm` y `…/refund` aceptan

@@ -75,8 +75,18 @@ export class GatewayWebhookService {
     } catch {
       return;
     }
-    const account = event.account;
-    if (typeof account !== 'string') {
+    // A non-Connect endpoint (platform-account mode) carries no `account`: the event
+    // belongs to the platform account itself. In Connect mode it is dropped.
+    let account: string;
+    if (typeof event.account === 'string') {
+      account = event.account;
+    } else if (this.gateways.stripePlatformMode()) {
+      try {
+        account = await this.gateways.platformAccountId();
+      } catch {
+        return;
+      }
+    } else {
       return;
     }
     const scope = await this.gateways.resolveRoute('STRIPE', account);

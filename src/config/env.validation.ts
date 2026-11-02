@@ -478,14 +478,24 @@ export function validateEnv(raw: NodeJS.ProcessEnv = process.env): Record<string
       ...paymentUrls,
     },
     gateways: {
+      // Without a Connect client id Stripe runs in platform-account mode (the platform
+      // account is the merchant, no OAuth): staging only, so a live key is refused.
       stripe:
-        env.STRIPE_SECRET_KEY && env.STRIPE_CONNECT_CLIENT_ID && env.STRIPE_WEBHOOK_SECRET
+        env.STRIPE_SECRET_KEY &&
+        env.STRIPE_WEBHOOK_SECRET &&
+        (env.STRIPE_CONNECT_CLIENT_ID || env.STRIPE_SECRET_KEY.startsWith('sk_test_'))
           ? {
               secretKey: env.STRIPE_SECRET_KEY,
-              clientId: env.STRIPE_CONNECT_CLIENT_ID,
+              clientId: env.STRIPE_CONNECT_CLIENT_ID ?? null,
               webhookSecret: env.STRIPE_WEBHOOK_SECRET,
             }
           : null,
+      stripePlatformModeRefused: Boolean(
+        env.STRIPE_SECRET_KEY &&
+        env.STRIPE_WEBHOOK_SECRET &&
+        !env.STRIPE_CONNECT_CLIENT_ID &&
+        !env.STRIPE_SECRET_KEY.startsWith('sk_test_'),
+      ),
       mercadoPago:
         env.MP_CLIENT_ID && env.MP_CLIENT_SECRET && env.MP_WEBHOOK_SECRET
           ? {

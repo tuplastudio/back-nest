@@ -423,3 +423,15 @@ export class GatewayCredentialsInvalidException extends AppException {
     );
   }
 }
+
+/** The platform's own Stripe account is already connected to another tenant (platform-account mode). */
+export class GatewayAccountInUseException extends AppException {
+  constructor(provider: string) {
+    super(
+      `This ${provider} account is already connected to another tenant.`,
+      'GATEWAY_ACCOUNT_IN_USE',
+      HttpStatus.CONFLICT,
+      { provider },
+    );
+  }
+}

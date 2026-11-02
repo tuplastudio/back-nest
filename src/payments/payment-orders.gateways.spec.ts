@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import { jest } from '@jest/globals';
 import { Prisma } from '../generated/tenant-plane/client';
 import { PaymentOrdersService } from './payment-orders.service';
@@ -61,12 +62,24 @@ interface Sent {
   body: string | undefined;
 }
 
-function fixture(rows: Row[], options: { routes?: (sent: Sent) => [number, unknown] } = {}) {
+function fixture(
+  rows: Row[],
+  options: {
+    routes?: (sent: Sent) => [number, unknown];
+    /** Stripe platform-account mode: no Connect client id. */
+    platformMode?: boolean;
+    /** The route the control plane already holds for the account. */
+    existingRoute?: { tenantId: string; revokedAt: Date | null };
+    /** A live key without a client id: platform mode refused. */
+    refusedLiveKey?: boolean;
+  } = {},
+) {
   const box = new PaymentSecretBox(randomBytes(32).toString('base64'));
   const accounts = new Map<string, Row>();
   const writes: Row[] = [];
   const emitted: string[] = [];
   const routes: Row[] = [];
+  const revoked: { where: Row; data: Row }[] = [];
   const sent: Sent[] = [];
   const answers: [number, unknown][] = [];
 
@@ -133,8 +146,11 @@ function fixture(rows: Row[], options: { routes?: (sent: Sent) => [number, unkno
     client: {
       tenant: { findUnique: () => Promise.resolve({ schemaName: SCHEMA, status: 'ACTIVE' }) },
       paymentGatewayRoute: {
-        findUnique: () => Promise.resolve(null),
-        updateMany: () => Promise.resolve({ count: 0 }),
+        findUnique: () => Promise.resolve(options.existingRoute ?? null),
+        updateMany: (args: { where: Row; data: Row }) => {
+          revoked.push(args);
+          return Promise.resolve({ count: 0 });
+        },
         upsert: (args: { create: Row }) => {
           routes.push(args.create);
           return Promise.resolve({});
@@ -154,7 +170,15 @@ function fixture(rows: Row[], options: { routes?: (sent: Sent) => [number, unkno
   } as unknown as PaymentConfigService;
   const app = {
     paymentGateways: {
-      stripe: { secretKey: 'sk_test_platform', clientId: 'ca_123', webhookSecret: 'whsec_x' },
+      stripe:
+        options.refusedLiveKey === true
+          ? null
+          : {
+              secretKey: 'sk_test_platform',
+              clientId: options.platformMode === true ? null : 'ca_123',
+              webhookSecret: 'whsec_x',
+            },
+      stripePlatformModeRefused: options.refusedLiveKey === true,
       mercadoPago: {
         clientId: '123',
         clientSecret: 'mp-client-secret-x',
@@ -207,6 +231,7 @@ function fixture(rows: Row[], options: { routes?: (sent: Sent) => [number, unkno
     writes,
     emitted,
     routes,
+    revoked,
     sent,
     rows,
     /** Queues the next gateway answers, in order. */
@@ -608,12 +633,13 @@ describe('gateway accounts', () => {
     expect(rows[1]).toMatchObject({ accountId: 'acct_123', supportsAutopay: true, environment: 'SANDBOX' });
   });
 
-  it('connect refuses a return URL off the allowlist (422) and signs a state otherwise', () => {
+  it('connect refuses a return URL off the allowlist (422) and signs a state otherwise', async () => {
     const f = fixture([]);
-    expect(() => f.gateways.connect('STRIPE', 'https://evil.example/x')).toThrow(
-      expect.objectContaining({ code: 'RETURN_URL_NOT_ALLOWED', status: 422 }),
-    );
-    const { authorizeUrl } = f.gateways.connect('STRIPE', 'https://vondi.tupla.dev/admin?tab=pagos');
+    await expect(f.gateways.connect('STRIPE', 'https://evil.example/x')).rejects.toMatchObject({
+      code: 'RETURN_URL_NOT_ALLOWED',
+      status: 422,
+    });
+    const { authorizeUrl } = await f.gateways.connect('STRIPE', 'https://vondi.tupla.dev/admin?tab=pagos');
     const url = new URL(authorizeUrl);
     expect(url.origin + url.pathname).toBe('https://connect.stripe.com/oauth/authorize');
     expect(url.searchParams.get('client_id')).toBe('ca_123');
@@ -626,7 +652,7 @@ describe('gateway accounts', () => {
   it('the OAuth callback stores the account and appends the outcome to the return URL query', async () => {
     const f = fixture([]);
     const state = new URL(
-      f.gateways.connect('STRIPE', 'https://vondi.tupla.dev/admin?tab=pagos').authorizeUrl,
+      (await f.gateways.connect('STRIPE', 'https://vondi.tupla.dev/admin?tab=pagos')).authorizeUrl,
     ).searchParams.get('state');
     f.answer([200, { stripe_user_id: 'acct_999', livemode: false }]);
     const redirect = await f.gateways.completeOAuth('STRIPE', { code: 'ac_1', state: state ?? '' });
@@ -696,5 +722,135 @@ describe('gateway accounts', () => {
       environment: 'LIVE',
       externalAccountId: 'mabcdefghij1234567890',
     });
+  });
+});
+
+describe('Stripe platform-account mode (staging only)', () => {
+  const RETURN = 'https://vondi.tupla.dev/admin?tab=pagos';
+  const account = [200, { id: 'acct_platform' }] as [number, unknown];
+
+  it('connect creates the rows from GET /v1/account and returns the return URL as connected', async () => {
+    const f = fixture([], { platformMode: true });
+    f.answer(account);
+    const { authorizeUrl } = await f.gateways.connect('STRIPE', RETURN);
+
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]).toMatchObject({ url: 'https://api.stripe.com/v1/account', method: 'GET' });
+    expect(authorizeUrl).toBe(`${RETURN}&gateway=stripe&status=connected`);
+    expect(f.accounts.get('STRIPE')).toMatchObject({
+      externalAccountId: 'acct_platform',
+      environment: 'SANDBOX',
+      accessTokenCiphertext: null,
+    });
+    expect(f.routes).toContainEqual(
+      expect.objectContaining({
+        provider: 'STRIPE',
+        externalAccountId: 'acct_platform',
+        tenantId: TENANT_ID,
+      }),
+    );
+  });
+
+  it('is idempotent for the same tenant and caches the account id', async () => {
+    const f = fixture([], {
+      platformMode: true,
+      existingRoute: { tenantId: TENANT_ID, revokedAt: null },
+    });
+    f.answer(account);
+    await f.gateways.connect('STRIPE', RETURN);
+    await f.gateways.connect('STRIPE', RETURN);
+    expect(f.sent).toHaveLength(1);
+    expect(f.accounts.size).toBe(1);
+  });
+
+  it('answers 409 GATEWAY_ACCOUNT_IN_USE when another tenant holds the account', async () => {
+    const f = fixture([], {
+      platformMode: true,
+      existingRoute: { tenantId: '22222222-2222-4222-8222-222222222222', revokedAt: null },
+    });
+    f.answer(account);
+    await expect(f.gateways.connect('STRIPE', RETURN)).rejects.toMatchObject({
+      code: 'GATEWAY_ACCOUNT_IN_USE',
+      status: 409,
+    });
+    expect(f.accounts.size).toBe(0);
+  });
+
+  it('still refuses a return URL off the allowlist', async () => {
+    const f = fixture([], { platformMode: true });
+    await expect(f.gateways.connect('STRIPE', 'https://evil.example/x')).rejects.toMatchObject({
+      code: 'RETURN_URL_NOT_ALLOWED',
+    });
+    expect(f.sent).toHaveLength(0);
+  });
+
+  it('disconnect revokes this tenant only and never calls oauth/deauthorize', async () => {
+    const platform = fixture([], { platformMode: true });
+    platform.connect('STRIPE', { externalAccountId: 'acct_platform' });
+    await platform.gateways.disconnect('STRIPE');
+    expect(platform.sent).toHaveLength(0);
+    expect(platform.revoked[0]?.where).toMatchObject({ provider: 'STRIPE', tenantId: TENANT_ID });
+    expect(platform.accounts.get('STRIPE')?.['disconnectedAt']).toBeInstanceOf(Date);
+  });
+
+  it('Connect mode still deauthorizes on disconnect', async () => {
+    const f = fixture([]);
+    f.connect('STRIPE');
+    f.answer([200, {}]);
+    await f.gateways.disconnect('STRIPE');
+    expect(f.sent[0]?.url).toBe('https://connect.stripe.com/oauth/deauthorize');
+  });
+
+  it('sends no Stripe-Account header on create, verify, refund and charge-stored', async () => {
+    const f = fixture([orderRow()], { platformMode: true });
+    f.connect('STRIPE', { externalAccountId: 'acct_platform' });
+    f.answer(
+      [200, { id: 'cs_new', url: 'https://checkout.stripe.com/c/pay/cs_new' }],
+      [
+        200,
+        {
+          id: 'cs_1',
+          payment_intent: {
+            id: 'pi_1',
+            status: 'succeeded',
+            amount: 10050,
+            metadata: { bn_order_reference: REF },
+          },
+        },
+      ],
+      [200, { id: 're_1' }],
+    );
+    await f.service.create({ merchantReferenceCode: 'P', amount: '100.50', provider: 'STRIPE' });
+    f.rows[0] = orderRow();
+    await f.service.verifyGatewayOrder('order-1', null);
+    await f.service.refund('order-1', 'Refund', '10.00');
+
+    const g = fixture([orderRow({ checkoutMode: 'custom', checkoutSessionId: null })], {
+      platformMode: true,
+    });
+    g.connect('STRIPE', { externalAccountId: 'acct_platform' });
+    g.answer([
+      200,
+      { id: 'pi_9', status: 'succeeded', amount: 10050, metadata: { bn_order_reference: REF } },
+    ]);
+    await g.service.chargeStoredGateway('order-1', { clientId: 'cus_1', cardToken: 'pm_1abcdef' });
+
+    const all = [...f.sent, ...g.sent];
+    expect(all.length).toBeGreaterThanOrEqual(4);
+    for (const call of all) {
+      expect(call.headers['Stripe-Account']).toBeUndefined();
+      expect(call.headers['Authorization']).toBe('Bearer sk_test_platform');
+    }
+  });
+
+  it('a refused live key leaves Stripe unavailable and warns once at startup', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const f = fixture([], { refusedLiveKey: true });
+    const stripe = (await f.gateways.status()).find((r) => r.provider === 'STRIPE');
+    expect(stripe).toMatchObject({ available: false, connected: false });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain('sk_test_');
+    await expect(f.gateways.connect('STRIPE', RETURN)).rejects.toThrow(/not available/);
+    expect(f.sent).toHaveLength(0);
   });
 });
